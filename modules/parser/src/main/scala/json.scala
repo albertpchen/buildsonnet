@@ -3,54 +3,6 @@ package root
 import cats.parse.{Parser0 => P0, Parser => P, Numbers}
 import cats.syntax.all._
 
-enum JObjInside:
-  case JObjMembers(members: Seq[JObjMember])
-  case JObjComprehension(
-    preLocals: Seq[JObjMember.JLocal],
-    comp: JObjMember.JField,
-    postLocals: Seq[JObjMember.JLocal],
-    inExprs: Seq[JValue],
-    cond: Option[JValue],
-  )
-
-enum JObjMember:
-  case JLocal(name: String, value: JValue)
-  case JField(key: JValue, value: JValue)
-  case JAssert(cond: JValue, expr: Option[JValue])
-
-enum JValue:
-  case JString(str: String)
-  case JFalse
-  case JTrue
-  case JNull
-  case JSelf
-  case JSuper
-  case JOuter
-  case JNum(str: String)
-  case JArray(elements: Seq[JValue])
-  case JObject(inside: JObjInside)
-  case JId(name: String)
-  case JGetField(loc: JValue, field: JId)
-  case JIndex(loc: JValue, index: JValue)
-  case JApply(loc: JValue, args: Seq[(Option[JId], JValue)])
-  case JBinaryOp(left: JValue, op: String, right: JValue)
-  case JLocal(name: String, value: JValue, result: JValue)
-  case JArrComprehension(comp: JValue, inExprs: Seq[JValue], cond: Option[JValue])
-  case JFunction(params: JParamList, body: JValue)
-  case JIf(cond: JValue, trueValue: JValue, elseValue: JValue)
-  case JError(expr: JValue)
-  case JAssert(cond: JValue, expr: Option[JValue], result: JValue)
-  case JImport(file: String)
-  case JImportStr(file: String)
-  case JArrayComprehension(
-    forVar: String,
-    forExpr: JValue,
-    inExpr: JValue,
-    cond: Option[JValue],
-  )
-
-type JParamList = Seq[(JValue.JId, Option[JValue])]
-
 
 object Json {
   import JValue._
@@ -84,7 +36,7 @@ object Json {
 
   def commaList[A](pa: P[A]): P0[List[A]] = (
     pa.<*(whitespaces0) ~
-    (P.char(',').surroundedBy(whitespaces0) *> pa).surroundedBy(whitespaces0).backtrack.rep0 <*
+    (P.char(',') *> (whitespaces0) *> pa <* whitespaces0).backtrack.rep0 <*
     P.char(',').<*(whitespaces0).?
   ).map { (head, tail) =>
     head +: tail
@@ -93,23 +45,28 @@ object Json {
   val assert = P.defer {
     keyword("assert") *> expr.surroundedBy(whitespaces0) ~ (P.char(':') *> whitespaces0 *> expr).?
   }
-  val objInside: P0[JObjInside] = P.defer0 {
+  val objInside: P0[JValue.JObject] = P.defer0 {
     val key: P[JValue] = P.oneOf(List(
       justStr.map(JString(_)),
       id.map(id => JString(id.name)),
       (P.char('[') *> whitespaces0 *> expr <* whitespaces0 <* P.char(']')),
     ))
+    val h = P.oneOf(List(
+      P.string(":::").map(_ => true).backtrack,
+      P.string("::").map(_ => true).backtrack,
+      P.char(':').map(_ => false),
+    ))
     val keyValue: P[JObjMember] = {
       import JObjMember._
       P.oneOf(List(
-        (key ~ (P.char(':').surroundedBy(whitespaces0) *> expr)).map(JField(_, _)),
+        (key, h.surroundedBy(whitespaces0), expr).tupled.map(JField(_, _, _)),
         assert.map(JAssert(_, _)),
         (keyword("local") *> whitespaces0 *> bind).map { (id, paramsOpt, expr) =>
           JLocal(id.name, paramsOpt.fold(expr)(JFunction(_, expr)))
         },
       ))
     }
-    commaList(keyValue).map(JObjInside.JObjMembers(_))
+    commaList(keyValue).map(JValue.JObject(_))
   }
   val params: P0[List[(JId, Option[JValue])]] = P.defer0 {
     P.char('(') *> commaList(id.<*(whitespaces0) ~ (P.char('=') *> whitespaces0 *> expr).backtrack.?) <* P.char(')')
@@ -178,7 +135,6 @@ object Json {
         .surroundedBy(whitespaces0)
         .with1
         .between(P.char('{'), P.char('}'))
-        .map(JObject(_))
 
     val grouped =
       expr
@@ -228,46 +184,51 @@ object Json {
   val op = P.stringIn(Array(
     "<<", ">>", "<=", ">=", "in", "==", "!=", "&&", "||",
     "*", "/", "%", "+", "-", "<", ">", "&", "^", "|", "in",
-  ))
+  )).map(JBinaryOperator(_))
   val args: P0[List[(Option[JId], JValue)]] = P.defer0 {
     val argName = (id <* whitespaces0 <* P.char('=')).backtrack.?
     commaList(argName.<*(whitespaces0).with1 ~ expr)
   }
 
+  val unaryOp = P.charIn("+-!~")
   val exprAtom: P[JValue] = P.defer {
     val suffix: P[JValue => JValue] =
       P.charIn(Array('.', '(', '['))
-        .surroundedBy(whitespaces0)
+        .<*(whitespaces0)
         .flatMap {
           case '.' => id.map(field => JGetField(_, field))
           case '[' => (expr <* whitespaces0 <* P.char(']')).map(idx => JIndex(_, idx))
           case '(' => args.<*(whitespaces0).map(args => JApply(_, args)).with1 <* P.char(')')
         }
         <* whitespaces0
-    (exprBase ~ suffix.backtrack.rep0).map { (base, fns) =>
-      fns.foldLeft(base) { (base, fn) => fn(base) }
+    ((unaryOp.? <* whitespaces0).with1 ~ exprBase.<*(whitespaces0) ~ suffix.rep0).map { case ((unaryOp, base), fns) =>
+      val expr = fns.foldLeft(base) { (base, fn) => fn(base) }
+      unaryOp match
+        case None => expr
+        case Some(op) => JUnaryOp(JUnaryOperator(op), expr)
     }
   }
 
   val expr = P.defer {
-    // def prec(ch: Char): Int = ???
-    // def isLeftAssoc(ch: Char): Bool = ???
-    // var result = exprAtom()
-    // def climb(min_prec: Int, expr) =
-    //   P.charIn(Seq('*', '+', '-')).flatMap { op =>
-    //     val prec = prec(op)
-    //     while prec >= min_prec do
-    //       val nextMinPrec = if isLeftAssoc(ch) then
-    //         nextMinPrec = min_prec + 1
-    //       else
-    //         nextMinPrec = prec
-    //       val rhs = climb(nextMinPrec)
-    //       s
-    //   }
     (exprAtom.<*(whitespaces0) ~ (op.surroundedBy(whitespaces0) ~ exprAtom).rep0).map { case (head, tail) =>
-      tail.foldLeft(head) { case (left, (op, right)) =>
-        JBinaryOp(left, op, right)
-      }
+      var exprs = tail
+      def climb(curr: JValue, minPrec: Int): JValue =
+        var result = curr
+        while
+          if exprs.isEmpty then
+            false
+          else
+            val (op, expr) = exprs.head
+            val cond = exprs.head._1.precedence >= minPrec
+            if cond then
+              val nextPrec = if op.isLeftAssociative then minPrec + 1 else minPrec
+              exprs = exprs.tail
+              val rhs = climb(expr, nextPrec)
+              result = JBinaryOp(result, op, rhs)
+            cond
+        do ()
+        result
+      climb(head, 0)
     }
   }
 
@@ -424,4 +385,6 @@ abstract class GenericStringUtil {
 @main
 def asdf(args: String*): Unit =
   //println((Json.id *> P.char('(') *> Json.exprAtom.surroundedBy(Json.whitespaces0) <* Json.whitespaces0 <* P.char(')')).parseAll(args(0)))
+  println("START")
   println(Json.parserFile.parseAll(args(0)))
+  println("END")
