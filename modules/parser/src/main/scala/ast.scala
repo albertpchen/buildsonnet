@@ -16,7 +16,10 @@ object JUnaryOperator:
       case '-' => Op_-
       case '~' => Op_~
 
-enum JBinaryOperator(val precedence: Int, val isLeftAssociative: Boolean):
+enum JBinaryOperator(
+  val precedence: Int,
+  val isLeftAssociative: Boolean,
+):
   case Op_*  extends JBinaryOperator(12, true)
   case Op_/  extends JBinaryOperator(12, true)
   case Op_%  extends JBinaryOperator(12, true)
@@ -58,23 +61,23 @@ object JBinaryOperator:
             case '=' => Op_>=
             case '>' => Op_>>
       case 'i' =>
-        require(op(1) == 'n')
+        require(op.size == 2 && op(1) == 'n', s"invalid operator '$op'")
         Op_in
       case '=' =>
-        require(op(1) == '=')
+        require(op.size == 2 && op(1) == '=', s"invalid operator '$op'")
         Op_==
       case '!' =>
-        require(op(1) == '=')
+        require(op.size == 2 && op(1) == '=', s"invalid operator '$op'")
         Op_!=
       case '&' =>
         if op.size == 1 then Op_&
         else
-          require(op(1) == '&')
+          require(op.size == 2 && op(1) == '&', s"invalid operator '$op'")
           Op_&&
       case '|' =>
         if op.size == 1 then Op_|
         else
-          require(op(1) == '|')
+          require(op.size == 2 && op(1) == '|', s"invalid operator '$op'")
           Op_||
 
 enum JObjMember:
@@ -103,7 +106,7 @@ enum JValue:
   case JId(name: String)
   case JGetField(loc: JValue, field: JId)
   case JIndex(loc: JValue, index: JValue)
-  case JApply(loc: JValue, args: Seq[(Option[JId], JValue)])
+  case JApply(loc: JValue, positionalArgs: Seq[JValue], namedArgs: Seq[(JId, JValue)])
   case JBinaryOp(left: JValue, op: JBinaryOperator, right: JValue)
   case JUnaryOp(op: JUnaryOperator, expr: JValue)
   case JLocal(name: String, value: JValue, result: JValue)
@@ -114,6 +117,11 @@ enum JValue:
   case JAssert(cond: JValue, expr: Option[JValue], result: JValue)
   case JImport(file: String)
   case JImportStr(file: String)
-  case JArrayComprehension(forVar: String, forExpr: JValue, inExpr: JValue, cond: Option[JValue])
+  case JArrayComprehension(
+    forVar: String,
+    forExpr: JValue,
+    inExpr: JValue,
+    cond: Option[JValue]
+  )
 
 type JParamList = Seq[(JValue.JId, Option[JValue])]

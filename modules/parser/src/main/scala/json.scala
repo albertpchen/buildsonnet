@@ -3,7 +3,6 @@ package root
 import cats.parse.{Parser0 => P0, Parser => P, Numbers}
 import cats.syntax.all._
 
-
 object Json {
   import JValue._
   val whitespace: P[Unit] = P.charIn(" \t\r\n").void
@@ -12,7 +11,7 @@ object Json {
 
   val idTail = P.charIn('_' +: ('a' to 'z') ++: ('A' to 'Z') ++: ('0' to '9'))
   def keyword(str: String): P[Unit] = P.string(str).void <* !idTail
-  val keywords = Set(
+    val keywords = Set(
     "assert", "else", "error", "false", "for", "function", "if", "import", "importstr",
     "in", "local", "null", "tailstrict", "then", "self", "super", "true"
   )
@@ -28,8 +27,46 @@ object Json {
   val pfalse = keyword("false").as(JTrue)
   val psuper = keyword("super").map(_ => JSuper)
   val self = keyword("self").map(_ => JSelf)
-  val justStr = JsonStringUtil.escapedString('"')
-  val str = justStr.map(JString(_))
+
+  val hexDigit = P.charIn(('0' to '9') ++ ('a' to 'f') ++ ('A' to 'F')).map { ch =>
+    if ch >= '0' || ch <= '9' then
+      ch - '0'
+    else if ch >= 'a' || ch <= 'f' then
+      ch - 'a' + 10
+    else
+      ch - 'A' + 10
+  }
+
+  val escapedStringChar: P[Char] = P.char('\\') *> P.oneOf(List(
+    P.char('"').map(_ => '"'),
+    P.char('\'').map(_ => '\''),
+    P.char('\\').map(_ => '\\'),
+    P.char('/').map(_ => '/'),
+    P.char('b').map(_ => '\b'),
+    P.char('f').map(_ => '\f'),
+    P.char('n').map(_ => '\n'),
+    P.char('r').map(_ => '\r'),
+    P.char('t').map(_ => '\t'),
+    P.char('u') *> (hexDigit, hexDigit, hexDigit, hexDigit).tupled.map { (_1, _2, _3, _4) =>
+      (_1.toInt << 12 | _2.toInt << 8 | _3.toInt << 4 | _4.toInt).toChar
+    },
+  ))
+  def stringChar(quote: Char): P[Char] = P.oneOf(List(
+    P.charWhere(c => c >= ' ' && c != quote && c != '\\'),
+    escapedStringChar,
+  ))
+  def verbatimStringChar(quote: Char): P[Char] = P.oneOf(List(
+    P.charWhere(c => c >= ' ' && c != quote),
+    P.char(quote) *> P.char(quote).map(_ => quote),
+  ))
+
+  val string = P.oneOf(List(
+    P.char('\'') *> stringChar('\'').rep0 <* P.char('\''),
+    P.char('"') *> stringChar('"').rep0 <* P.char('"'),
+    P.string("@'") *> verbatimStringChar('\'').backtrack.rep0 <* P.char('\''),
+    P.string("@\"") *> verbatimStringChar('"').backtrack.rep0 <* P.char('"'),
+  )).map(s => s.mkString)
+
   val num = Numbers.jsonNumber.map(JNum(_))
   val listSep: P[Unit] = P.char(',').surroundedBy(whitespaces0).void
   val dollar = P.char('$').map(_ => JOuter)
@@ -47,15 +84,13 @@ object Json {
   }
   val objInside: P0[JValue.JObject] = P.defer0 {
     val key: P[JValue] = P.oneOf(List(
-      justStr.map(JString(_)),
+      string.map(JString(_)),
       id.map(id => JString(id.name)),
       (P.char('[') *> whitespaces0 *> expr <* whitespaces0 <* P.char(']')),
     ))
-    val h = P.oneOf(List(
-      P.string(":::").map(_ => true).backtrack,
-      P.string("::").map(_ => true).backtrack,
-      P.char(':').map(_ => false),
-    ))
+    val h = (P.char(':') ~ P.char(':').?  ~ P.char(':').?).map { case ((_1, _2), _3) =>
+      _2.isDefined || _3.isDefined
+    }
     val keyValue: P[JObjMember] = {
       import JObjMember._
       P.oneOf(List(
@@ -69,7 +104,7 @@ object Json {
     commaList(keyValue).map(JValue.JObject(_))
   }
   val params: P0[List[(JId, Option[JValue])]] = P.defer0 {
-    P.char('(') *> commaList(id.<*(whitespaces0) ~ (P.char('=') *> whitespaces0 *> expr).backtrack.?) <* P.char(')')
+    P.char('(') *> commaList(id.<*(whitespaces0) ~ (P.char('=') *> whitespaces0 *> expr).?) <* P.char(')')
   }
   val bind: P[(JId, Option[JParamList], JValue)] = P.defer {
     (
@@ -92,7 +127,7 @@ object Json {
         <* whitespaces0
         <* P.char('=')
         <* whitespaces0
-    val bindLocal = bind.map { (id, paramsOpt, expr) =>
+    val bindLocal = (keyword("local") *> whitespaces *> bind).map { (id, paramsOpt, expr) =>
       JLocal(id.name, paramsOpt.fold(expr)(JFunction(_, expr)))
     }
     (
@@ -152,14 +187,14 @@ object Json {
     }
 
     val error = (keyword("error") *> whitespaces0 *> expr).map(JError(_))
-    val importExpr = (keyword("import") *> whitespaces0 *> justStr).map(JImport(_))
-    val importStrExpr = (keyword("importstr") *> whitespaces0 *> justStr).map(JImportStr(_))
+    val importExpr = (keyword("import") *> whitespaces0 *> string).map(JImport(_))
+    val importStrExpr = (keyword("importstr") *> whitespaces0 *> string).map(JImportStr(_))
     val assertExp = (assert.<*(P.char(';').surroundedBy(whitespaces0)) ~ expr).map { case ((cond, msg), result) =>
       JAssert(cond, msg, result)
     }
 
     P.oneOf(List(
-      str,
+      string.map(JString(_)),
       num,
       list,
       obj,
@@ -185,6 +220,7 @@ object Json {
     "<<", ">>", "<=", ">=", "in", "==", "!=", "&&", "||",
     "*", "/", "%", "+", "-", "<", ">", "&", "^", "|", "in",
   )).map(JBinaryOperator(_))
+
   val args: P0[List[(Option[JId], JValue)]] = P.defer0 {
     val argName = (id <* whitespaces0 <* P.char('=')).backtrack.?
     commaList(argName.<*(whitespaces0).with1 ~ expr)
@@ -198,7 +234,18 @@ object Json {
         .flatMap {
           case '.' => id.map(field => JGetField(_, field))
           case '[' => (expr <* whitespaces0 <* P.char(']')).map(idx => JIndex(_, idx))
-          case '(' => args.<*(whitespaces0).map(args => JApply(_, args)).with1 <* P.char(')')
+          case '(' => args.<*(whitespaces0).flatMap { args =>
+            val namedAfterPositional = args.size >= 2 && args.sliding(2).exists { window =>
+              val first = window(0)._1
+              val second = window(1)._1
+              first.isDefined && second.isEmpty
+            }
+            if namedAfterPositional then
+              P.failWith("Positional argument after a named argument is not allowed")
+            else
+              val (positional, named) = args.partition(_._1.isEmpty)
+              P.pure(JApply(_, positional.map(_._2), named.map((id, expr) => id.get -> expr)))
+          }.with1 <* P.char(')')
         }
         <* whitespaces0
     ((unaryOp.? <* whitespaces0).with1 ~ exprBase.<*(whitespaces0) ~ suffix.rep0).map { case ((unaryOp, base), fns) =>
@@ -234,152 +281,6 @@ object Json {
 
   // any whitespace followed by json followed by whitespace followed by end
   val parserFile: P[JValue] = expr.between(whitespaces0, whitespaces0 ~ P.end)
-}
-
-object JsonStringUtil extends GenericStringUtil {
-  // Here are the rules for escaping in json
-  lazy val decodeTable: Map[Char, Char] =
-    Map(
-      ('\\', '\\'),
-      ('\'', '\''),
-      ('\"', '\"'),
-      ('b', 8.toChar), // backspace
-      ('f', 12.toChar), // form-feed
-      ('n', '\n'),
-      ('r', '\r'),
-      ('t', '\t')
-    )
-}
-
-abstract class GenericStringUtil {
-  protected def decodeTable: Map[Char, Char]
-
-  private val encodeTable = decodeTable.iterator.map { case (v, k) => (k, s"\\$v") }.toMap
-
-  private val nonPrintEscape: Array[String] =
-    (0 until 32).map { c =>
-      val strHex = c.toHexString
-      val strPad = List.fill(4 - strHex.length)('0').mkString
-      s"\\u$strPad$strHex"
-    }.toArray
-
-  val escapedToken: P[Unit] = {
-    val escapes = P.charIn(decodeTable.keys.toSeq)
-
-    val oct = P.charIn('0' to '7')
-    val octP = P.char('o') ~ oct ~ oct
-
-    val hex = P.charIn(('0' to '9') ++ ('a' to 'f') ++ ('A' to 'F'))
-    val hex2 = hex ~ hex
-    val hexP = P.char('x') ~ hex2
-
-    val hex4 = hex2 ~ hex2
-    val u4 = P.char('u') ~ hex4
-    val hex8 = hex4 ~ hex4
-    val u8 = P.char('U') ~ hex8
-
-    val after = P.oneOf[Any](escapes :: octP :: hexP :: u4 :: u8 :: Nil)
-    (P.char('\\') ~ after).void
-  }
-
-  /** String content without the delimiter
-    */
-  def undelimitedString(endP: P[Unit]): P[String] =
-    escapedToken.backtrack
-      .orElse((!endP).with1 ~ P.anyChar)
-      .rep
-      .string
-      .flatMap { str =>
-        unescape(str) match {
-          case Right(str1) => P.pure(str1)
-          case Left(_) => P.fail
-        }
-      }
-
-  private val simpleString: P0[String] =
-    P.charsWhile0(c => c >= ' ' && c != '"' && c != '\\')
-
-  def escapedString(q: Char): P[String] = {
-    val end: P[Unit] = P.char(q)
-    end *> ((simpleString <* end).backtrack
-      .orElse(undelimitedString(end) <* end))
-  }
-
-  def escape(quoteChar: Char, str: String): String = {
-    // We can ignore escaping the opposite character used for the string
-    // x isn't escaped anyway and is kind of a hack here
-    val ignoreEscape = if (quoteChar == '\'') '"' else if (quoteChar == '"') '\'' else 'x'
-    str.flatMap { c =>
-      if (c == ignoreEscape) c.toString
-      else
-        encodeTable.get(c) match {
-          case None =>
-            if (c < ' ') nonPrintEscape(c.toInt)
-            else c.toString
-          case Some(esc) => esc
-        }
-    }
-  }
-
-  def unescape(str: String): Either[Int, String] = {
-    val sb = new java.lang.StringBuilder
-    def decodeNum(idx: Int, size: Int, base: Int): Int = {
-      val end = idx + size
-      if (end <= str.length) {
-        val intStr = str.substring(idx, end)
-        val asInt =
-          try Integer.parseInt(intStr, base)
-          catch { case _: NumberFormatException => ~idx }
-        sb.append(asInt.toChar)
-        end
-      } else ~(str.length)
-    }
-    @annotation.tailrec
-    def loop(idx: Int): Int =
-      if (idx >= str.length) {
-        // done
-        idx
-      } else if (idx < 0) {
-        // error from decodeNum
-        idx
-      } else {
-        val c0 = str.charAt(idx)
-        if (c0 != '\\') {
-          sb.append(c0)
-          loop(idx + 1)
-        } else {
-          // str(idx) == \
-          val nextIdx = idx + 1
-          if (nextIdx >= str.length) {
-            // error we expect there to be a character after \
-            ~idx
-          } else {
-            val c = str.charAt(nextIdx)
-            decodeTable.get(c) match {
-              case Some(d) =>
-                sb.append(d)
-                loop(idx + 2)
-              case None =>
-                c match {
-                  case 'o' => loop(decodeNum(idx + 2, 2, 8))
-                  case 'x' => loop(decodeNum(idx + 2, 2, 16))
-                  case 'u' => loop(decodeNum(idx + 2, 4, 16))
-                  case 'U' => loop(decodeNum(idx + 2, 8, 16))
-                  case other =>
-                    // \c is interpretted as just \c, if the character isn't escaped
-                    sb.append('\\')
-                    sb.append(other)
-                    loop(idx + 2)
-                }
-            }
-          }
-        }
-      }
-
-    val res = loop(0)
-    if (res < 0) Left(~res)
-    else Right(sb.toString)
-  }
 }
 
 @main
