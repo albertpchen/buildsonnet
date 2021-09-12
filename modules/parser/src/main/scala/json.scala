@@ -5,7 +5,20 @@ import cats.syntax.all._
 
 object Json {
   import JValue._
-  val whitespace: P[Unit] = P.charIn(" \t\r\n").void
+  val commentEnd: P0[Unit] = P.oneOf0(List(
+    P.char('#') *> P.charsWhile0(_ != '\n') *> P.end,
+    P.string("//") *> P.charsWhile0(_ != '\n') *> P.end,
+    P.end,
+  ))
+  val whitespace: P[Unit] = P.oneOf(List(
+    P.charIn(" \t\r\n").void,
+    P.char('#') *> P.charsWhile0(_ != '\n') *> P.char('\n').withContext("SDLFJLDJFKLJ"),
+    P.string("//") *> P.charsWhile0(_ != '\n') *> P.char('\n').withContext("ikk"),
+    (P.string("/*") *> P.oneOf(List(
+      P.charWhere(_ != '*'),
+      (P.char('*') *> !P.char('/')).backtrack,
+    )).rep0 *> P.string("*/")).backtrack,
+  ))
   val whitespaces0, __ = whitespace.rep0.void
   val whitespaces: P[Unit] = whitespace.rep.void
 
@@ -15,11 +28,11 @@ object Json {
     "assert", "else", "error", "false", "for", "function", "if", "import", "importstr",
     "in", "local", "null", "tailstrict", "then", "self", "super", "true"
   )
-  val id: P[JId] =
+  val id: P[String] =
     P.not(P.stringIn(keywords) *> !idTail)
       .with1
       .*>(P.charIn('_' +: ('a' to 'z') ++: ('A' to 'Z')) ~ idTail.rep0).map { (head, tail) =>
-        JId((head +: tail).mkString)
+        (head +: tail).mkString
       }
 
   val pnull = keyword("null").as(JNull)
@@ -82,71 +95,68 @@ object Json {
   val assert = P.defer {
     keyword("assert") *> expr.surroundedBy(whitespaces0) ~ (P.char(':') *> whitespaces0 *> expr).?
   }
-  val objInside: P0[JValue.JObject] = P.defer0 {
+  val objInside: P0[JValue] = P.defer0 {
+    val objComp = {
+      val bindLocal: P[JObjMember.JLocal] = (keyword("local") *> whitespaces *> bind).map { (id, paramsOpt, expr) =>
+        JObjMember.JLocal(id, paramsOpt.fold(expr)(JFunction(_, expr)))
+      }
+      (
+        (bindLocal <* P.char(',').surroundedBy(whitespaces0)).backtrack.rep0,
+        expr.surroundedBy(whitespaces0).between(P.char('['), P.char(']')).surroundedBy(whitespaces0),
+        P.char(':') *> expr.surroundedBy(whitespaces0),
+        (P.char(',') *> bindLocal.surroundedBy(whitespaces0)).backtrack.rep0,
+        whitespaces0 *> P.char(',').? *> forspec.surroundedBy(whitespaces0),
+        ifspec.?,
+      ).tupled.map { case (preLocals, key, value, postLocals, (inId, inExpr), cond) =>
+        JObjectComprehension(preLocals, key, value, postLocals, inId, inExpr, cond)
+      }
+    }
     val key: P[JValue] = P.oneOf(List(
       string.map(JString(_)),
-      id.map(id => JString(id.name)),
+      id.map(id => JString(id)),
       (P.char('[') *> whitespaces0 *> expr <* whitespaces0 <* P.char(']')),
     ))
     val h = (P.char(':') ~ P.char(':').?  ~ P.char(':').?).map { case ((_1, _2), _3) =>
       _2.isDefined || _3.isDefined
     }
     val keyValue: P[JObjMember] = {
-      import JObjMember._
       P.oneOf(List(
-        (key, h.surroundedBy(whitespaces0), expr).tupled.map(JField(_, _, _)),
-        assert.map(JAssert(_, _)),
+        (key, h.surroundedBy(whitespaces0), expr).tupled.map(JObjMember.JField(_, _, _)),
+        assert.map(JObjMember.JAssert(_, _)),
         (keyword("local") *> whitespaces0 *> bind).map { (id, paramsOpt, expr) =>
-          JLocal(id.name, paramsOpt.fold(expr)(JFunction(_, expr)))
-        },
+          JObjMember.JLocal(id, paramsOpt.fold(expr)(JFunction(_, expr)))
+        }.backtrack,
       ))
     }
-    commaList(keyValue).map(JValue.JObject(_))
+    P.oneOf0(List(
+      objComp.backtrack,
+      commaList(keyValue).map(JValue.JObject(_)),
+    ))
   }
-  val params: P0[List[(JId, Option[JValue])]] = P.defer0 {
+  val params: P0[List[(String, Option[JValue])]] = P.defer0 {
     P.char('(') *> commaList(id.<*(whitespaces0) ~ (P.char('=') *> whitespaces0 *> expr).?) <* P.char(')')
   }
-  val bind: P[(JId, Option[JParamList], JValue)] = P.defer {
+  val bind: P[(String, Option[JParamList], JValue)] = P.defer {
     (
       id.<*(whitespaces0),
       params.?.with1 <*(P.char('=').surroundedBy(whitespaces0)),
       expr,
     ).tupled
   }
-  val forspec = (
-    keyword("for") *> whitespaces0 *> id <* keyword("in").surroundedBy(whitespaces0),
-    expr
-  ).tupled
-  val ifspec = keyword("if") *> whitespaces0 *> expr
-  val objComp = P.defer0 {
-    import JObjMember._
-    val bindPrefix =
-      keyword("local")
-        *> whitespaces0
-        *> id
-        <* whitespaces0
-        <* P.char('=')
-        <* whitespaces0
-    val bindLocal = (keyword("local") *> whitespaces *> bind).map { (id, paramsOpt, expr) =>
-      JLocal(id.name, paramsOpt.fold(expr)(JFunction(_, expr)))
-    }
+  val forspec = P.defer {
     (
-      (bindLocal <* P.char(',').surroundedBy(whitespaces0)).backtrack.rep0,
-      expr.surroundedBy(whitespaces0).between(P.char('['), P.char(']')).surroundedBy(whitespaces0),
-      P.char(':') *> expr.surroundedBy(whitespaces0),
-      (P.char(',') *> bindLocal.surroundedBy(whitespaces0)).rep0,
-      forspec <* whitespaces0,
-      ifspec.?,
+      keyword("for") *> id.surroundedBy(whitespaces0) <* keyword("in"),
+      whitespaces0.with1 *> expr,
     ).tupled
   }
+  val ifspec = keyword("if") *> whitespaces0 *> expr
 
   val exprBase: P[JValue] = P.defer {
     val listComp = (
-      expr <* keyword("for").surroundedBy(whitespaces0),
-      id <* keyword("in").surroundedBy(whitespaces0),
-      expr.<*(whitespaces0) ~ (keyword("if") *> whitespaces0 *> expr).?,
-    ).tupled.map { case (forExpr, forVar, (inExpr, cond)) =>
-      JArrayComprehension(forVar.name, forExpr, inExpr, cond)
+      expr,
+      forspec.surroundedBy(whitespaces0) ~ ifspec.?,
+    ).tupled.map { case (forExpr, ((forVar, inExpr), cond)) =>
+      JArrayComprehension(forVar, forExpr, inExpr, cond)
     }
     val list =
       P.oneOf0(List(
@@ -177,12 +187,11 @@ object Json {
         .between(P.char('('), P.char(')'))
 
     val local = (
-      keyword("local") *> bind.repSep(P.char(',').surroundedBy(whitespaces0)),
-      P.char('=').surroundedBy(whitespaces0) *> expr,
-      P.char(';').surroundedBy(whitespaces0) *> expr,
-    ).tupled.map { (binds, expr, result) =>
+      keyword("local") *> whitespaces0 *> bind.repSep(P.char(',').surroundedBy(whitespaces0)) ~
+      (P.char(';').surroundedBy(whitespaces0) *> expr)
+    ).map { (binds, result) =>
       binds.toList.foldRight(result) { case ((id, paramsOpt, expr), acc) =>
-        JLocal(id.name, paramsOpt.fold(expr)(JFunction(_, expr)), acc)
+        JLocal(id, paramsOpt.fold(expr)(JFunction(_, expr)), acc)
       }
     }
 
@@ -211,7 +220,7 @@ object Json {
       assertExp.backtrack,
       importExpr.backtrack,
       importStrExpr.backtrack,
-      id,
+      id.map(JId(_)),
       error,
     ))
   }
@@ -221,7 +230,7 @@ object Json {
     "*", "/", "%", "+", "-", "<", ">", "&", "^", "|", "in",
   )).map(JBinaryOperator(_))
 
-  val args: P0[List[(Option[JId], JValue)]] = P.defer0 {
+  val args: P0[List[(Option[String], JValue)]] = P.defer0 {
     val argName = (id <* whitespaces0 <* P.char('=')).backtrack.?
     commaList(argName.<*(whitespaces0).with1 ~ expr)
   }
@@ -280,12 +289,19 @@ object Json {
   }
 
   // any whitespace followed by json followed by whitespace followed by end
-  val parserFile: P[JValue] = expr.between(whitespaces0, whitespaces0 ~ P.end)
+  val parserFile = expr.between(whitespaces0, whitespace.backtrack.rep0 ~ commentEnd)
+  // val parserFile = whitespace.backtrack.rep0 ~ commentEnd//expr.between(whitespaces0, whitespaces0 ~ commentEnd)
 }
 
 @main
 def asdf(args: String*): Unit =
+  import cats.instances.all._
   //println((Json.id *> P.char('(') *> Json.exprAtom.surroundedBy(Json.whitespaces0) <* Json.whitespaces0 <* P.char(')')).parseAll(args(0)))
+  val filename = args(0)
+  val source = scala.io.Source.fromFile(filename).getLines.mkString("\n")
   println("START")
-  println(Json.parserFile.parseAll(args(0)))
+  println(Json.parserFile.parseAll(source).fold(_.expected.map(_.toString).mkString_("\n"), _.toString))
+  println("END")
+  println("START")
+  println(Json.parserFile.parseAll(args(1)).fold(_.expected.map(_.toString).mkString_("\n"), _.toString))
   println("END")

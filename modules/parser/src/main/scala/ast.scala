@@ -98,15 +98,17 @@ enum JValue:
   case JObject(members: Seq[JObjMember])
   case JObjectComprehension(
     preLocals: Seq[JObjMember.JLocal],
-    comp: JObjMember.JField,
+    key: JValue,
+    value: JValue,
     postLocals: Seq[JObjMember.JLocal],
-    inExprs: Seq[JValue],
+    forVar: String,
+    inExpr: JValue,
     cond: Option[JValue],
   )
   case JId(name: String)
-  case JGetField(loc: JValue, field: JId)
+  case JGetField(loc: JValue, field: String)
   case JIndex(loc: JValue, index: JValue)
-  case JApply(loc: JValue, positionalArgs: Seq[JValue], namedArgs: Seq[(JId, JValue)])
+  case JApply(loc: JValue, positionalArgs: Seq[JValue], namedArgs: Seq[(String, JValue)])
   case JBinaryOp(left: JValue, op: JBinaryOperator, right: JValue)
   case JUnaryOp(op: JUnaryOperator, expr: JValue)
   case JLocal(name: String, value: JValue, result: JValue)
@@ -124,4 +126,4 @@ enum JValue:
     cond: Option[JValue]
   )
 
-type JParamList = Seq[(JValue.JId, Option[JValue])]
+type JParamList = Seq[(String, Option[JValue])]

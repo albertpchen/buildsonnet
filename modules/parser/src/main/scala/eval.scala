@@ -30,18 +30,17 @@ enum EvaluatedJValue:
 
 object eval:
   def apply(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
-    import JValue._
     jvalue match
-    case JFalse => EvaluatedJValue.JBoolean(false)
-    case JTrue => EvaluatedJValue.JBoolean(true)
-    case JNull => EvaluatedJValue.JNull
-    case JSelf => ctx.lookupScope("self").evaluated()
-    case JSuper => ctx.lookupScope("super").evaluated()
-    case JOuter => ctx.lookupScope("$").evaluated()
-    case JString(str) => EvaluatedJValue.JString(str)
-    case JNum(str) => EvaluatedJValue.JNum(str.toDouble)
-    case JArray(elements) => EvaluatedJValue.JArray(elements.map(apply(ctx)))
-    case JObject(members) =>
+    case JValue.JFalse => EvaluatedJValue.JBoolean(false)
+    case JValue.JTrue => EvaluatedJValue.JBoolean(true)
+    case JValue.JNull => EvaluatedJValue.JNull
+    case JValue.JSelf => ctx.lookupScope("self").evaluated()
+    case JValue.JSuper => ctx.lookupScope("super").evaluated()
+    case JValue.JOuter => ctx.lookupScope("$").evaluated()
+    case JValue.JString(str) => EvaluatedJValue.JString(str)
+    case JValue.JNum(str) => EvaluatedJValue.JNum(str.toDouble)
+    case JValue.JArray(elements) => EvaluatedJValue.JArray(elements.map(apply(ctx)))
+    case JValue.JObject(members) =>
       val objCtx = ctx.objectCtx()
       EvaluatedJValue.JObject(members.flatMap {
         case JObjMember.JLocal(name, value) =>
@@ -57,32 +56,32 @@ object eval:
             objCtx.error(msgOpt.fold("assertion failed")(_.str))
           None
       })
-    case JObjectComprehension(preLocals, comp, postLocals, inExprs, cond) => ???
-    case JId(name) => ctx.lookupScope(name).evaluated()
-    case JGetField(loc, field) =>
+    case JValue.JObjectComprehension(preLocals, key, value, postLocals, forVar, inExpr, cond) => ???
+    case JValue.JId(name) => ctx.lookupScope(name).evaluated()
+    case JValue.JGetField(loc, field) =>
       // val obj = evaluateLazy(loc)
       // obj.lookup(field)
       ???
-    case JIndex(loc, index) =>
+    case JValue.JIndex(loc, index) =>
       // val obj = evaluateLazy(loc)
       // obj.lookup(field)
       ???
-    case JApply(loc, positionalArgs, namedArgs) =>
+    case JValue.JApply(loc, positionalArgs, namedArgs) =>
       // val obj = evaluateLazy(loc)
       // obj.lookup(field)
       ???
       /*
-    case JBinaryOp(left: JValue, op: JBinaryOperator, right: JValue)
-    case JUnaryOp(op: JUnaryOperator, expr: JValue)
-    case JLocal(name: String, value: JValue, result: JValue)
-    case JArrComprehension(comp: JValue, inExprs: Seq[JValue], cond: Option[JValue])
-    case JFunction(params: JParamList, body: JValue)
-    case JIf(cond: JValue, trueValue: JValue, elseValue: JValue)
-    case JError(expr: JValue)
-    case JAssert(cond: JValue, expr: Option[JValue], result: JValue)
-    case JImport(file: String)
-    case JImportStr(file: String)
-    case JArrayComprehension(
+    case JValue.JBinaryOp(left: JValue, op: JBinaryOperator, right: JValue)
+    case JValue.JUnaryOp(op: JUnaryOperator, expr: JValue)
+    case JValue.JLocal(name: String, value: JValue, result: JValue)
+    case JValue.JArrComprehension(comp: JValue, inExprs: Seq[JValue], cond: Option[JValue])
+    case JValue.JFunction(params: JParamList, body: JValue)
+    case JValue.JIf(cond: JValue, trueValue: JValue, elseValue: JValue)
+    case JValue.JError(expr: JValue)
+    case JValue.JAssert(cond: JValue, expr: Option[JValue], result: JValue)
+    case JValue.JImport(file: String)
+    case JValue.JImportStr(file: String)
+    case JValue.JArrayComprehension(
       forVar: String,
       forExpr: JValue,
       inExpr: JValue,
