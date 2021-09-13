@@ -10,14 +10,6 @@ sealed trait EvaluationContext:
   def bind(id: String, value: JValue): Unit
   def expectType[T <: EvaluatedJValue](expr: EvaluatedJValue, expected: JType[T]): T
 
-enum JType[T <: EvaluatedJValue]:
-  case JBoolean extends JType[EvaluatedJValue.JBoolean]
-  case JNumber extends JType[EvaluatedJValue.JBoolean]
-  case JString extends JType[EvaluatedJValue.JString]
-  case JNull extends JType[EvaluatedJValue.JNull.type]
-  case JArray extends JType[EvaluatedJValue.JArray]
-  case JObject extends JType[EvaluatedJValue.JObject]
-
 enum EvaluatedJValue:
   case JBoolean(value: Boolean)
   case JNull
@@ -27,6 +19,14 @@ enum EvaluatedJValue:
   case JObject(members: Seq[(String, EvaluatedJValue)])
   case JFunction(params: JParamList, body: JValue)
   case JError(msg: String)
+
+object EvaluatedJValue:
+  extension (obj: JObject)
+    def lookup(field: String): EvaluatedJValue = ???
+
+  extension (arr: JArray)
+    def index(idx: Int, endIdx: Option[Int], stride: Option[Int]): EvaluatedJValue = ???
+
 
 object eval:
   def apply(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
@@ -59,18 +59,26 @@ object eval:
     case JValue.JObjectComprehension(preLocals, key, value, postLocals, forVar, inExpr, cond) => ???
     case JValue.JId(name) => ctx.lookupScope(name).evaluated()
     case JValue.JGetField(loc, field) =>
-      // val obj = evaluateLazy(loc)
-      // obj.lookup(field)
-      ???
-    case JValue.JIndex(loc, index) =>
-      // val obj = evaluateLazy(loc)
-      // obj.lookup(field)
-      ???
+      val obj = ctx.expectType(apply(ctx)(loc), JType.JObject)
+      obj.lookup(field)
+    case JValue.JIndex(loc, rawIndex, rawEndIndex, stride) =>
+      apply(ctx)(loc) match
+      case obj: EvaluatedJValue.JObject =>
+        if !rawEndIndex.isNull then ctx.error("no end index allowed for object index")
+        if !stride.isNull then ctx.error("no stride allowed for object index")
+        val field = ctx.expectType(apply(ctx)(rawIndex), JType.JString)
+        obj.lookup(field.str)
+      case arr: EvaluatedJValue.JArray =>
+        val index = ctx.expectType(apply(ctx)(rawIndex), JType.JNum).double.toInt
+        val endIndex =
+          if rawEndIndex.isNull then None
+          else Some(ctx.expectType(apply(ctx)(rawIndex), JType.JNum).double.toInt)
+        arr.index(index, endIndex, None)
+      case _ => ctx.error(s"expected object or array")
     case JValue.JApply(loc, positionalArgs, namedArgs) =>
-      // val obj = evaluateLazy(loc)
-      // obj.lookup(field)
+      val fn = ctx.expectType(apply(ctx)(loc), JType.JFunction)
       ???
-      /*
+  /*
     case JValue.JBinaryOp(left: JValue, op: JBinaryOperator, right: JValue)
     case JValue.JUnaryOp(op: JUnaryOperator, expr: JValue)
     case JValue.JLocal(name: String, value: JValue, result: JValue)
@@ -86,4 +94,5 @@ object eval:
       forExpr: JValue,
       inExpr: JValue,
       cond: Option[JValue]
-    )*/
+    )
+  */

@@ -224,7 +224,15 @@ object Json {
         .<*(__)
         .flatMap {
           case '.' => id.map(field => JGetField(_, field))
-          case '[' => (expr <* __ <* P.char(']')).map(idx => JIndex(_, idx))
+          case '[' =>
+            val exprOrJNull = expr.?.map(_.getOrElse(JNull))
+            val suffix = P.char(':') *> __ *> exprOrJNull <* __
+            (
+              (expr <* __) ~ (suffix ~ suffix.?).? <* P.char(']')
+            ).map { (index, opt) =>
+              val (endIndex, strideOpt) = opt.getOrElse(JNull -> None)
+              JIndex(_, index, endIndex, strideOpt.getOrElse(JNull))
+            }
           case '(' => (args <* __).flatMap { args =>
             val namedAfterPositional = args.size >= 2 && args.sliding(2).exists { window =>
               val Seq((first, _), (second, _)) = window

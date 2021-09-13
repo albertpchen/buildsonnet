@@ -107,7 +107,7 @@ enum JValue:
   )
   case JId(name: String)
   case JGetField(loc: JValue, field: String)
-  case JIndex(loc: JValue, index: JValue)
+  case JIndex(loc: JValue, index: JValue, endIndex: JValue, stride: JValue)
   case JApply(loc: JValue, positionalArgs: Seq[JValue], namedArgs: Seq[(String, JValue)])
   case JBinaryOp(left: JValue, op: JBinaryOperator, right: JValue)
   case JUnaryOp(op: JUnaryOperator, expr: JValue)
@@ -125,5 +125,9 @@ enum JValue:
     inExpr: JValue,
     cond: Option[JValue]
   )
+
+  def isNull: Boolean = this match
+    case JNull => true
+    case _ => false
 
 type JParamList = Seq[(String, Option[JValue])]
