@@ -292,6 +292,7 @@ def asdf(args: String*): Unit =
   println("END")
   println("START")
   println(Json.parserFile.parseAll(args(1)).fold(_.expected.map(_.toString).mkString_("\n"), _.toString))
-  Json.parserFile.parseAll(source) match
-  case Right(ast) => eval(EvaluationContext())(ast)
-  case Left(error) => print(error)
+  Json.parserFile.parseAll(source).fold(
+    error => println("FAIL: " + error.toString),
+    ast => println("PASS: " + eval(EvaluationContext())(ast).toString),
+  )

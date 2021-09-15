@@ -17,14 +17,16 @@ object EvaluationContext:
       eval(ctx)(code)
     }
 
-  private class Imp(
+  private case class Imp(
     val scope: Map[String, LazyValue],
     val stack: List[EvaluatedJValue.JFunction | EvaluatedJValue.JObject],
   ) extends EvaluationContext:
     def error(message: String): Nothing = throw new Exception(message)
 
     def lookup(id: String): EvaluatedJValue =
-      scope.get(id).fold(error(s"no variable $id defined"))(_.evaluated)
+      scope.get(id).fold {
+        error(s"no variable $id defined")
+      }(_.evaluated)
 
     def objectCtx(): EvaluationContext = ???
 
@@ -32,7 +34,8 @@ object EvaluationContext:
       new Imp(scope, fn +: stack)
 
     def bind(id: String, value: JValue): EvaluationContext =
-      new Imp(scope + (id -> new LazyValue(this, value)), stack)
+      val newScope = scope + (id -> new LazyValue(this, value))
+      new Imp(newScope, stack)
 
     def expectType[T <: EvaluatedJValue](expr: EvaluatedJValue): T =
       if expr.isInstanceOf[T] then expr.asInstanceOf[T] else error("unexpected type")
@@ -109,29 +112,33 @@ object eval:
       case _ => ctx.error(s"expected object or array")
     case JValue.JApply(loc, positionalArgs, namedArgs) =>
       val fn = ctx.expectType[EvaluatedJValue.JFunction](apply(ctx)(loc))
-      val argMap = namedArgs.toMap
       val numGivenArgs = positionalArgs.size + namedArgs.size
       if numGivenArgs > fn.params.size then
         ctx.error("to many arguments for function")
-      // else if numGivenArgs < fn.params.size then
-      //   ctx.error(s"too few arguments for function $fn")
-      val (_, givenArgs) = fn.params.foldLeft(positionalArgs -> Seq.empty[(String, JValue)]) {
-        case ((positionalArgs, result), (argName, default)) =>
+      val argMap = namedArgs.toMap
+      val (_, argsCtx) = fn.params.foldLeft(positionalArgs -> ctx) {
+        case ((positionalArgs, ctx), (argName, default)) =>
           val isGivenNamedArg = argMap.contains(argName)
           if positionalArgs.nonEmpty && isGivenNamedArg then
             ctx.error(s"both positional and named arg provided for argument $argName")
           else if positionalArgs.nonEmpty then
-            (positionalArgs.tail, (argName, positionalArgs.head) +: result)
+            (positionalArgs.tail, ctx.bind(argName, positionalArgs.head))
           else if isGivenNamedArg then
-            (positionalArgs, (argName, argMap(argName)) +: result)
+            (positionalArgs, ctx.bind(argName, argMap(argName)))
           else if default.isDefined then
-            (positionalArgs, (argName, default.get) +: result)
+            (positionalArgs, ctx.bind(argName, default.get))
           else
             ctx.error(s"missing argument $argName")
       }
-      val functionCtx = givenArgs.foldLeft(ctx) { case (ctx, (name, arg)) => ctx.bind(name, arg) }.functionCtx(fn)
+      val functionCtx = argsCtx.functionCtx(fn)
       apply(functionCtx)(fn.body)
-    // case JValue.JBinaryOp(left: JValue, op: JBinaryOperator, right: JValue)
+    case JValue.JBinaryOp(left, op, right) =>
+      op match
+      case JBinaryOperator.Op_+ =>
+        val op1 = ctx.expectType[EvaluatedJValue.JNum](apply(ctx)(left))
+        val op2 = ctx.expectType[EvaluatedJValue.JNum](apply(ctx)(right))
+        EvaluatedJValue.JNum(op1.double + op2.double)
+
     case JValue.JUnaryOp(op, rawOperand) =>
       op match
       case JUnaryOperator.Op_! =>
