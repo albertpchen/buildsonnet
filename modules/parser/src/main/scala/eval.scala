@@ -3,12 +3,17 @@ package root
 sealed trait LazyValue:
   def evaluated(): EvaluatedJValue
 
+
 sealed trait EvaluationContext:
   def error(message: String): Nothing
   def lookupScope(id: String): LazyValue
   def objectCtx(): EvaluationContext
+  def functionCtx(): EvaluationContext
   def bind(id: String, value: JValue): Unit
   def expectType[T <: EvaluatedJValue](expr: EvaluatedJValue, expected: JType[T]): T
+  def importFile(fileName: String): EvaluatedJValue
+  def importStr(fileName: String): EvaluatedJValue.JString
+
 
 enum EvaluatedJValue:
   case JBoolean(value: Boolean)
@@ -56,7 +61,7 @@ object eval:
             objCtx.error(msgOpt.fold("assertion failed")(_.str))
           None
       })
-    case JValue.JObjectComprehension(preLocals, key, value, postLocals, forVar, inExpr, cond) => ???
+    // case JValue.JObjectComprehension(preLocals, key, value, postLocals, forVar, inExpr, cond) => ???
     case JValue.JId(name) => ctx.lookupScope(name).evaluated()
     case JValue.JGetField(loc, field) =>
       val obj = ctx.expectType(apply(ctx)(loc), JType.JObject)
@@ -77,18 +82,57 @@ object eval:
       case _ => ctx.error(s"expected object or array")
     case JValue.JApply(loc, positionalArgs, namedArgs) =>
       val fn = ctx.expectType(apply(ctx)(loc), JType.JFunction)
-      ???
+      val argMap = namedArgs.toMap
+      val numGivenArgs = positionalArgs.size + namedArgs.size
+      if numGivenArgs > fn.params.size then
+        ctx.error("to many arguments for function")
+      else if numGivenArgs < fn.params.size then
+        ctx.error("to few arguments for function")
+      val (_, givenArgs) = fn.params.foldLeft(positionalArgs -> Seq.empty[(String, JValue)]) {
+        case ((positionalArgs, result), (argName, default)) =>
+          val isGivenNamedArg = argMap.contains(argName)
+          if positionalArgs.nonEmpty && isGivenNamedArg then
+            ctx.error(s"both positional and named arg provided for argument $argName")
+          else if positionalArgs.nonEmpty then
+            (positionalArgs.tail, (argName, positionalArgs.head) +: result)
+          else if isGivenNamedArg then
+            (positionalArgs, (argName, argMap(argName)) +: result)
+          else if default.isDefined then
+            (positionalArgs, (argName, default.get) +: result)
+          else
+            ctx.error(s"missing argument $argName")
+      }
+      val functionCtx = ctx.functionCtx()
+      givenArgs.foreach(functionCtx.bind(_, _))
+      apply(functionCtx)(fn.body)
+    // case JValue.JBinaryOp(left: JValue, op: JBinaryOperator, right: JValue)
+    // case JValue.JUnaryOp(op: JUnaryOperator, expr: JValue)
+    case JValue.JLocal(name, value, result) =>
+      ctx.bind(name, value)
+      apply(ctx)(result)
+    // case JValue.JArrComprehension(comp: JValue, inExprs: Seq[JValue], cond: Option[JValue])
+    case JValue.JFunction(params, body) =>
+      EvaluatedJValue.JFunction(params, body)
+    case JValue.JIf(rawCond, trueValue, elseValue) =>
+      val cond = ctx.expectType(apply(ctx)(rawCond), JType.JBoolean)
+      if cond.value then
+        apply(ctx)(trueValue)
+      else
+        apply(ctx)(elseValue)
+    case JValue.JError(rawExpr) =>
+      val msg = ctx.expectType(apply(ctx)(rawExpr), JType.JString)
+      ctx.error(msg.str)
+    case JValue.JAssert(rawCond, rawMsg, expr) =>
+      val cond = ctx.expectType(apply(ctx)(rawCond), JType.JBoolean)
+      if !cond.value then
+        val msg = rawMsg.map(msg => ctx.expectType(apply(ctx)(msg), JType.JString).str)
+        ctx.error(msg.getOrElse(s"assertion failed"))
+      apply(ctx)(expr)
+    case JValue.JImport(file) =>
+      ctx.importFile(file)
+    case JValue.JImportStr(file) =>
+      ctx.importStr(file)
   /*
-    case JValue.JBinaryOp(left: JValue, op: JBinaryOperator, right: JValue)
-    case JValue.JUnaryOp(op: JUnaryOperator, expr: JValue)
-    case JValue.JLocal(name: String, value: JValue, result: JValue)
-    case JValue.JArrComprehension(comp: JValue, inExprs: Seq[JValue], cond: Option[JValue])
-    case JValue.JFunction(params: JParamList, body: JValue)
-    case JValue.JIf(cond: JValue, trueValue: JValue, elseValue: JValue)
-    case JValue.JError(expr: JValue)
-    case JValue.JAssert(cond: JValue, expr: Option[JValue], result: JValue)
-    case JValue.JImport(file: String)
-    case JValue.JImportStr(file: String)
     case JValue.JArrayComprehension(
       forVar: String,
       forExpr: JValue,

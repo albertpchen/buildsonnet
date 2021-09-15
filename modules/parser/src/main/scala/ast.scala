@@ -83,7 +83,7 @@ object JBinaryOperator:
 enum JObjMember:
   case JLocal(name: String, value: JValue)
   case JField(key: JValue, isHidden: Boolean, value: JValue)
-  case JAssert(cond: JValue, expr: Option[JValue])
+  case JAssert(cond: JValue, msg: Option[JValue])
 
 enum JValue:
   case JFalse
@@ -116,7 +116,7 @@ enum JValue:
   case JFunction(params: JParamList, body: JValue)
   case JIf(cond: JValue, trueValue: JValue, elseValue: JValue)
   case JError(expr: JValue)
-  case JAssert(cond: JValue, expr: Option[JValue], result: JValue)
+  case JAssert(cond: JValue, msg: Option[JValue], expr: JValue)
   case JImport(file: String)
   case JImportStr(file: String)
   case JArrayComprehension(
