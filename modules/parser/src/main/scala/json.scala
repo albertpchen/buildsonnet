@@ -292,4 +292,6 @@ def asdf(args: String*): Unit =
   println("END")
   println("START")
   println(Json.parserFile.parseAll(args(1)).fold(_.expected.map(_.toString).mkString_("\n"), _.toString))
-  println("END")
+  Json.parserFile.parseAll(source) match
+  case Right(ast) => eval(EvaluationContext())(ast)
+  case Left(error) => print(error)
