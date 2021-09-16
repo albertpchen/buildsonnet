@@ -3,24 +3,69 @@ package root
 sealed trait EvaluationContext:
   def error(message: String): Nothing
   def lookup(id: String): EvaluatedJValue
-  def objectCtx(): EvaluationContext
+  def makeObject(members: Seq[JObjMember]): EvaluatedJValue.JObject
   def functionCtx(fn: EvaluatedJValue.JFunction): EvaluationContext
   def bind(id: String, value: JValue): EvaluationContext
-  def expectType[T <: EvaluatedJValue](expr: EvaluatedJValue): T
   def importFile(fileName: String): EvaluatedJValue
   def importStr(fileName: String): EvaluatedJValue.JString
+  def self(): EvaluatedJValue.JObject
+  def outer(): EvaluatedJValue.JObject
+
+sealed trait LazyValue:
+  lazy val evaluated: EvaluatedJValue
+
+object LazyValue:
+  def apply(ctx: EvaluationContext, code: JValue): LazyValue =
+    new LazyValue:
+      @scala.annotation.threadUnsafe
+      lazy val evaluated: EvaluatedJValue = {
+        eval(ctx)(code)
+      }
+
+  def apply(ctx: () => EvaluationContext, code: JValue): LazyValue =
+    new LazyValue:
+      @scala.annotation.threadUnsafe
+      lazy val evaluated: EvaluatedJValue = {
+        eval(ctx())(code)
+      }
 
 object EvaluationContext:
-  private class LazyValue(ctx: EvaluationContext, code: JValue):
-    @scala.annotation.threadUnsafe
-    lazy val evaluated: EvaluatedJValue = {
-      eval(ctx)(code)
-    }
+
+  private inline def typeString[T <: EvaluatedJValue]: String =
+    inline compiletime.erasedValue[T] match
+    case _: EvaluatedJValue.JBoolean => "bool"
+    case _: EvaluatedJValue.JNull.type => "null"
+    case _: EvaluatedJValue.JString => "str"
+    case _: EvaluatedJValue.JNum => "num"
+    case _: EvaluatedJValue.JArray => "array"
+    case _: EvaluatedJValue.JObject => "object"
+    case _: EvaluatedJValue.JFunction => "function"
+
+  private def typeString(expr: EvaluatedJValue): String =
+    expr match
+    case _: EvaluatedJValue.JBoolean => "bool"
+    case _: EvaluatedJValue.JNull.type => "null"
+    case _: EvaluatedJValue.JString => "str"
+    case _: EvaluatedJValue.JNum => "num"
+    case _: EvaluatedJValue.JArray => "array"
+    case _: EvaluatedJValue.JObject => "object"
+    case _: EvaluatedJValue.JFunction => "function"
+
+  extension (ctx: EvaluationContext)
+    inline def expectType[T <: EvaluatedJValue](expr: EvaluatedJValue): T =
+      if expr.isInstanceOf[T] then
+        expr.asInstanceOf[T]
+      else
+        ctx.error("got type ${typeString(expr)}, expected ${typeString[T]}")
 
   private case class Imp(
+    val selfOpt: Option[EvaluatedJValue.JObject],
+    val outerOpt: Option[EvaluatedJValue.JObject],
     val scope: Map[String, LazyValue],
     val stack: List[EvaluatedJValue.JFunction | EvaluatedJValue.JObject],
   ) extends EvaluationContext:
+    def self() = selfOpt.getOrElse(error("self may only be called within an object"))
+    def outer() = selfOpt.getOrElse(error("$ may only be called within an object"))
     def error(message: String): Nothing = throw new Exception(message)
 
     def lookup(id: String): EvaluatedJValue =
@@ -28,22 +73,43 @@ object EvaluationContext:
         error(s"no variable $id defined")
       }(_.evaluated)
 
-    def objectCtx(): EvaluationContext = ???
+    def makeObject(members: Seq[JObjMember]): EvaluatedJValue.JObject =
+      var objInsideOpt: Option[Map[String, LazyValue]] = None
+      val obj: EvaluatedJValue.JObject = EvaluatedJValue.JObject(() => objInsideOpt.get)
+      val objCtx = {
+        val withSelf = this.copy(selfOpt = Some(obj), outerOpt = Some(outerOpt.getOrElse(obj)))
+        members.foldLeft(withSelf) {
+          case (ctx, local: JObjMember.JLocal) =>
+            ctx.bind(local.name, local.value)
+          case (ctx, _) => ctx
+        }
+      }
+      objInsideOpt = Some(members.collect {
+        case JObjMember.JField(rawKey, _, value) =>
+          val key = objCtx.expectType[EvaluatedJValue.JString](eval(objCtx)(rawKey)).str
+          key -> LazyValue(objCtx, value)
+      }.toMap)
 
-    def functionCtx(fn: EvaluatedJValue.JFunction): EvaluationContext =
-      new Imp(scope, fn +: stack)
+      members.foreach {
+        case JObjMember.JAssert(rawCond, rawMsg) =>
+          val cond = objCtx.expectType[EvaluatedJValue.JBoolean](eval(objCtx)(rawCond)).value
+          val msgOpt = rawMsg.map(msg => objCtx.expectType[EvaluatedJValue.JString](eval(objCtx)(msg)).str)
+          if !cond then objCtx.error(msgOpt.getOrElse("object assertion failed"))
+        case _ =>
+      }
+      obj
 
-    def bind(id: String, value: JValue): EvaluationContext =
-      val newScope = scope + (id -> new LazyValue(this, value))
-      new Imp(newScope, stack)
+    def functionCtx(fn: EvaluatedJValue.JFunction): Imp =
+      this.copy(stack = fn +: stack)
 
-    def expectType[T <: EvaluatedJValue](expr: EvaluatedJValue): T =
-      if expr.isInstanceOf[T] then expr.asInstanceOf[T] else error("unexpected type")
+    def bind(id: String, value: JValue): Imp =
+      val newScope = scope + (id -> LazyValue(this, value))
+      this.copy(scope = newScope)
 
     def importFile(fileName: String): EvaluatedJValue = ???
     def importStr(fileName: String): EvaluatedJValue.JString = ???
 
-  def apply(): EvaluationContext = new Imp(Map.empty, List.empty)
+  def apply(): EvaluationContext = Imp(None, None, Map.empty, List.empty)
 
 
 enum EvaluatedJValue:
@@ -52,8 +118,9 @@ enum EvaluatedJValue:
   case JString(str: String)
   case JNum(double: Double)
   case JArray(elements: Seq[EvaluatedJValue])
-  case JObject(members: Seq[(String, EvaluatedJValue)])
+  case JObject(members: () => Map[String, LazyValue])
   case JFunction(params: JParamList, body: JValue)
+
 
 object EvaluatedJValue:
   extension (obj: JObject)
@@ -64,38 +131,25 @@ object EvaluatedJValue:
 
 
 object eval:
+
   def apply(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
     jvalue match
     case JValue.JFalse => EvaluatedJValue.JBoolean(false)
     case JValue.JTrue => EvaluatedJValue.JBoolean(true)
     case JValue.JNull => EvaluatedJValue.JNull
-    case JValue.JSelf => ctx.lookup("self")
+    case JValue.JSelf => ctx.self()
     case JValue.JSuper => ctx.lookup("super")
-    case JValue.JOuter => ctx.lookup("$")
+    case JValue.JOuter => ctx.outer()
     case JValue.JString(str) => EvaluatedJValue.JString(str)
     case JValue.JNum(str) => EvaluatedJValue.JNum(str.toDouble)
     case JValue.JArray(elements) => EvaluatedJValue.JArray(elements.map(apply(ctx)))
     case JValue.JObject(members) =>
-      val objCtx = ctx.objectCtx()
-      EvaluatedJValue.JObject(members.flatMap {
-        case JObjMember.JLocal(name, value) =>
-          objCtx.bind(name, value)
-          None
-        case JObjMember.JField(key, isHidden, value) =>
-          val evaluatedKey = objCtx.expectType[EvaluatedJValue.JString](apply(objCtx)(key))
-          Some(evaluatedKey.str -> apply(objCtx)(value))
-        case JObjMember.JAssert(cond, expr) =>
-          val evaluatedCond = objCtx.expectType[EvaluatedJValue.JBoolean](apply(objCtx)(cond))
-          val msgOpt = expr.map(e => objCtx.expectType[EvaluatedJValue.JString](apply(objCtx)(e)))
-          if !evaluatedCond.value then
-            objCtx.error(msgOpt.fold("assertion failed")(_.str))
-          None
-      })
+      ctx.makeObject(members)
     // case JValue.JObjectComprehension(preLocals, key, value, postLocals, forVar, inExpr, cond) => ???
     case JValue.JId(name) => ctx.lookup(name)
     case JValue.JGetField(loc, field) =>
       val obj = ctx.expectType[EvaluatedJValue.JObject](apply(ctx)(loc))
-      obj.lookup(field)
+      obj.members().getOrElse(field, ctx.error(s"object does not have field $field")).evaluated
     case JValue.JIndex(loc, rawIndex, rawEndIndex, stride) =>
       apply(ctx)(loc) match
       case obj: EvaluatedJValue.JObject =>

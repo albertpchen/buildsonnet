@@ -9,7 +9,7 @@ type JType =
   | EvaluatedJValue.JObject
   | EvaluatedJValue.JFunction
 
-type JTypeOf[T] = T match
+type JTypeOf[T <: EvaluatedJValue] = T match
   case EvaluatedJValue.JBoolean => Boolean
   case EvaluatedJValue.JNull.type => Unit
   case EvaluatedJValue.JString => String

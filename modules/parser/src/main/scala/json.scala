@@ -294,5 +294,13 @@ def asdf(args: String*): Unit =
   println(Json.parserFile.parseAll(args(1)).fold(_.expected.map(_.toString).mkString_("\n"), _.toString))
   Json.parserFile.parseAll(source).fold(
     error => println("FAIL: " + error.toString),
-    ast => println("PASS: " + eval(EvaluationContext())(ast).toString),
+    ast => {
+      val evaluated = eval(EvaluationContext())(ast)
+      evaluated match
+      case EvaluatedJValue.JObject(members) =>
+        print("PASS: JObject(")
+        members().map((k, v) => k -> v.evaluated).foreach(m => print(s"  $m,\n"))
+        println(")")
+      case other => println("PASS: " + other.toString),
+    }
   )
