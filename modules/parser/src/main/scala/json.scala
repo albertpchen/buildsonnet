@@ -297,6 +297,10 @@ def asdf(args: String*): Unit =
     ast => {
       val ctx = EvaluationContext()
       val evaluated = eval(ctx)(ast)
-      println(evaluated.manifest(ctx))
+      val manifested = evaluated.manifest(ctx)
+      manifested.fold(
+        msg => println(s"FAIL: $msg"),
+        value => println(s"PASS: $value"),
+      )
     }
   )
