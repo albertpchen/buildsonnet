@@ -14,19 +14,21 @@ sealed trait EvaluationContext:
 sealed trait LazyValue:
   lazy val evaluated: EvaluatedJValue
 
+sealed trait LazyObjectValue extends LazyValue:
+  val isHidden: Boolean
+
 object LazyValue:
   def apply(ctx: EvaluationContext, code: JValue): LazyValue =
     new LazyValue:
       @scala.annotation.threadUnsafe
-      lazy val evaluated: EvaluatedJValue = {
-        eval(ctx)(code)
-      }
+      lazy val evaluated: EvaluatedJValue = eval(ctx)(code)
 
-  def apply(ctx: () => EvaluationContext, code: JValue): LazyValue =
-    new LazyValue:
+  def apply(ctx: EvaluationContext, code: JValue, hidden: Boolean): LazyObjectValue =
+    new LazyObjectValue:
+      val isHidden = hidden
       @scala.annotation.threadUnsafe
       lazy val evaluated: EvaluatedJValue = {
-        eval(ctx())(code)
+        eval(ctx)(code)
       }
 
 object EvaluationContext:
@@ -56,7 +58,7 @@ object EvaluationContext:
       if expr.isInstanceOf[T] then
         expr.asInstanceOf[T]
       else
-        ctx.error("got type ${typeString(expr)}, expected ${typeString[T]}")
+        ctx.error(s"got type ${typeString(expr)}, expected ${typeString[T]}")
 
   private case class Imp(
     val selfOpt: Option[EvaluatedJValue.JObject],
@@ -65,7 +67,7 @@ object EvaluationContext:
     val stack: List[EvaluatedJValue.JFunction | EvaluatedJValue.JObject],
   ) extends EvaluationContext:
     def self() = selfOpt.getOrElse(error("self may only be called within an object"))
-    def outer() = selfOpt.getOrElse(error("$ may only be called within an object"))
+    def outer() = outerOpt.getOrElse(error("$ may only be called within an object"))
     def error(message: String): Nothing = throw new Exception(message)
 
     def lookup(id: String): EvaluatedJValue =
@@ -74,21 +76,26 @@ object EvaluationContext:
       }(_.evaluated)
 
     def makeObject(members: Seq[JObjMember]): EvaluatedJValue.JObject =
-      var objInsideOpt: Option[Map[String, LazyValue]] = None
+      var objInsideOpt: Option[Map[String, LazyObjectValue]] = None
       val obj: EvaluatedJValue.JObject = EvaluatedJValue.JObject(() => objInsideOpt.get)
+
       val objCtx = {
         val withSelf = this.copy(selfOpt = Some(obj), outerOpt = Some(outerOpt.getOrElse(obj)))
-        members.foldLeft(withSelf) {
-          case (ctx, local: JObjMember.JLocal) =>
-            ctx.bind(local.name, local.value)
+        val result = members.foldLeft(withSelf) {
+          case (ctx, local: JObjMember.JLocal) => ctx.bind(local.name, local.value)
           case (ctx, _) => ctx
         }
+        result
       }
-      objInsideOpt = Some(members.collect {
-        case JObjMember.JField(rawKey, _, value) =>
-          val key = objCtx.expectType[EvaluatedJValue.JString](eval(objCtx)(rawKey)).str
-          key -> LazyValue(objCtx, value)
-      }.toMap)
+
+      objInsideOpt = Some {
+        val result = members.collect {
+          case JObjMember.JField(rawKey, isHidden, value) =>
+            val key = this.expectType[EvaluatedJValue.JString](eval(this)(rawKey)).str
+            key -> LazyValue(objCtx, value, isHidden)
+        }.toMap
+        result
+      }
 
       members.foreach {
         case JObjMember.JAssert(rawCond, rawMsg) =>
@@ -111,6 +118,15 @@ object EvaluationContext:
 
   def apply(): EvaluationContext = Imp(None, None, Map.empty, List.empty)
 
+case class ManifestError(msg: String)
+
+enum ManifestedJValue:
+  case JBoolean(value: Boolean)
+  case JNull
+  case JString(str: String)
+  case JNum(double: Double)
+  case JArray(elements: Seq[ManifestedJValue])
+  case JObject(members: Map[String, ManifestedJValue])
 
 enum EvaluatedJValue:
   case JBoolean(value: Boolean)
@@ -118,8 +134,26 @@ enum EvaluatedJValue:
   case JString(str: String)
   case JNum(double: Double)
   case JArray(elements: Seq[EvaluatedJValue])
-  case JObject(members: () => Map[String, LazyValue])
+  case JObject(members: () => Map[String, LazyObjectValue])
   case JFunction(params: JParamList, body: JValue)
+
+  def manifest(ctx: EvaluationContext): Either[String, ManifestedJValue] =
+    this match
+    case JBoolean(value) => Right(ManifestedJValue.JBoolean(value))
+    case JNull => Right(ManifestedJValue.JNull)
+    case JString(str) => Right(ManifestedJValue.JString(str))
+    case JNum(double) => Right(ManifestedJValue.JNum(double))
+    case JArray(elements) =>
+      elements.foldLeft(Right(Seq.empty): Either[String, Seq[ManifestedJValue]]) {
+        case (Right(tail), element) => element.manifest(ctx).map(_ +: tail)
+        case (error, _) => error
+      }.map(l => ManifestedJValue.JArray(l.reverse))
+    case JObject(members) =>
+      members().toSeq.sortBy(_._1).foldLeft(Right(Seq.empty):Either[String, Seq[(String, ManifestedJValue)]] ) {
+        case (Right(tail), (key, value)) => value.evaluated.manifest(ctx).map(v => (key -> v) +: tail)
+        case (error, _) => error
+      }.map(m => ManifestedJValue.JObject(m.reverse.toMap))
+    case _: JFunction => ctx.error("cannot manifest function")
 
 
 object EvaluatedJValue:
@@ -149,7 +183,10 @@ object eval:
     case JValue.JId(name) => ctx.lookup(name)
     case JValue.JGetField(loc, field) =>
       val obj = ctx.expectType[EvaluatedJValue.JObject](apply(ctx)(loc))
-      obj.members().getOrElse(field, ctx.error(s"object does not have field $field")).evaluated
+      obj
+        .members()
+        .getOrElse(field, ctx.error(s"object does not have field $field"))
+        .evaluated
     case JValue.JIndex(loc, rawIndex, rawEndIndex, stride) =>
       apply(ctx)(loc) match
       case obj: EvaluatedJValue.JObject =>

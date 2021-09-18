@@ -21,8 +21,26 @@ local dd = {
   std.trace("asdf", "asdf"),
   c: 0,
   d: 0,
+  [0]: "DLFKJ",
   //z: asdf,
-  assert self.d != 0 : "DLKJFLKSJ",
+  // assert self.d != 0 : "DLKJFLKSJ",
 };
-//[b, c, std.thisFile, std.trace("LKJ" + b, b), d.d, dd.c]
-[b, c]
+// [b, c, std.thisFile, std.trace("LKJ" + b, b), d.d, dd.c, dd.asdf]
+//[b, c]
+{
+  c: 1,
+  d: 2,
+  local a = self.c,
+  local b = a + $.d,
+  e: b + 9,
+  s: "SDLKFJ",
+  z: {
+    e: "LKJKLJ",
+    c: $.c,
+    //[self.e]: 0,
+    [$.s]: 0,
+  },
+  //[std.trace("outer ran", "asdf")]: 0
+} /*+ {
+  [std.trace("inner ran", "asdf")]: 0
+}*/
