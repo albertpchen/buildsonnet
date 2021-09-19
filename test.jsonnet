@@ -27,6 +27,15 @@ local dd = {
 };
 // [b, c, std.thisFile, std.trace("LKJ" + b, b), d.d, dd.c, dd.asdf]
 //[b, c]
+local child = {
+  c: 2,
+  //[std.trace("inner ran", "asdf")]: 0
+  z: super.z + {
+    aa: 1234,
+    c: $.c,
+  }
+};
+
 {
   c: 1,
   d: 2,
@@ -41,6 +50,5 @@ local dd = {
     [$.s]: 0,
   },
   //[std.trace("outer ran", "asdf")]: 0
-} /*+ {
-  [std.trace("inner ran", "asdf")]: 0
-}*/
+  zz: { z: {} } + child,
+} + child
