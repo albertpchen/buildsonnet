@@ -3,24 +3,27 @@ package root
 sealed trait EvaluationContext:
   def error(message: String): Nothing
   def lookup(id: String): EvaluatedJValue
-  def objectCtx(obj: EvaluatedJValue.JObject): EvaluationContext
+  def objectCtx(obj: EvaluatedJValue.JObject): ObjectEvaluationContext
   def functionCtx(fn: EvaluatedJValue.JFunction): EvaluationContext
   def bind(id: String, value: JValue): EvaluationContext
   def importFile(fileName: String): EvaluatedJValue
   def importStr(fileName: String): EvaluatedJValue.JString
-  def self(): EvaluatedJValue.JObject
-  def parent(): EvaluatedJValue.JObject
-  def outer(): EvaluatedJValue.JObject
-  def withSelf(self: EvaluatedJValue.JObject): EvaluationContext
-  def withParent(self: EvaluatedJValue.JObject): EvaluationContext
+  def self: EvaluatedJValue.JObject
+  def `super`: EvaluatedJValue.JObject
+  def hasSuper: Boolean
+
+sealed trait ObjectEvaluationContext extends EvaluationContext:
+  def bind(id: String, value: JValue): ObjectEvaluationContext
+  def withSelf(self: EvaluatedJValue.JObject): ObjectEvaluationContext
+  def withParent(self: EvaluatedJValue.JObject): ObjectEvaluationContext
 
 sealed trait LazyValue:
   lazy val evaluated: EvaluatedJValue
 
 sealed trait LazyObjectValue extends LazyValue:
   val isHidden: Boolean
-  def withSelf(self: EvaluatedJValue.JObject): LazyObjectValue
-  def withParent(parent: EvaluatedJValue.JObject): LazyObjectValue
+  // def withSelf(self: EvaluatedJValue.JObject): LazyObjectValue
+  // def withParent(parent: EvaluatedJValue.JObject): LazyObjectValue
 
 object LazyValue:
   def apply(ctx: EvaluationContext, code: JValue): LazyValue =
@@ -33,14 +36,15 @@ object LazyValue:
       val isHidden = hidden
       @scala.annotation.threadUnsafe
       lazy val evaluated: EvaluatedJValue = {
+        //println("SDFLKJ: " + code.toString)
         eval(ctx)(code)
       }
 
-      def withSelf(self: EvaluatedJValue.JObject): LazyObjectValue =
-        LazyValue(ctx.withSelf(self), code, hidden)
+      // def withSelf(self: EvaluatedJValue.JObject): LazyObjectValue =
+      //   LazyValue(ctx.withSelf(self), code, hidden)
 
-      def withParent(parent: EvaluatedJValue.JObject): LazyObjectValue =
-        LazyValue(ctx.withParent(parent), code, hidden)
+      // def withParent(parent: EvaluatedJValue.JObject): LazyObjectValue =
+      //   LazyValue(ctx.withParent(parent), code, hidden)
 
 object EvaluationContext:
 
@@ -77,16 +81,10 @@ object EvaluationContext:
       else
         typeError[T](expr)
 
-  private case class Imp(
-    val selfOpt: Option[EvaluatedJValue.JObject],
-    val superOpt: Option[EvaluatedJValue.JObject],
-    val outerOpt: Option[EvaluatedJValue.JObject],
+  private class Imp(
     val scope: Map[String, LazyValue],
     val stack: List[EvaluatedJValue.JFunction | EvaluatedJValue.JObject],
   ) extends EvaluationContext:
-    def self() = selfOpt.getOrElse(error("self may only be called within an object"))
-    def parent() = superOpt.getOrElse(error("super may only be called within an object"))
-    def outer() = outerOpt.getOrElse(error("$ may only be called within an object"))
     def error(message: String): Nothing = throw new Exception(message)
 
     def lookup(id: String): EvaluatedJValue =
@@ -94,25 +92,77 @@ object EvaluationContext:
         error(s"no variable $id defined")
       }(_.evaluated)
 
-    def objectCtx(obj: EvaluatedJValue.JObject): EvaluationContext =
-      this.copy(
-        selfOpt = Some(obj),
-        outerOpt = Some(outerOpt.getOrElse(obj)),
-      )
+    def objectCtx(obj: EvaluatedJValue.JObject): ObjectEvaluationContext =
+      new ObjectImp(
+        obj,
+        None,
+        this,
+        Map.empty,
+        stack,
+      ).bind("$", JValue.JSelf)
 
     def functionCtx(fn: EvaluatedJValue.JFunction): Imp =
-      this.copy(stack = fn +: stack)
+      new Imp(scope, fn +: stack)
 
     def bind(id: String, value: JValue): Imp =
       val newScope = scope + (id -> LazyValue(this, value))
-      this.copy(scope = newScope)
+      new Imp(newScope, stack)
 
     def importFile(fileName: String): EvaluatedJValue = ???
     def importStr(fileName: String): EvaluatedJValue.JString = ???
-    def withSelf(self: EvaluatedJValue.JObject): EvaluationContext = this.copy(selfOpt = Some(self))
-    def withParent(parent: EvaluatedJValue.JObject): EvaluationContext = this.copy(superOpt = Some(parent))
 
-  def apply(): EvaluationContext = Imp(None, None, None, Map.empty, List.empty)
+    def self: EvaluatedJValue.JObject = error("no self")
+    def `super`: EvaluatedJValue.JObject = error("no super")
+    def hasSuper: Boolean = false
+
+  private case class ObjectImp(
+    override val self: EvaluatedJValue.JObject,
+    superOpt: Option[EvaluatedJValue.JObject],
+    topCtx: Imp,
+    locals: Map[String, JValue],
+    stack: List[EvaluatedJValue.JFunction | EvaluatedJValue.JObject],
+  ) extends ObjectEvaluationContext:
+
+    def `super` = superOpt.getOrElse(topCtx.`super`)
+    def hasSuper: Boolean = superOpt.isDefined
+    export topCtx.error, topCtx.importStr, topCtx.importFile
+
+    @scala.annotation.threadUnsafe
+    lazy val cache = collection.mutable.HashMap[String, EvaluatedJValue]()
+    val scope = locals.map { (id, value) =>
+      id -> LazyValue(this, value)
+    }
+    def lookup(id: String): EvaluatedJValue =
+      if scope.contains(id) then
+        scope(id).evaluated
+      else
+        topCtx.lookup(id)
+
+    def objectCtx(obj: EvaluatedJValue.JObject): ObjectEvaluationContext =
+      new ObjectImp(
+        obj,
+        None,
+        new Imp(topCtx.scope ++ scope, topCtx.stack),
+        Map.empty,
+        stack,
+      )
+
+    def functionCtx(fn: EvaluatedJValue.JFunction) =
+      this.copy(stack = fn +: stack)
+
+    def withSelf(newSelf: EvaluatedJValue.JObject) =
+      if `self` == newSelf then this else this.copy(`self` = newSelf)
+
+    def withParent(parent: EvaluatedJValue.JObject) =
+      if superOpt.isDefined && superOpt.get == parent then
+        this
+      else
+        this.copy(superOpt = Some(parent))
+
+    def bind(id: String, value: JValue) =
+      this.copy(locals = locals + (id -> value))
+
+  def apply(): EvaluationContext = Imp(Map.empty, List.empty)
 
 case class ManifestError(msg: String)
 
@@ -143,7 +193,11 @@ enum ManifestedJValue:
         builder += '"'
         ManifestedJValue.escape(value, builder)
         builder += '"'
-      case JNum(value) => builder ++= value.toString
+      case JNum(value) =>
+        if value.isWhole then
+          builder ++= value.toLong.toString
+        else
+          builder ++= value.toString
       case JBoolean(value) => builder ++= value.toString
       case JArray(value) if value.isEmpty => builder ++= "[]"
       case JArray(value) =>
@@ -200,6 +254,30 @@ object ManifestedJValue:
             builder ++= c.toString
       idx += 1
 
+sealed trait JObjectImp(
+  ctxThunk: () => ObjectEvaluationContext,
+  rawMembers: Seq[JObjMember.JField],
+):
+  private def ctx = ctxThunk()
+
+  private var _cache: collection.mutable.HashMap[String, LazyObjectValue] = null
+  lazy val cache = {
+    val result = collection.mutable.HashMap[String, LazyObjectValue]()
+    rawMembers.foreach { case JObjMember.JField(key, isHidden, value) =>
+      result(ctx.expectType[EvaluatedJValue.JString](eval(ctx)(key)).str) = LazyValue(ctx, value, isHidden)
+    }
+    result
+  }
+
+  def lookup(field: String): EvaluatedJValue =
+    cache.getOrElse(field, ctx.error(s"object missing field $field")).evaluated
+
+  def members(): collection.Map[String, LazyObjectValue] =
+    if ctx.hasSuper then
+      ctx.`super`.members() ++ cache
+    else
+      cache
+
 enum EvaluatedJValue:
   case JBoolean(value: Boolean)
   case JNull
@@ -212,7 +290,7 @@ enum EvaluatedJValue:
     * - super lookup (dynamic), not in current object, but in super object
     * - self lookup (dynamic), lookup in current object, possibly in super
     */
-  case JObject(members: () => Map[String, LazyObjectValue])
+  case JObject(ctx: () => ObjectEvaluationContext, rawMembers: Seq[JObjMember.JField]) extends EvaluatedJValue with JObjectImp(ctx, rawMembers)
   case JFunction(params: JParamList, body: JValue)
 
   def manifest(ctx: EvaluationContext): Either[String, ManifestedJValue] =
@@ -226,8 +304,8 @@ enum EvaluatedJValue:
         case (Right(tail), element) => element.manifest(ctx).map(_ +: tail)
         case (error, _) => error
       }.map(l => ManifestedJValue.JArray(l.reverse))
-    case JObject(members) =>
-      members().toSeq.sortBy(_._1).foldLeft(Right(Seq.empty):Either[String, Seq[(String, ManifestedJValue)]] ) {
+    case obj: JObject =>
+      obj.members().toSeq.sortBy(_._1).foldLeft(Right(Seq.empty):Either[String, Seq[(String, ManifestedJValue)]] ) {
         case (Right(tail), (key, value)) => value.evaluated.manifest(ctx).map(v => (key -> v) +: tail)
         case (error, _) => error
       }.map(m => ManifestedJValue.JObject(m.reverse.toMap))
@@ -245,20 +323,24 @@ object EvaluatedJValue:
 object eval:
 
   def apply(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
+    //println(jvalue)
     jvalue match
     case JValue.JFalse => EvaluatedJValue.JBoolean(false)
     case JValue.JTrue => EvaluatedJValue.JBoolean(true)
     case JValue.JNull => EvaluatedJValue.JNull
-    case JValue.JSelf => ctx.self()
-    case JValue.JSuper => ctx.parent()
-    case JValue.JOuter => ctx.outer()
+    case JValue.JSelf => ctx.self
+    case JValue.JSuper => ctx.`super`
+    case JValue.JOuter => ctx.lookup("$")
     case JValue.JString(str) => EvaluatedJValue.JString(str)
     case JValue.JNum(str) => EvaluatedJValue.JNum(str.toDouble)
     case JValue.JArray(elements) => EvaluatedJValue.JArray(elements.map(apply(ctx)))
     case JValue.JObject(members) =>
       var objMembers: Map[String, LazyObjectValue] = null
-      val obj: EvaluatedJValue.JObject = EvaluatedJValue.JObject(() => objMembers)
-      val objCtx = members.foldLeft(ctx.objectCtx(obj)) {
+      var objCtx: ObjectEvaluationContext = null
+      val obj: EvaluatedJValue.JObject = EvaluatedJValue.JObject(() => objCtx, members.collect {
+        case f: JObjMember.JField => f
+      })
+      objCtx = members.foldLeft(ctx.objectCtx(obj)) {
         case (ctx, local: JObjMember.JLocal) => ctx.bind(local.name, local.value)
         case (ctx, _) => ctx
       }
@@ -332,11 +414,16 @@ object eval:
           EvaluatedJValue.JNum(op1.double + op2.double)
         case (op1: EvaluatedJValue.JObject, op2: EvaluatedJValue.JObject) =>
           var members: Map[String, LazyObjectValue] = null
-          val result: EvaluatedJValue.JObject = EvaluatedJValue.JObject(() => members)
-          var parentMembers: Map[String, LazyObjectValue] = null
-          val parent: EvaluatedJValue.JObject = EvaluatedJValue.JObject(() => parentMembers)
-          parentMembers = op1.members().view.mapValues(_.withSelf(result)).toMap
-          members = parentMembers ++ op2.members().view.mapValues(_.withSelf(result).withParent(parent))
+          var parentCtx: ObjectEvaluationContext = null
+          val parent: EvaluatedJValue.JObject = {
+            op1.copy(ctx = () => parentCtx)
+          }
+          var resultCtx: ObjectEvaluationContext = null
+          val result: EvaluatedJValue.JObject = {
+            op2.copy(ctx = () => resultCtx)
+          }
+          resultCtx = op2.ctx().withSelf(result).withParent(parent)
+          parentCtx = op1.ctx().withSelf(result)
           result
         case (op1: EvaluatedJValue.JNum, op2) => ctx.typeError[EvaluatedJValue.JNum](op2)
         case (op1, op2: EvaluatedJValue.JNum) => ctx.typeError[EvaluatedJValue.JNum](op2)

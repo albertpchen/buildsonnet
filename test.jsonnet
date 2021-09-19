@@ -1,4 +1,5 @@
 local a = function(x=2, y, z=0, x) x + z + y;
+local zzz = 0; //c + 1;
 local mut = 0;
 local b = a(x=0, y=mut);
 local mut = 1234;
@@ -39,8 +40,12 @@ local child = {
 {
   c: 1,
   d: 2,
+  local z = a,
+  zzzz: z,
   local a = self.c,
+  a: a,
   local b = a + $.d,
+  b: b,
   e: b + 9,
   s: "SDLKFJ",
   z: {
@@ -51,4 +56,5 @@ local child = {
   },
   //[std.trace("outer ran", "asdf")]: 0
   zz: { z: {} } + child,
+  zzz: zzz,
 } + child
