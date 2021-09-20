@@ -57,4 +57,6 @@ local child = {
   //[std.trace("outer ran", "asdf")]: 0
   zz: { z: {} } + child,
   zzz: zzz,
+  arr: [0, 1, 2, 3, 4, 5, 6, 7,],
+  slice: self.arr[0:4:2],
 } + child

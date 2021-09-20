@@ -230,8 +230,11 @@ object Json {
             (
               (expr <* __) ~ (suffix ~ suffix.?).? <* P.char(']')
             ).map { (index, opt) =>
-              val (endIndex, strideOpt) = opt.getOrElse(JNull -> None)
-              JIndex(_, index, endIndex, strideOpt.getOrElse(JNull))
+              if opt.isEmpty then
+                JIndex(_, index)
+              else
+                val (endIndex, strideOpt) = opt.get
+                JSlice(_, index, endIndex, strideOpt.getOrElse(JNull))
             }
           case '(' => (args <* __).flatMap { args =>
             val namedAfterPositional = args.size >= 2 && args.sliding(2).exists { window =>
@@ -287,20 +290,22 @@ def asdf(args: String*): Unit =
   //println((Json.id *> P.char('(') *> Json.exprAtom.surroundedBy(Json.__) <* Json.__ <* P.char(')')).parseAll(args(0)))
   val filename = args(0)
   val source = scala.io.Source.fromFile(filename).getLines.mkString("\n")
+  val parser = Json.parserFile
   println("START")
-  println(Json.parserFile.parseAll(source).fold(_.expected.map(_.toString).mkString_("\n"), _.toString))
-  println("END")
-  println("START")
-  println(Json.parserFile.parseAll(args(1)).fold(_.expected.map(_.toString).mkString_("\n"), _.toString))
-  Json.parserFile.parseAll(source).fold(
-    error => println("FAIL: " + error.toString),
+  parser.parseAll(source).fold(
+    error => {
+      println("END")
+      println("FAIL: " + error.toString)
+    },
     ast => {
+      println("END PARSE")
       val ctx = EvaluationContext()
       val evaluated = eval(ctx)(ast)
       val manifested = evaluated.manifest(ctx)
+      println("END EVAL")
       manifested.fold(
         msg => println(s"FAIL: $msg"),
-        value => println(s"PASS: $value"),
+        value => println(value),
       )
     }
   )

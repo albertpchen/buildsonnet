@@ -171,7 +171,7 @@ enum ManifestedJValue:
   case JNull
   case JString(str: String)
   case JNum(double: Double)
-  case JArray(elements: Seq[ManifestedJValue])
+  case JArray(elements: Vector[ManifestedJValue])
   case JObject(members: Map[String, ManifestedJValue])
 
   override def toString: String =
@@ -303,7 +303,7 @@ enum EvaluatedJValue:
       elements.foldLeft(Right(Seq.empty): Either[String, Seq[ManifestedJValue]]) {
         case (Right(tail), element) => element.manifest(ctx).map(_ +: tail)
         case (error, _) => error
-      }.map(l => ManifestedJValue.JArray(l.reverse))
+      }.map(l => ManifestedJValue.JArray(l.reverse.toVector))
     case obj: JObject =>
       obj.members().toSeq.sortBy(_._1).foldLeft(Right(Seq.empty):Either[String, Seq[(String, ManifestedJValue)]] ) {
         case (Right(tail), (key, value)) => value.evaluated.manifest(ctx).map(v => (key -> v) +: tail)
@@ -313,12 +313,25 @@ enum EvaluatedJValue:
 
 
 object EvaluatedJValue:
-  extension (obj: JObject)
-    def lookup(field: String): EvaluatedJValue = ???
-
   extension (arr: JArray)
-    def index(idx: Int, endIdx: Option[Int], stride: Option[Int]): EvaluatedJValue = ???
-
+    def index(ctx: EvaluationContext, idx: Int, endIdxOpt: Option[Int], strideOpt: Option[Int]): EvaluatedJValue =
+      println(s"$idx, $endIdxOpt, $strideOpt")
+      if idx < 0 || endIdxOpt.exists(_ < 0) || strideOpt.exists(_ < 0) then ctx.error(s"negative index, end, or stride are not allowed")
+      val size = arr.elements.size
+      if size <= idx then ctx.error(s"index out of bounds $idx")
+      if endIdxOpt.isEmpty && strideOpt.isEmpty then
+        arr.elements(idx)
+      else
+        val stride = strideOpt.getOrElse(1)
+        val endIdx = endIdxOpt.getOrElse(size - 1)
+        if idx >= endIdx then
+          EvaluatedJValue.JArray(Vector.empty)
+        else
+          val elements = for
+            i <- idx until endIdx by stride
+            if i < size
+          yield arr.elements(i)
+          EvaluatedJValue.JArray(elements.toVector)
 
 object eval:
 
@@ -370,19 +383,29 @@ object eval:
         .members()
         .getOrElse(field, ctx.error(s"object does not have field $field"))
         .evaluated
-    case JValue.JIndex(loc, rawIndex, rawEndIndex, stride) =>
+    case JValue.JIndex(loc, rawIndex) =>
       apply(ctx)(loc) match
       case obj: EvaluatedJValue.JObject =>
-        if !rawEndIndex.isNull then ctx.error("no end index allowed for object index")
-        if !stride.isNull then ctx.error("no stride allowed for object index")
         val field = ctx.expectType[EvaluatedJValue.JString](apply(ctx)(rawIndex))
         obj.lookup(field.str)
+      case EvaluatedJValue.JArray(elements) =>
+        val index = ctx.expectType[EvaluatedJValue.JNum](apply(ctx)(rawIndex)).double.toInt
+        elements(index)
+      case _ => ctx.error(s"expected object or array")
+    case JValue.JSlice(loc, rawIndex, rawEndIndex, rawStride) =>
+      println(s"$rawIndex, $rawEndIndex, $rawStride")
+      apply(ctx)(loc) match
+      case obj: EvaluatedJValue.JObject =>
+        ctx.error("no end index or stride allowed for object index")
       case arr: EvaluatedJValue.JArray =>
         val index = ctx.expectType[EvaluatedJValue.JNum](apply(ctx)(rawIndex)).double.toInt
         val endIndex =
           if rawEndIndex.isNull then None
-          else Some(ctx.expectType[EvaluatedJValue.JNum](apply(ctx)(rawIndex)).double.toInt)
-        arr.index(index, endIndex, None)
+          else Some(ctx.expectType[EvaluatedJValue.JNum](apply(ctx)(rawEndIndex)).double.toInt)
+        val stride =
+          if rawStride.isNull then None
+          else Some(ctx.expectType[EvaluatedJValue.JNum](apply(ctx)(rawStride)).double.toInt)
+        arr.index(ctx, index, endIndex, stride)
       case _ => ctx.error(s"expected object or array")
     case JValue.JApply(loc, positionalArgs, namedArgs) =>
       val fn = ctx.expectType[EvaluatedJValue.JFunction](apply(ctx)(loc))
@@ -415,13 +438,9 @@ object eval:
         case (op1: EvaluatedJValue.JObject, op2: EvaluatedJValue.JObject) =>
           var members: Map[String, LazyObjectValue] = null
           var parentCtx: ObjectEvaluationContext = null
-          val parent: EvaluatedJValue.JObject = {
-            op1.copy(ctx = () => parentCtx)
-          }
+          val parent: EvaluatedJValue.JObject = op1.copy(ctx = () => parentCtx)
           var resultCtx: ObjectEvaluationContext = null
-          val result: EvaluatedJValue.JObject = {
-            op2.copy(ctx = () => resultCtx)
-          }
+          val result: EvaluatedJValue.JObject = op2.copy(ctx = () => resultCtx)
           resultCtx = op2.ctx().withSelf(result).withParent(parent)
           parentCtx = op1.ctx().withSelf(result)
           result
