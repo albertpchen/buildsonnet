@@ -82,7 +82,7 @@ object JBinaryOperator:
 
 enum JObjMember:
   case JLocal(name: String, value: JValue)
-  case JField(key: JValue, isHidden: Boolean, value: JValue)
+  case JField(key: JValue, plus: Boolean, isHidden: Boolean, value: JValue)
   case JAssert(cond: JValue, msg: Option[JValue])
 
 enum JValue:

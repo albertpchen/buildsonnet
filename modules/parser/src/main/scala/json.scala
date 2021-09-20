@@ -109,12 +109,14 @@ object Json {
       id.map(id => JString(id)),
       (P.char('[') *> __ *> expr <* __ <* P.char(']')),
     ))
-    val h = (P.char(':') ~ P.char(':').?  ~ P.char(':').?).map { case ((_1, _2), _3) =>
-      _2.isDefined || _3.isDefined
+    val h = (P.char('+').?.with1 ~ P.char(':') ~ P.char(':').?  ~ P.char(':').?).map { case (((plus, _1), _2), _3) =>
+      plus.isDefined -> (_2.isDefined || _3.isDefined)
     }
     val keyValue: P[JObjMember] = {
       P.oneOf(List(
-        (key, h.surroundedBy(__), expr).tupled.map(JObjMember.JField(_, _, _)),
+        (key, h.surroundedBy(__), expr).tupled.map { case (key, (plus, isHidden), value) =>
+          JObjMember.JField(key, plus, isHidden, value)
+        },
         assert.map(JObjMember.JAssert(_, _)),
         (keyword("local") *> __ *> bind).map { (id, paramsOpt, expr) =>
           JObjMember.JLocal(id, paramsOpt.fold(expr)(JFunction(_, expr)))

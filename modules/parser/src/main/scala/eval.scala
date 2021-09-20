@@ -18,10 +18,11 @@ sealed trait ObjectEvaluationContext extends EvaluationContext:
   def withParent(self: EvaluatedJValue.JObject): ObjectEvaluationContext
 
 sealed trait LazyValue:
-  lazy val evaluated: EvaluatedJValue
+  def evaluated: EvaluatedJValue
 
 sealed trait LazyObjectValue extends LazyValue:
   val isHidden: Boolean
+  def withHidden(hidden: Boolean): LazyObjectValue
 
 object LazyValue:
   def apply(ctx: EvaluationContext, code: JValue): LazyValue =
@@ -29,14 +30,25 @@ object LazyValue:
       @scala.annotation.threadUnsafe
       lazy val evaluated: EvaluatedJValue = eval(ctx)(code)
 
+  private def withHiddenImp(newIsHidden: Boolean, lazyVal: LazyObjectValue): LazyObjectValue =
+    if newIsHidden ^ lazyVal.isHidden then
+      new LazyObjectValue:
+        val isHidden = newIsHidden
+        def evaluated = lazyVal.evaluated
+        def withHidden(isHidden: Boolean) = withHiddenImp(isHidden, this)
+    else
+      lazyVal
+
   def apply(ctx: EvaluationContext, code: JValue, hidden: Boolean): LazyObjectValue =
     new LazyObjectValue:
+      self =>
       val isHidden = hidden
       @scala.annotation.threadUnsafe
       lazy val evaluated: EvaluatedJValue = {
         //println("SDFLKJ: " + code.toString)
         eval(ctx)(code)
       }
+      def withHidden(hidden: Boolean) = withHiddenImp(hidden, this)
 
 object EvaluationContext:
   private inline def typeString[T <: EvaluatedJValue]: String =
@@ -262,8 +274,16 @@ sealed trait JObjectImp(
   private var _cache: collection.mutable.HashMap[String, LazyObjectValue] = null
   lazy val cache = {
     val result = collection.mutable.HashMap[String, LazyObjectValue]()
-    rawMembers.foreach { case JObjMember.JField(key, isHidden, value) =>
-      result(ctx.expectString(key).str) = LazyValue(ctx, value, isHidden)
+    rawMembers.foreach { case JObjMember.JField(rawKey, plus, isHidden, value) =>
+      val key = ctx.expectString(rawKey).str
+      if plus then
+        result(key) = LazyValue(
+          ctx,
+          JValue.JBinaryOp(JValue.JGetField(JValue.JSuper, key), JBinaryOperator.Op_+, value),
+          isHidden
+        )
+      else
+        result(key) = LazyValue(ctx, value, isHidden)
     }
     result
   }
@@ -271,11 +291,25 @@ sealed trait JObjectImp(
   def lookup(field: String): EvaluatedJValue =
     cache.getOrElse(field, ctx.error(s"object missing field $field")).evaluated
 
+  private var _members: collection.Map[String, LazyObjectValue] = null
   def members(): collection.Map[String, LazyObjectValue] =
-    if ctx.hasSuper then
-      ctx.`super`.members() ++ cache
+    if _members == null then
+      _members =
+        if ctx.hasSuper then
+          val superMembers = ctx.`super`.members()
+          superMembers ++ cache.map { (k, v) =>
+            val newValue =
+              if superMembers.contains(k) && superMembers(k).isHidden && !v.isHidden then
+                v.withHidden(superMembers(k).isHidden)
+              else
+                v
+            k -> newValue
+          }
+        else
+          cache
+      _members
     else
-      cache
+      _members
 
 enum EvaluatedJValue:
   case JBoolean(value: Boolean)
@@ -314,7 +348,8 @@ object EvaluatedJValue:
   extension (arr: EvaluatedJValue.JArray)
     def index(ctx: EvaluationContext, idx: Int, endIdxOpt: Option[Int], strideOpt: Option[Int]): EvaluatedJValue =
       println(s"$idx, $endIdxOpt, $strideOpt")
-      if idx < 0 || endIdxOpt.exists(_ < 0) || strideOpt.exists(_ < 0) then ctx.error(s"negative index, end, or stride are not allowed")
+      if idx < 0 || endIdxOpt.exists(_ < 0) || strideOpt.exists(_ < 0) then
+        ctx.error(s"negative index, end, or stride are not allowed")
       val size = arr.elements.size
       if size <= idx then ctx.error(s"index out of bounds $idx")
       if endIdxOpt.isEmpty && strideOpt.isEmpty then
@@ -331,169 +366,156 @@ object EvaluatedJValue:
           yield arr.elements(i)
           EvaluatedJValue.JArray(elements.toVector)
 
-object eval:
+def eval(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
+  jvalue match
+  case JValue.JFalse => EvaluatedJValue.JBoolean(false)
+  case JValue.JTrue => EvaluatedJValue.JBoolean(true)
+  case JValue.JNull => EvaluatedJValue.JNull
+  case JValue.JSelf => ctx.self
+  case JValue.JSuper => ctx.`super`
+  case JValue.JOuter => ctx.lookup("$")
+  case JValue.JString(str) => EvaluatedJValue.JString(str)
+  case JValue.JNum(str) => EvaluatedJValue.JNum(str.toDouble)
+  case JValue.JArray(elements) => EvaluatedJValue.JArray(elements.map(eval(ctx)))
+  case JValue.JObject(members) =>
+    var objCtx: ObjectEvaluationContext = null
+    val obj: EvaluatedJValue.JObject = EvaluatedJValue.JObject(() => objCtx, members.collect {
+      case f: JObjMember.JField => f
+    })
+    objCtx = members.foldLeft(ctx.objectCtx(obj)) {
+      case (ctx, local: JObjMember.JLocal) => ctx.bind(local.name, local.value)
+      case (ctx, _) => ctx
+    }
 
-  def apply(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
-    //println(jvalue)
-    jvalue match
-    case JValue.JFalse => EvaluatedJValue.JBoolean(false)
-    case JValue.JTrue => EvaluatedJValue.JBoolean(true)
-    case JValue.JNull => EvaluatedJValue.JNull
-    case JValue.JSelf => ctx.self
-    case JValue.JSuper => ctx.`super`
-    case JValue.JOuter => ctx.lookup("$")
-    case JValue.JString(str) => EvaluatedJValue.JString(str)
-    case JValue.JNum(str) => EvaluatedJValue.JNum(str.toDouble)
-    case JValue.JArray(elements) => EvaluatedJValue.JArray(elements.map(apply(ctx)))
-    case JValue.JObject(members) =>
-      var objMembers: Map[String, LazyObjectValue] = null
-      var objCtx: ObjectEvaluationContext = null
-      val obj: EvaluatedJValue.JObject = EvaluatedJValue.JObject(() => objCtx, members.collect {
-        case f: JObjMember.JField => f
-      })
-      objCtx = members.foldLeft(ctx.objectCtx(obj)) {
-        case (ctx, local: JObjMember.JLocal) => ctx.bind(local.name, local.value)
-        case (ctx, _) => ctx
-      }
+    // evaluate asserts inside object
+    members.foreach {
+      case JObjMember.JAssert(rawCond, rawMsg) =>
+        val cond = objCtx.expectBoolean(rawCond).value
+        val msgOpt = rawMsg.map(msg => objCtx.expectString(msg).str)
+        if !cond then objCtx.error(msgOpt.getOrElse("object assertion failed"))
+      case _ =>
+    }
+    obj
 
-      // bind all locals inside object - using the current context, not the object context
-      objMembers = members.collect {
-        case JObjMember.JField(rawKey, isHidden, value) =>
-          val key = ctx.expectString(rawKey).str
-          key -> LazyValue(objCtx, value, isHidden)
-      }.toMap
+  case JValue.JId(name) => ctx.lookup(name)
+  case JValue.JGetField(loc, field) =>
+    ctx
+      .expectObject(loc)
+      .members()
+      .getOrElse(field, ctx.error(s"object does not have field $field"))
+      .evaluated
+  case JValue.JIndex(loc, rawIndex) =>
+    eval(ctx)(loc) match
+    case obj: EvaluatedJValue.JObject =>
+      val field = ctx.expectString(rawIndex)
+      obj.lookup(field.str)
+    case EvaluatedJValue.JArray(elements) =>
+      val index = ctx.expectNum(rawIndex).double.toInt
+      elements(index)
+    case _ => ctx.error(s"expected object or array")
+  case JValue.JSlice(loc, rawIndex, rawEndIndex, rawStride) =>
+    println(s"$rawIndex, $rawEndIndex, $rawStride")
+    eval(ctx)(loc) match
+    case obj: EvaluatedJValue.JObject =>
+      ctx.error("no end index or stride allowed for object index")
+    case arr: EvaluatedJValue.JArray =>
+      val index = ctx.expectNum(rawIndex).double.toInt
+      val endIndex =
+        if rawEndIndex.isNull then None
+        else Some(ctx.expectNum(rawEndIndex).double.toInt)
+      val stride =
+        if rawStride.isNull then None
+        else Some(ctx.expectNum(rawStride).double.toInt)
+      arr.index(ctx, index, endIndex, stride)
+    case _ => ctx.error(s"expected object or array")
+  case JValue.JApply(loc, positionalArgs, namedArgs) =>
+    val fn = ctx.expectFunction(loc)
+    val numGivenArgs = positionalArgs.size + namedArgs.size
+    if numGivenArgs > fn.params.size then
+      ctx.error("to many arguments for function")
+    val argMap = namedArgs.toMap
+    val (_, argsCtx) = fn.params.foldLeft(positionalArgs -> ctx) {
+      case ((positionalArgs, ctx), (argName, default)) =>
+        val isGivenNamedArg = argMap.contains(argName)
+        if positionalArgs.nonEmpty && isGivenNamedArg then
+          ctx.error(s"both positional and named arg provided for argument $argName")
+        else if positionalArgs.nonEmpty then
+          (positionalArgs.tail, ctx.bind(argName, positionalArgs.head))
+        else if isGivenNamedArg then
+          (positionalArgs, ctx.bind(argName, argMap(argName)))
+        else if default.isDefined then
+          (positionalArgs, ctx.bind(argName, default.get))
+        else
+          ctx.error(s"missing argument $argName")
+    }
+    val functionCtx = argsCtx.functionCtx(fn)
+    eval(functionCtx)(fn.body)
+  case JValue.JBinaryOp(left, op, right) =>
+    op match
+    case JBinaryOperator.Op_+ =>
+      (eval(ctx)(left), eval(ctx)(right)) match
+      case (op1: EvaluatedJValue.JNum, op2: EvaluatedJValue.JNum) =>
+        EvaluatedJValue.JNum(op1.double + op2.double)
+      case (op1: EvaluatedJValue.JObject, op2: EvaluatedJValue.JObject) =>
+        var parentCtx: ObjectEvaluationContext = null
+        val parent: EvaluatedJValue.JObject = op1.copy(ctx = () => parentCtx)
+        var resultCtx: ObjectEvaluationContext = null
+        val result: EvaluatedJValue.JObject = op2.copy(ctx = () => resultCtx)
+        resultCtx = op2.ctx().withSelf(result).withParent(parent)
+        parentCtx = op1.ctx().withSelf(result)
+        result
+      case (op1: EvaluatedJValue.JArray, op2: EvaluatedJValue.JArray) =>
+        EvaluatedJValue.JArray(op1.elements ++ op2.elements)
+      case (op1: EvaluatedJValue.JNum, op2) => ctx.typeError[EvaluatedJValue.JNum](op2)
+      case (op1, op2: EvaluatedJValue.JNum) => ctx.typeError[EvaluatedJValue.JNum](op2)
+      case (op1: EvaluatedJValue.JObject, op2) => ctx.typeError[EvaluatedJValue.JObject](op2)
+      case (op1, op2: EvaluatedJValue.JObject) => ctx.typeError[EvaluatedJValue.JObject](op2)
+      case (op1, _) =>
+        ctx.typeError2[EvaluatedJValue.JNum, EvaluatedJValue.JObject](op1)
 
-      // evaluate asserts inside object
-      members.foreach {
-        case JObjMember.JAssert(rawCond, rawMsg) =>
-          val cond = objCtx.expectBoolean(rawCond).value
-          val msgOpt = rawMsg.map(msg => objCtx.expectString(msg).str)
-          if !cond then objCtx.error(msgOpt.getOrElse("object assertion failed"))
-        case _ =>
-      }
-
-      obj
-    // case JValue.JObjectComprehension(preLocals, key, value, postLocals, forVar, inExpr, cond) => ???
-    case JValue.JId(name) => ctx.lookup(name)
-    case JValue.JGetField(loc, field) =>
-      val obj = ctx.expectObject(loc)
-      obj
-        .members()
-        .getOrElse(field, ctx.error(s"object does not have field $field"))
-        .evaluated
-    case JValue.JIndex(loc, rawIndex) =>
-      apply(ctx)(loc) match
-      case obj: EvaluatedJValue.JObject =>
-        val field = ctx.expectString(rawIndex)
-        obj.lookup(field.str)
-      case EvaluatedJValue.JArray(elements) =>
-        val index = ctx.expectNum(rawIndex).double.toInt
-        elements(index)
-      case _ => ctx.error(s"expected object or array")
-    case JValue.JSlice(loc, rawIndex, rawEndIndex, rawStride) =>
-      println(s"$rawIndex, $rawEndIndex, $rawStride")
-      apply(ctx)(loc) match
-      case obj: EvaluatedJValue.JObject =>
-        ctx.error("no end index or stride allowed for object index")
-      case arr: EvaluatedJValue.JArray =>
-        val index = ctx.expectNum(rawIndex).double.toInt
-        val endIndex =
-          if rawEndIndex.isNull then None
-          else Some(ctx.expectNum(rawEndIndex).double.toInt)
-        val stride =
-          if rawStride.isNull then None
-          else Some(ctx.expectNum(rawStride).double.toInt)
-        arr.index(ctx, index, endIndex, stride)
-      case _ => ctx.error(s"expected object or array")
-    case JValue.JApply(loc, positionalArgs, namedArgs) =>
-      val fn = ctx.expectFunction(loc)
-      val numGivenArgs = positionalArgs.size + namedArgs.size
-      if numGivenArgs > fn.params.size then
-        ctx.error("to many arguments for function")
-      val argMap = namedArgs.toMap
-      val (_, argsCtx) = fn.params.foldLeft(positionalArgs -> ctx) {
-        case ((positionalArgs, ctx), (argName, default)) =>
-          val isGivenNamedArg = argMap.contains(argName)
-          if positionalArgs.nonEmpty && isGivenNamedArg then
-            ctx.error(s"both positional and named arg provided for argument $argName")
-          else if positionalArgs.nonEmpty then
-            (positionalArgs.tail, ctx.bind(argName, positionalArgs.head))
-          else if isGivenNamedArg then
-            (positionalArgs, ctx.bind(argName, argMap(argName)))
-          else if default.isDefined then
-            (positionalArgs, ctx.bind(argName, default.get))
-          else
-            ctx.error(s"missing argument $argName")
-      }
-      val functionCtx = argsCtx.functionCtx(fn)
-      apply(functionCtx)(fn.body)
-    case JValue.JBinaryOp(left, op, right) =>
-      op match
-      case JBinaryOperator.Op_+ =>
-        (apply(ctx)(left), apply(ctx)(right)) match
-        case (op1: EvaluatedJValue.JNum, op2: EvaluatedJValue.JNum) =>
-          EvaluatedJValue.JNum(op1.double + op2.double)
-        case (op1: EvaluatedJValue.JObject, op2: EvaluatedJValue.JObject) =>
-          var members: Map[String, LazyObjectValue] = null
-          var parentCtx: ObjectEvaluationContext = null
-          val parent: EvaluatedJValue.JObject = op1.copy(ctx = () => parentCtx)
-          var resultCtx: ObjectEvaluationContext = null
-          val result: EvaluatedJValue.JObject = op2.copy(ctx = () => resultCtx)
-          resultCtx = op2.ctx().withSelf(result).withParent(parent)
-          parentCtx = op1.ctx().withSelf(result)
-          result
-        case (op1: EvaluatedJValue.JArray, op2: EvaluatedJValue.JArray) =>
-          EvaluatedJValue.JArray(op1.elements ++ op2.elements)
-        case (op1: EvaluatedJValue.JNum, op2) => ctx.typeError[EvaluatedJValue.JNum](op2)
-        case (op1, op2: EvaluatedJValue.JNum) => ctx.typeError[EvaluatedJValue.JNum](op2)
-        case (op1: EvaluatedJValue.JObject, op2) => ctx.typeError[EvaluatedJValue.JObject](op2)
-        case (op1, op2: EvaluatedJValue.JObject) => ctx.typeError[EvaluatedJValue.JObject](op2)
-        case (op1, _) =>
-          ctx.typeError2[EvaluatedJValue.JNum, EvaluatedJValue.JObject](op1)
-
-    case JValue.JUnaryOp(op, rawOperand) =>
-      op match
-      case JUnaryOperator.Op_! =>
-        val operand = ctx.expectBoolean(rawOperand)
-        EvaluatedJValue.JBoolean(!operand.value)
-      case JUnaryOperator.Op_+  =>
-        val operand = ctx.expectNum(rawOperand).double
-        EvaluatedJValue.JNum(operand.toInt)
-      case JUnaryOperator.Op_-  =>
-        val operand = ctx.expectNum(rawOperand).double
-        EvaluatedJValue.JNum(-operand.toInt)
-      case JUnaryOperator.Op_~  =>
-        val operand = ctx.expectNum(rawOperand).double
-        EvaluatedJValue.JNum(~operand.toInt)
-    case JValue.JLocal(name, value, result) =>
-      apply(ctx.bind(name, value))(result)
-    // case JValue.JArrComprehension(comp: JValue, inExprs: Seq[JValue], cond: Option[JValue])
-    case JValue.JFunction(params, body) =>
-      EvaluatedJValue.JFunction(params, body)
-    case JValue.JIf(rawCond, trueValue, elseValue) =>
-      val cond = ctx.expectBoolean(rawCond)
-      if cond.value then
-        apply(ctx)(trueValue)
-      else
-        apply(ctx)(elseValue)
-    case JValue.JError(rawExpr) =>
-      val msg = ctx.expectString(rawExpr)
-      ctx.error(msg.str)
-    case JValue.JAssert(rawCond, rawMsg, expr) =>
-      val cond = ctx.expectBoolean(rawCond)
-      if !cond.value then
-        val msg = rawMsg.map(msg => ctx.expectString(msg).str)
-        ctx.error(msg.getOrElse(s"assertion failed"))
-      apply(ctx)(expr)
-    case JValue.JImport(file) =>
-      ctx.importFile(file)
-    case JValue.JImportStr(file) =>
-      ctx.importStr(file)
-  /*
-    case JValue.JArrayComprehension(
-      forVar: String,
-      forExpr: JValue,
-      inExpr: JValue,
-      cond: Option[JValue]
-    )
-  */
+  case JValue.JUnaryOp(op, rawOperand) =>
+    op match
+    case JUnaryOperator.Op_! =>
+      val operand = ctx.expectBoolean(rawOperand)
+      EvaluatedJValue.JBoolean(!operand.value)
+    case JUnaryOperator.Op_+  =>
+      val operand = ctx.expectNum(rawOperand).double
+      EvaluatedJValue.JNum(operand.toInt)
+    case JUnaryOperator.Op_-  =>
+      val operand = ctx.expectNum(rawOperand).double
+      EvaluatedJValue.JNum(-operand.toInt)
+    case JUnaryOperator.Op_~  =>
+      val operand = ctx.expectNum(rawOperand).double
+      EvaluatedJValue.JNum(~operand.toInt)
+  case JValue.JLocal(name, value, result) =>
+    eval(ctx.bind(name, value))(result)
+  // case JValue.JArrComprehension(comp: JValue, inExprs: Seq[JValue], cond: Option[JValue])
+  case JValue.JFunction(params, body) =>
+    EvaluatedJValue.JFunction(params, body)
+  case JValue.JIf(rawCond, trueValue, elseValue) =>
+    val cond = ctx.expectBoolean(rawCond)
+    if cond.value then
+      eval(ctx)(trueValue)
+    else
+      eval(ctx)(elseValue)
+  case JValue.JError(rawExpr) =>
+    val msg = ctx.expectString(rawExpr)
+    ctx.error(msg.str)
+  case JValue.JAssert(rawCond, rawMsg, expr) =>
+    val cond = ctx.expectBoolean(rawCond)
+    if !cond.value then
+      val msg = rawMsg.map(msg => ctx.expectString(msg).str)
+      ctx.error(msg.getOrElse(s"assertion failed"))
+    eval(ctx)(expr)
+  case JValue.JImport(file) =>
+    ctx.importFile(file)
+  case JValue.JImportStr(file) =>
+    ctx.importStr(file)
+/*
+  case JValue.JArrayComprehension(
+    forVar: String,
+    forExpr: JValue,
+    inExpr: JValue,
+    cond: Option[JValue]
+  )
+*/
