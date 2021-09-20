@@ -22,8 +22,6 @@ sealed trait LazyValue:
 
 sealed trait LazyObjectValue extends LazyValue:
   val isHidden: Boolean
-  // def withSelf(self: EvaluatedJValue.JObject): LazyObjectValue
-  // def withParent(parent: EvaluatedJValue.JObject): LazyObjectValue
 
 object LazyValue:
   def apply(ctx: EvaluationContext, code: JValue): LazyValue =
@@ -40,14 +38,7 @@ object LazyValue:
         eval(ctx)(code)
       }
 
-      // def withSelf(self: EvaluatedJValue.JObject): LazyObjectValue =
-      //   LazyValue(ctx.withSelf(self), code, hidden)
-
-      // def withParent(parent: EvaluatedJValue.JObject): LazyObjectValue =
-      //   LazyValue(ctx.withParent(parent), code, hidden)
-
 object EvaluationContext:
-
   private inline def typeString[T <: EvaluatedJValue]: String =
     inline compiletime.erasedValue[T] match
     case _: EvaluatedJValue.JBoolean => "bool"
@@ -75,7 +66,15 @@ object EvaluationContext:
     inline def typeError[T <: EvaluatedJValue](expr: EvaluatedJValue): T =
       ctx.error(s"got type ${typeString(expr)}, expected ${typeString[T]}")
 
-    inline def expectType[T <: EvaluatedJValue](expr: EvaluatedJValue): T =
+    inline def expectBoolean(code: JValue): EvaluatedJValue.JBoolean = expectType[EvaluatedJValue.JBoolean](code)
+    inline def expectNum(code: JValue): EvaluatedJValue.JNum = expectType[EvaluatedJValue.JNum](code)
+    inline def expectString(code: JValue): EvaluatedJValue.JString = expectType[EvaluatedJValue.JString](code)
+    inline def expectArray(code: JValue): EvaluatedJValue.JArray = expectType[EvaluatedJValue.JArray](code)
+    inline def expectObject(code: JValue): EvaluatedJValue.JObject = expectType[EvaluatedJValue.JObject](code)
+    inline def expectFunction(code: JValue): EvaluatedJValue.JFunction = expectType[EvaluatedJValue.JFunction](code)
+
+    inline def expectType[T <: EvaluatedJValue](code: JValue): T =
+      val expr = eval(ctx)(code)
       if expr.isInstanceOf[T] then
         expr.asInstanceOf[T]
       else
@@ -264,7 +263,7 @@ sealed trait JObjectImp(
   lazy val cache = {
     val result = collection.mutable.HashMap[String, LazyObjectValue]()
     rawMembers.foreach { case JObjMember.JField(key, isHidden, value) =>
-      result(ctx.expectType[EvaluatedJValue.JString](eval(ctx)(key)).str) = LazyValue(ctx, value, isHidden)
+      result(ctx.expectString(key).str) = LazyValue(ctx, value, isHidden)
     }
     result
   }
@@ -311,9 +310,8 @@ enum EvaluatedJValue:
       }.map(m => ManifestedJValue.JObject(m.reverse.toMap))
     case _: JFunction => ctx.error("cannot manifest function")
 
-
 object EvaluatedJValue:
-  extension (arr: JArray)
+  extension (arr: EvaluatedJValue.JArray)
     def index(ctx: EvaluationContext, idx: Int, endIdxOpt: Option[Int], strideOpt: Option[Int]): EvaluatedJValue =
       println(s"$idx, $endIdxOpt, $strideOpt")
       if idx < 0 || endIdxOpt.exists(_ < 0) || strideOpt.exists(_ < 0) then ctx.error(s"negative index, end, or stride are not allowed")
@@ -361,15 +359,15 @@ object eval:
       // bind all locals inside object - using the current context, not the object context
       objMembers = members.collect {
         case JObjMember.JField(rawKey, isHidden, value) =>
-          val key = ctx.expectType[EvaluatedJValue.JString](eval(ctx)(rawKey)).str
+          val key = ctx.expectString(rawKey).str
           key -> LazyValue(objCtx, value, isHidden)
       }.toMap
 
       // evaluate asserts inside object
       members.foreach {
         case JObjMember.JAssert(rawCond, rawMsg) =>
-          val cond = objCtx.expectType[EvaluatedJValue.JBoolean](eval(objCtx)(rawCond)).value
-          val msgOpt = rawMsg.map(msg => objCtx.expectType[EvaluatedJValue.JString](eval(objCtx)(msg)).str)
+          val cond = objCtx.expectBoolean(rawCond).value
+          val msgOpt = rawMsg.map(msg => objCtx.expectString(msg).str)
           if !cond then objCtx.error(msgOpt.getOrElse("object assertion failed"))
         case _ =>
       }
@@ -378,7 +376,7 @@ object eval:
     // case JValue.JObjectComprehension(preLocals, key, value, postLocals, forVar, inExpr, cond) => ???
     case JValue.JId(name) => ctx.lookup(name)
     case JValue.JGetField(loc, field) =>
-      val obj = ctx.expectType[EvaluatedJValue.JObject](apply(ctx)(loc))
+      val obj = ctx.expectObject(loc)
       obj
         .members()
         .getOrElse(field, ctx.error(s"object does not have field $field"))
@@ -386,10 +384,10 @@ object eval:
     case JValue.JIndex(loc, rawIndex) =>
       apply(ctx)(loc) match
       case obj: EvaluatedJValue.JObject =>
-        val field = ctx.expectType[EvaluatedJValue.JString](apply(ctx)(rawIndex))
+        val field = ctx.expectString(rawIndex)
         obj.lookup(field.str)
       case EvaluatedJValue.JArray(elements) =>
-        val index = ctx.expectType[EvaluatedJValue.JNum](apply(ctx)(rawIndex)).double.toInt
+        val index = ctx.expectNum(rawIndex).double.toInt
         elements(index)
       case _ => ctx.error(s"expected object or array")
     case JValue.JSlice(loc, rawIndex, rawEndIndex, rawStride) =>
@@ -398,17 +396,17 @@ object eval:
       case obj: EvaluatedJValue.JObject =>
         ctx.error("no end index or stride allowed for object index")
       case arr: EvaluatedJValue.JArray =>
-        val index = ctx.expectType[EvaluatedJValue.JNum](apply(ctx)(rawIndex)).double.toInt
+        val index = ctx.expectNum(rawIndex).double.toInt
         val endIndex =
           if rawEndIndex.isNull then None
-          else Some(ctx.expectType[EvaluatedJValue.JNum](apply(ctx)(rawEndIndex)).double.toInt)
+          else Some(ctx.expectNum(rawEndIndex).double.toInt)
         val stride =
           if rawStride.isNull then None
-          else Some(ctx.expectType[EvaluatedJValue.JNum](apply(ctx)(rawStride)).double.toInt)
+          else Some(ctx.expectNum(rawStride).double.toInt)
         arr.index(ctx, index, endIndex, stride)
       case _ => ctx.error(s"expected object or array")
     case JValue.JApply(loc, positionalArgs, namedArgs) =>
-      val fn = ctx.expectType[EvaluatedJValue.JFunction](apply(ctx)(loc))
+      val fn = ctx.expectFunction(loc)
       val numGivenArgs = positionalArgs.size + namedArgs.size
       if numGivenArgs > fn.params.size then
         ctx.error("to many arguments for function")
@@ -444,6 +442,8 @@ object eval:
           resultCtx = op2.ctx().withSelf(result).withParent(parent)
           parentCtx = op1.ctx().withSelf(result)
           result
+        case (op1: EvaluatedJValue.JArray, op2: EvaluatedJValue.JArray) =>
+          EvaluatedJValue.JArray(op1.elements ++ op2.elements)
         case (op1: EvaluatedJValue.JNum, op2) => ctx.typeError[EvaluatedJValue.JNum](op2)
         case (op1, op2: EvaluatedJValue.JNum) => ctx.typeError[EvaluatedJValue.JNum](op2)
         case (op1: EvaluatedJValue.JObject, op2) => ctx.typeError[EvaluatedJValue.JObject](op2)
@@ -454,16 +454,16 @@ object eval:
     case JValue.JUnaryOp(op, rawOperand) =>
       op match
       case JUnaryOperator.Op_! =>
-        val operand = ctx.expectType[EvaluatedJValue.JBoolean](apply(ctx)(rawOperand))
+        val operand = ctx.expectBoolean(rawOperand)
         EvaluatedJValue.JBoolean(!operand.value)
       case JUnaryOperator.Op_+  =>
-        val operand = ctx.expectType[EvaluatedJValue.JNum](apply(ctx)(rawOperand)).double
+        val operand = ctx.expectNum(rawOperand).double
         EvaluatedJValue.JNum(operand.toInt)
       case JUnaryOperator.Op_-  =>
-        val operand = ctx.expectType[EvaluatedJValue.JNum](apply(ctx)(rawOperand)).double
+        val operand = ctx.expectNum(rawOperand).double
         EvaluatedJValue.JNum(-operand.toInt)
       case JUnaryOperator.Op_~  =>
-        val operand = ctx.expectType[EvaluatedJValue.JNum](apply(ctx)(rawOperand)).double
+        val operand = ctx.expectNum(rawOperand).double
         EvaluatedJValue.JNum(~operand.toInt)
     case JValue.JLocal(name, value, result) =>
       apply(ctx.bind(name, value))(result)
@@ -471,18 +471,18 @@ object eval:
     case JValue.JFunction(params, body) =>
       EvaluatedJValue.JFunction(params, body)
     case JValue.JIf(rawCond, trueValue, elseValue) =>
-      val cond = ctx.expectType[EvaluatedJValue.JBoolean](apply(ctx)(rawCond))
+      val cond = ctx.expectBoolean(rawCond)
       if cond.value then
         apply(ctx)(trueValue)
       else
         apply(ctx)(elseValue)
     case JValue.JError(rawExpr) =>
-      val msg = ctx.expectType[EvaluatedJValue.JString](apply(ctx)(rawExpr))
+      val msg = ctx.expectString(rawExpr)
       ctx.error(msg.str)
     case JValue.JAssert(rawCond, rawMsg, expr) =>
-      val cond = ctx.expectType[EvaluatedJValue.JBoolean](apply(ctx)(rawCond))
+      val cond = ctx.expectBoolean(rawCond)
       if !cond.value then
-        val msg = rawMsg.map(msg => ctx.expectType[EvaluatedJValue.JString](apply(ctx)(msg)).str)
+        val msg = rawMsg.map(msg => ctx.expectString(msg).str)
         ctx.error(msg.getOrElse(s"assertion failed"))
       apply(ctx)(expr)
     case JValue.JImport(file) =>

@@ -1,13 +1,25 @@
 package root
 
-type JType =
-    Boolean
-  | Double
-  | String
-  | Unit
-  | Seq[EvaluatedJValue]
-  | EvaluatedJValue.JObject
-  | EvaluatedJValue.JFunction
+// type JType =
+//     Boolean
+//   | Double
+//   | String
+//   | Unit
+//   | Seq[EvaluatedJValue]
+//   | EvaluatedJValue.JObject
+//   | EvaluatedJValue.JFunction
+
+type JType[L[_], A] = A match
+  case Int => Int
+  case _ =>
+      Boolean
+    | Double
+    | String
+    | Unit
+    | EvaluatedJValue.JObject
+    | EvaluatedJValue.JFunction
+    | L[JType[L, A]]
+
 
 type JTypeOf[T <: EvaluatedJValue] = T match
   case EvaluatedJValue.JBoolean => Boolean
