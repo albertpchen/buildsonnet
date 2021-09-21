@@ -4,6 +4,12 @@ import cats.parse.{Parser0 => P0, Parser => P, Numbers}
 import cats.syntax.all._
 
 object Json {
+  extension [T](p: P[T])
+    def withRange: P[(Source, T)] =
+      (P.index.with1 ~ p ~ P.index).map { case ((start, t), end) =>
+        (Source(start, end), t)
+      }
+
   import JValue._
   val whitespace: P[Unit] = P.oneOf(List(
     P.charIn(" \t\r\n").void,
@@ -18,7 +24,11 @@ object Json {
   val whitespaces: P[Unit] = whitespace.rep.void
 
   val idTail = P.charIn('_' +: ('a' to 'z') ++: ('A' to 'Z') ++: ('0' to '9'))
-  def keyword(str: String): P[Unit] = P.string(str).void <* !idTail
+  def keyword(str: String): P[Source] =
+    (
+      P.string(str).void.withContext(s"expected keyword $str") ~
+      !idTail.withContext(s"expected keyword $str")
+    ).withRange.map(_._1)
   val keywords = Set(
     "assert", "else", "error", "false", "for", "function", "if", "import", "importstr",
     "in", "local", "null", "tailstrict", "then", "self", "super", "true"
@@ -30,11 +40,11 @@ object Json {
         (head +: tail).mkString
       }
 
-  val pnull = keyword("null").as(JNull)
-  val ptrue = keyword("true").as(JTrue)
-  val pfalse = keyword("false").as(JTrue)
-  val psuper = keyword("super").map(_ => JSuper)
-  val self = keyword("self").map(_ => JSelf)
+  val pnull = keyword("null").map(JNull(_))
+  val ptrue = keyword("true").map(JTrue(_))
+  val pfalse = keyword("false").map(JTrue(_))
+  val psuper = keyword("super").map(JSuper(_))
+  val self = keyword("self").map(JSelf(_))
 
   val hexDigit = P.charIn(('0' to '9') ++ ('a' to 'f') ++ ('A' to 'F')).map { ch =>
     if ch >= '0' || ch <= '9' then
@@ -73,11 +83,13 @@ object Json {
     P.char('"') *> stringChar('"').rep0 <* P.char('"'),
     P.string("@'") *> verbatimStringChar('\'').backtrack.rep0 <* P.char('\''),
     P.string("@\"") *> verbatimStringChar('"').backtrack.rep0 <* P.char('"'),
-  )).map(s => s.mkString)
+  )).map(s => s.mkString).withContext("expected string literal")
 
-  val num = Numbers.jsonNumber.map(JNum(_))
+  val num = (P.index.with1 ~ Numbers.jsonNumber ~ P.index).map {
+    case ((beginOff, num), endOff) => JNum(Source(beginOff, endOff), num)
+  }
   val listSep: P[Unit] = P.char(',').surroundedBy(__).void
-  val dollar = P.char('$').map(_ => JOuter)
+  val dollar = (P.index.with1 <* P.char('$')).map(offset => JOuter(Source(offset, offset + 1)))
 
   def commaList[A](pa: P[A]): P0[List[A]] = (
     pa.<*(__) ~
@@ -90,7 +102,7 @@ object Json {
   val assert = P.defer {
     keyword("assert") *> expr.surroundedBy(__) ~ (P.char(':') *> __ *> expr).?
   }
-  val objInside: P0[JValue] = P.defer0 {
+  val objInside: P0[Source => JValue] = P.defer0 {
     val bindLocal: P[JObjMember.JLocal] = (keyword("local") *> whitespaces *> bind).map { (id, paramsOpt, expr) =>
       JObjMember.JLocal(id, paramsOpt.fold(expr)(JFunction(_, expr)))
     }
@@ -102,11 +114,11 @@ object Json {
       __ *> P.char(',').? *> __ *> forspec <* __,
       ifspec.?,
     ).tupled.map { case (preLocals, key, value, postLocals, (inId, inExpr), cond) =>
-      JObjectComprehension(preLocals, key, value, postLocals, inId, inExpr, cond)
+      JObjectComprehension(_, preLocals, key, value, postLocals, inId, inExpr, cond)
     }
     val key: P[JValue] = P.oneOf(List(
-      string.map(JString(_)),
-      id.map(id => JString(id)),
+      string.withRange.map(JString(_, _)),
+      id.withRange.map(JString(_, _)),
       (P.char('[') *> __ *> expr <* __ <* P.char(']')),
     ))
     val h = (P.char('+').?.with1 ~ P.char(':') ~ P.char(':').?  ~ P.char(':').?).map { case (((plus, _1), _2), _3) =>
@@ -120,12 +132,12 @@ object Json {
         assert.map(JObjMember.JAssert(_, _)),
         (keyword("local") *> __ *> bind).map { (id, paramsOpt, expr) =>
           JObjMember.JLocal(id, paramsOpt.fold(expr)(JFunction(_, expr)))
-        }.backtrack,
+        },
       ))
     }
     P.oneOf0(List(
       objComp.backtrack,
-      commaList(keyValue).map(JValue.JObject(_)),
+      commaList(keyValue).map(members => JValue.JObject(_, members)),
     ))
   }
   val params: P0[List[(String, Option[JValue])]] = P.defer0 {
@@ -151,26 +163,33 @@ object Json {
       expr,
       forspec.surroundedBy(__) ~ ifspec.?,
     ).tupled.map { case (forExpr, ((forVar, inExpr), cond)) =>
-      JArrayComprehension(forVar, forExpr, inExpr, cond)
+      JArrayComprehension(_, forVar, forExpr, inExpr, cond)
     }
     val list =
       P.oneOf0(List(
         listComp.backtrack,
-        commaList(expr).map(JArray(_)),
+        commaList(expr).map(elements => JArray(_, elements)),
       ))
         .surroundedBy(__)
         .with1
         .between(P.char('['), P.char(']'))
+        .withRange
+        .map((src, fn) => fn(src))
 
     val function = (keyword("function") *> __ *> (params <* __) ~ expr).map(JFunction(_, _))
     val ifExpr = (
-      (keyword("if") *> __ *> expr <* __) ~
-      (keyword("then") *> __ *> expr <* __) ~
-      (keyword("else") *> __ *> expr).?
-    ).map { case ((cond, trueValue), elseValue) =>
-      JIf(cond, trueValue, elseValue.getOrElse(JNull))
+      (P.index.with1 ~ (keyword("if") *> __ *> expr <* __)) ~
+      (keyword("then") *> __ *> expr ~ P.index <* __) ~
+      (keyword("else") *> __ *> expr ~ P.index).?
+    ).map { case (((startIdx, cond), (trueValue, trueEndIdx)), elsePair) =>
+      val elseValue = elsePair.map(_._1)
+      val endIdx = elsePair.fold(trueEndIdx)(_._2)
+      JIf(Source(startIdx, endIdx), cond, trueValue, elseValue)
     }
-    val obj = P.char('{') *> __ *> objInside <* __ <* P.char('}')
+    val obj =
+      (P.char('{') *> __ *> objInside <* __ <* P.char('}'))
+        .withRange
+        .map((src, fn) => fn(src))
     val grouped = P.char('(') *> __ *> expr <* __ <* P.char(')')
     val local = (
       keyword("local") *> __ *> bind.repSep(__ *> P.char(',') *> __) ~
@@ -187,7 +206,7 @@ object Json {
       JAssert(cond, msg, result)
     }
     P.oneOf(List(
-      string.map(JString(_)),
+      string.withRange.map(JString(_, _)),
       num,
       list,
       obj,
@@ -204,10 +223,10 @@ object Json {
       assertExp.backtrack,
       importExpr.backtrack,
       importStrExpr.backtrack,
-      id.map(JId(_)),
+      id.withRange.map(JId(_, _)),
       error,
     ))
-  }
+  }.withContext("expected expression")
 
   val op = P.stringIn(Array(
     "<<", ">>", "<=", ">=", "in", "==", "!=", "&&", "||",
@@ -222,23 +241,28 @@ object Json {
   val unaryOp = P.charIn("+-!~")
   val exprAtom: P[JValue] = P.defer {
     val suffix: P[JValue => JValue] =
-      P.charIn(Array('.', '(', '['))
+      P.index
+        .with1
+        .~(P.charIn(Array('.', '(', '[')))
         .<*(__)
         .flatMap {
-          case '.' => id.map(field => JGetField(_, field))
-          case '[' =>
-            val exprOrJNull = expr.?.map(_.getOrElse(JNull))
+          case (start, '.') => (id ~ P.index).map { (field, end) =>
+            JGetField(Source(start, end), _, field)
+          }
+          case (start, '[') =>
+            val exprOrJNull = expr.?
             val suffix = P.char(':') *> __ *> exprOrJNull <* __
             (
-              (expr <* __) ~ (suffix ~ suffix.?).? <* P.char(']')
-            ).map { (index, opt) =>
+              (expr <* __) ~ (suffix ~ suffix.?).?.<*(P.char(']')) ~ P.index
+            ).map { case ((index, opt), end) =>
+              val src = Source(start, end)
               if opt.isEmpty then
-                JIndex(_, index)
+                JIndex(src, _, index)
               else
                 val (endIndex, strideOpt) = opt.get
-                JSlice(_, index, endIndex, strideOpt.getOrElse(JNull))
+                JSlice(src, _, index, endIndex, strideOpt.flatten)
             }
-          case '(' => (args <* __).flatMap { args =>
+          case (start, '(') => ((args <* __  <* P.char(')')) ~ P.index).flatMap { (args, end) =>
             val namedAfterPositional = args.size >= 2 && args.sliding(2).exists { window =>
               val Seq((first, _), (second, _)) = window
               first.isDefined && second.isEmpty
@@ -247,8 +271,8 @@ object Json {
               P.failWith("Positional argument after a named argument is not allowed")
             else
               val (positional, named) = args.partition(_._1.isEmpty)
-              P.pure(JApply(_, positional.map(_._2), named.map((id, expr) => id.get -> expr)))
-          }.with1 <* P.char(')')
+              P.pure(JApply(Source(start, end), _, positional.map(_._2), named.map((id, expr) => id.get -> expr)))
+          }
         }
         <* __
     ((unaryOp.? <* __).with1 ~ exprBase.<*(__) ~ suffix.rep0).map { case ((unaryOp, base), fns) =>

@@ -55,8 +55,8 @@ object EvaluationContext:
     inline compiletime.erasedValue[T] match
     case _: EvaluatedJValue.JBoolean => "bool"
     case _: EvaluatedJValue.JNull.type => "null"
-    case _: EvaluatedJValue.JString => "str"
-    case _: EvaluatedJValue.JNum => "num"
+    case _: EvaluatedJValue.JString => "string"
+    case _: EvaluatedJValue.JNum => "number"
     case _: EvaluatedJValue.JArray => "array"
     case _: EvaluatedJValue.JObject => "object"
     case _: EvaluatedJValue.JFunction => "function"
@@ -65,18 +65,18 @@ object EvaluationContext:
     expr match
     case _: EvaluatedJValue.JBoolean => "bool"
     case _: EvaluatedJValue.JNull.type => "null"
-    case _: EvaluatedJValue.JString => "str"
-    case _: EvaluatedJValue.JNum => "num"
+    case _: EvaluatedJValue.JString => "string"
+    case _: EvaluatedJValue.JNum => "number"
     case _: EvaluatedJValue.JArray => "array"
     case _: EvaluatedJValue.JObject => "object"
     case _: EvaluatedJValue.JFunction => "function"
 
   extension (ctx: EvaluationContext)
     inline def typeError2[T1 <: EvaluatedJValue, T2 <: EvaluatedJValue](expr: EvaluatedJValue): T1 | T2 =
-      ctx.error(s"got type ${typeString(expr)}, expected ${typeString[T1]} or ${typeString[T2]}")
+      ctx.error(s"Unexpected type ${typeString(expr)}, expected ${typeString[T1]} or ${typeString[T2]}")
 
     inline def typeError[T <: EvaluatedJValue](expr: EvaluatedJValue): T =
-      ctx.error(s"got type ${typeString(expr)}, expected ${typeString[T]}")
+      ctx.error(s"Unexpected type ${typeString(expr)}, expected ${typeString[T]}")
 
     inline def expectBoolean(code: JValue): EvaluatedJValue.JBoolean = expectType[EvaluatedJValue.JBoolean](code)
     inline def expectNum(code: JValue): EvaluatedJValue.JNum = expectType[EvaluatedJValue.JNum](code)
@@ -110,7 +110,7 @@ object EvaluationContext:
         this,
         Map.empty,
         stack,
-      ).bind("$", JValue.JSelf)
+      ).bind("$", JValue.JSelf(Source.Generated))
 
     def functionCtx(fn: EvaluatedJValue.JFunction): Imp =
       new Imp(scope, fn +: stack)
@@ -279,7 +279,11 @@ sealed trait JObjectImp(
       if plus then
         result(key) = LazyValue(
           ctx,
-          JValue.JBinaryOp(JValue.JGetField(JValue.JSuper, key), JBinaryOperator.Op_+, value),
+          JValue.JBinaryOp(
+            JValue.JGetField(Source.Generated, JValue.JSuper(Source.Generated), key),
+            JBinaryOperator.Op_+,
+            value
+          ),
           isHidden
         )
       else
@@ -368,20 +372,23 @@ object EvaluatedJValue:
 
 def eval(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
   jvalue match
-  case JValue.JFalse => EvaluatedJValue.JBoolean(false)
-  case JValue.JTrue => EvaluatedJValue.JBoolean(true)
-  case JValue.JNull => EvaluatedJValue.JNull
-  case JValue.JSelf => ctx.self
-  case JValue.JSuper => ctx.`super`
-  case JValue.JOuter => ctx.lookup("$")
-  case JValue.JString(str) => EvaluatedJValue.JString(str)
-  case JValue.JNum(str) => EvaluatedJValue.JNum(str.toDouble)
-  case JValue.JArray(elements) => EvaluatedJValue.JArray(elements.map(eval(ctx)))
-  case JValue.JObject(members) =>
+  case _: JValue.JFalse => EvaluatedJValue.JBoolean(false)
+  case _: JValue.JTrue => EvaluatedJValue.JBoolean(true)
+  case _: JValue.JNull => EvaluatedJValue.JNull
+  case _: JValue.JSelf => ctx.self
+  case _: JValue.JSuper => ctx.`super`
+  case _: JValue.JOuter => ctx.lookup("$")
+  case JValue.JString(_, str) => EvaluatedJValue.JString(str)
+  case JValue.JNum(_, str) => EvaluatedJValue.JNum(str.toDouble)
+  case JValue.JArray(_, elements) => EvaluatedJValue.JArray(elements.map(eval(ctx)))
+  case JValue.JObject(_, members) =>
     var objCtx: ObjectEvaluationContext = null
-    val obj: EvaluatedJValue.JObject = EvaluatedJValue.JObject(() => objCtx, members.collect {
-      case f: JObjMember.JField => f
-    })
+    val obj: EvaluatedJValue.JObject = EvaluatedJValue.JObject(
+      () => objCtx,
+      members.collect {
+        case f: JObjMember.JField => f
+      }
+    )
     objCtx = members.foldLeft(ctx.objectCtx(obj)) {
       case (ctx, local: JObjMember.JLocal) => ctx.bind(local.name, local.value)
       case (ctx, _) => ctx
@@ -397,14 +404,14 @@ def eval(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
     }
     obj
 
-  case JValue.JId(name) => ctx.lookup(name)
-  case JValue.JGetField(loc, field) =>
+  case JValue.JId(_, name) => ctx.lookup(name)
+  case JValue.JGetField(_, loc, field) =>
     ctx
       .expectObject(loc)
       .members()
       .getOrElse(field, ctx.error(s"object does not have field $field"))
       .evaluated
-  case JValue.JIndex(loc, rawIndex) =>
+  case JValue.JIndex(_, loc, rawIndex) =>
     eval(ctx)(loc) match
     case obj: EvaluatedJValue.JObject =>
       val field = ctx.expectString(rawIndex)
@@ -413,22 +420,18 @@ def eval(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
       val index = ctx.expectNum(rawIndex).double.toInt
       elements(index)
     case _ => ctx.error(s"expected object or array")
-  case JValue.JSlice(loc, rawIndex, rawEndIndex, rawStride) =>
+  case JValue.JSlice(_, loc, rawIndex, rawEndIndex, rawStride) =>
     println(s"$rawIndex, $rawEndIndex, $rawStride")
     eval(ctx)(loc) match
     case obj: EvaluatedJValue.JObject =>
       ctx.error("no end index or stride allowed for object index")
     case arr: EvaluatedJValue.JArray =>
       val index = ctx.expectNum(rawIndex).double.toInt
-      val endIndex =
-        if rawEndIndex.isNull then None
-        else Some(ctx.expectNum(rawEndIndex).double.toInt)
-      val stride =
-        if rawStride.isNull then None
-        else Some(ctx.expectNum(rawStride).double.toInt)
+      val endIndex = rawEndIndex.map(ctx.expectNum(_).double.toInt)
+      val stride = rawStride.map(ctx.expectNum(_).double.toInt)
       arr.index(ctx, index, endIndex, stride)
     case _ => ctx.error(s"expected object or array")
-  case JValue.JApply(loc, positionalArgs, namedArgs) =>
+  case JValue.JApply(_, loc, positionalArgs, namedArgs) =>
     val fn = ctx.expectFunction(loc)
     val numGivenArgs = positionalArgs.size + namedArgs.size
     if numGivenArgs > fn.params.size then
@@ -492,12 +495,12 @@ def eval(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
   // case JValue.JArrComprehension(comp: JValue, inExprs: Seq[JValue], cond: Option[JValue])
   case JValue.JFunction(params, body) =>
     EvaluatedJValue.JFunction(params, body)
-  case JValue.JIf(rawCond, trueValue, elseValue) =>
+  case JValue.JIf(src, rawCond, trueValue, elseValue) =>
     val cond = ctx.expectBoolean(rawCond)
     if cond.value then
       eval(ctx)(trueValue)
     else
-      eval(ctx)(elseValue)
+      elseValue.fold(EvaluatedJValue.JNull)(eval(ctx))
   case JValue.JError(rawExpr) =>
     val msg = ctx.expectString(rawExpr)
     ctx.error(msg.str)
