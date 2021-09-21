@@ -94,8 +94,8 @@ object Source:
     Source.Range(start, end)
 
 enum JObjMember:
-  case JLocal(name: String, value: JValue)
-  case JField(key: JValue, plus: Boolean, isHidden: Boolean, value: JValue)
+  case JLocal(src: Source, name: String, value: JValue)
+  case JField(src: Source, key: JValue, plus: Boolean, isHidden: Boolean, value: JValue)
   case JAssert(src: Source, cond: JValue, msg: Option[JValue])
 
 sealed trait HasSource:

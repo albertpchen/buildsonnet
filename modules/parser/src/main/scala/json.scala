@@ -106,7 +106,7 @@ object Json {
   }
   val objInside: P0[Source => JValue] = P.defer0 {
     val bindLocal: P[JObjMember.JLocal] = (keyword("local") *> whitespaces *> bind).map { (start, id, paramsOpt, expr) =>
-      JObjMember.JLocal(id, paramsOpt.fold(expr)(JFunction(expr.src.withStart(start), _, expr)))
+      JObjMember.JLocal(expr.src.withStart(start), id, paramsOpt.fold(expr)(JFunction(expr.src.withStart(start), _, expr)))
     }
     val objComp = (
       (bindLocal <* __ <* P.char(',') <* __).backtrack.rep0,
@@ -128,12 +128,12 @@ object Json {
     }
     val keyValue: P[JObjMember] = {
       P.oneOf(List(
-        (key, h.surroundedBy(__), expr).tupled.map { case (key, (plus, isHidden), value) =>
-          JObjMember.JField(key, plus, isHidden, value)
+        (P.index.with1 ~ key, h.surroundedBy(__), expr).tupled.map { case ((start, key), (plus, isHidden), value) =>
+          JObjMember.JField(value.src.withStart(start), key, plus, isHidden, value)
         },
         assert.map(JObjMember.JAssert(_, _, _)),
         (keyword("local") *> __ *> bind).map { (start, id, paramsOpt, expr) =>
-          JObjMember.JLocal(id, paramsOpt.fold(expr)(JFunction(expr.src.withStart(start), _, expr)))
+          JObjMember.JLocal(expr.src.withStart(start), id, paramsOpt.fold(expr)(JFunction(expr.src.withStart(start), _, expr)))
         },
       ))
     }
