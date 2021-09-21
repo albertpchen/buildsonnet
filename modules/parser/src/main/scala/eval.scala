@@ -280,6 +280,7 @@ sealed trait JObjectImp(
         result(key) = LazyValue(
           ctx,
           JValue.JBinaryOp(
+            Source.Generated,
             JValue.JGetField(Source.Generated, JValue.JSuper(Source.Generated), key),
             JBinaryOperator.Op_+,
             value
@@ -396,7 +397,7 @@ def eval(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
 
     // evaluate asserts inside object
     members.foreach {
-      case JObjMember.JAssert(rawCond, rawMsg) =>
+      case JObjMember.JAssert(_, rawCond, rawMsg) =>
         val cond = objCtx.expectBoolean(rawCond).value
         val msgOpt = rawMsg.map(msg => objCtx.expectString(msg).str)
         if !cond then objCtx.error(msgOpt.getOrElse("object assertion failed"))
@@ -453,7 +454,7 @@ def eval(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
     }
     val functionCtx = argsCtx.functionCtx(fn)
     eval(functionCtx)(fn.body)
-  case JValue.JBinaryOp(left, op, right) =>
+  case JValue.JBinaryOp(_, left, op, right) =>
     op match
     case JBinaryOperator.Op_+ =>
       (eval(ctx)(left), eval(ctx)(right)) match
@@ -476,7 +477,7 @@ def eval(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
       case (op1, _) =>
         ctx.typeError2[EvaluatedJValue.JNum, EvaluatedJValue.JObject](op1)
 
-  case JValue.JUnaryOp(op, rawOperand) =>
+  case JValue.JUnaryOp(_, op, rawOperand) =>
     op match
     case JUnaryOperator.Op_! =>
       val operand = ctx.expectBoolean(rawOperand)
@@ -490,10 +491,9 @@ def eval(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
     case JUnaryOperator.Op_~  =>
       val operand = ctx.expectNum(rawOperand).double
       EvaluatedJValue.JNum(~operand.toInt)
-  case JValue.JLocal(name, value, result) =>
+  case JValue.JLocal(_, name, value, result) =>
     eval(ctx.bind(name, value))(result)
-  // case JValue.JArrComprehension(comp: JValue, inExprs: Seq[JValue], cond: Option[JValue])
-  case JValue.JFunction(params, body) =>
+  case JValue.JFunction(_, params, body) =>
     EvaluatedJValue.JFunction(params, body)
   case JValue.JIf(src, rawCond, trueValue, elseValue) =>
     val cond = ctx.expectBoolean(rawCond)
@@ -501,18 +501,18 @@ def eval(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
       eval(ctx)(trueValue)
     else
       elseValue.fold(EvaluatedJValue.JNull)(eval(ctx))
-  case JValue.JError(rawExpr) =>
+  case JValue.JError(_, rawExpr) =>
     val msg = ctx.expectString(rawExpr)
     ctx.error(msg.str)
-  case JValue.JAssert(rawCond, rawMsg, expr) =>
+  case JValue.JAssert(_, rawCond, rawMsg, expr) =>
     val cond = ctx.expectBoolean(rawCond)
     if !cond.value then
       val msg = rawMsg.map(msg => ctx.expectString(msg).str)
       ctx.error(msg.getOrElse(s"assertion failed"))
     eval(ctx)(expr)
-  case JValue.JImport(file) =>
+  case JValue.JImport(_, file) =>
     ctx.importFile(file)
-  case JValue.JImportStr(file) =>
+  case JValue.JImportStr(_, file) =>
     ctx.importStr(file)
 /*
   case JValue.JArrayComprehension(

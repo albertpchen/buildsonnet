@@ -100,11 +100,13 @@ object Json {
   }.?.map(_.getOrElse(List.empty))
 
   val assert = P.defer {
-    keyword("assert") *> expr.surroundedBy(__) ~ (P.char(':') *> __ *> expr).?
+    ((keyword("assert") *> __ *> expr).withRange <* __) ~ (P.char(':') *> __ *> expr).?
+  }.map {
+    case ((src, cond), msg) => (src, cond, msg)
   }
   val objInside: P0[Source => JValue] = P.defer0 {
-    val bindLocal: P[JObjMember.JLocal] = (keyword("local") *> whitespaces *> bind).map { (id, paramsOpt, expr) =>
-      JObjMember.JLocal(id, paramsOpt.fold(expr)(JFunction(_, expr)))
+    val bindLocal: P[JObjMember.JLocal] = (keyword("local") *> whitespaces *> bind).map { (start, id, paramsOpt, expr) =>
+      JObjMember.JLocal(id, paramsOpt.fold(expr)(JFunction(expr.src.withStart(start), _, expr)))
     }
     val objComp = (
       (bindLocal <* __ <* P.char(',') <* __).backtrack.rep0,
@@ -129,9 +131,9 @@ object Json {
         (key, h.surroundedBy(__), expr).tupled.map { case (key, (plus, isHidden), value) =>
           JObjMember.JField(key, plus, isHidden, value)
         },
-        assert.map(JObjMember.JAssert(_, _)),
-        (keyword("local") *> __ *> bind).map { (id, paramsOpt, expr) =>
-          JObjMember.JLocal(id, paramsOpt.fold(expr)(JFunction(_, expr)))
+        assert.map(JObjMember.JAssert(_, _, _)),
+        (keyword("local") *> __ *> bind).map { (start, id, paramsOpt, expr) =>
+          JObjMember.JLocal(id, paramsOpt.fold(expr)(JFunction(expr.src.withStart(start), _, expr)))
         },
       ))
     }
@@ -143,12 +145,14 @@ object Json {
   val params: P0[List[(String, Option[JValue])]] = P.defer0 {
     P.char('(') *> commaList(id.<*(__) ~ (P.char('=') *> __ *> expr).?) <* P.char(')')
   }
-  val bind: P[(String, Option[JParamList], JValue)] = P.defer {
+  val bind: P[(Int, String, Option[JParamList], JValue)] = P.defer {
     (
-      id.<*(__),
+      P.index.with1 ~ id.<*(__),
       params.?.with1 <*(P.char('=').surroundedBy(__)),
       expr,
-    ).tupled
+    ).tupled.map { case ((start, name), params, value) =>
+      (start, name, params, value)
+    }
   }
   val forspec = P.defer {
     (
@@ -176,15 +180,16 @@ object Json {
         .withRange
         .map((src, fn) => fn(src))
 
-    val function = (keyword("function") *> __ *> (params <* __) ~ expr).map(JFunction(_, _))
+    val function = (keyword("function") *> __ *> (params <* __) ~ expr).withRange.map {
+      case (range, (params, body)) => JFunction(range, params, body)
+    }
     val ifExpr = (
       (P.index.with1 ~ (keyword("if") *> __ *> expr <* __)) ~
-      (keyword("then") *> __ *> expr ~ P.index <* __) ~
-      (keyword("else") *> __ *> expr ~ P.index).?
-    ).map { case (((startIdx, cond), (trueValue, trueEndIdx)), elsePair) =>
-      val elseValue = elsePair.map(_._1)
-      val endIdx = elsePair.fold(trueEndIdx)(_._2)
-      JIf(Source(startIdx, endIdx), cond, trueValue, elseValue)
+      (keyword("then") *> __ *> expr <* __) ~
+      (keyword("else") *> __ *> expr).?
+    ).map { case (((startIdx, cond), trueValue), elseValue) =>
+      val src = elseValue.getOrElse(trueValue).src.withStart(startIdx)
+      JIf(src, cond, trueValue, elseValue)
     }
     val obj =
       (P.char('{') *> __ *> objInside <* __ <* P.char('}'))
@@ -194,16 +199,16 @@ object Json {
     val local = (
       keyword("local") *> __ *> bind.repSep(__ *> P.char(',') *> __) ~
       (__ *> P.char(';') *> __ *> expr)
-    ).map { (binds, result) =>
-      binds.toList.foldRight(result) { case ((id, paramsOpt, expr), acc) =>
-        JLocal(id, paramsOpt.fold(expr)(JFunction(_, expr)), acc)
+    ).withRange.map { case (src, (binds, result)) =>
+      binds.toList.foldRight(result) { case ((start, id, paramsOpt, expr), acc) =>
+        JLocal(src, id, paramsOpt.fold(expr)(JFunction(expr.src.withStart(start), _, expr)), acc)
       }
     }
-    val error = (keyword("error") *> __ *> expr).map(JError(_))
-    val importExpr = (keyword("import") *> __ *> string).map(JImport(_))
-    val importStrExpr = (keyword("importstr") *> __ *> string).map(JImportStr(_))
-    val assertExp = ((assert <* __ <* P.char(';') <* __) ~ expr).map { case ((cond, msg), result) =>
-      JAssert(cond, msg, result)
+    val error = (keyword("error") *> __ *> expr).withRange.map(JError(_, _))
+    val importExpr = (keyword("import") *> __ *> string).withRange.map(JImport(_, _))
+    val importStrExpr = (keyword("importstr") *> __ *> string).withRange.map(JImportStr(_, _))
+    val assertExp = ((assert <* __ <* P.char(';') <* __) ~ expr).map { case ((src, cond, msg), result) =>
+      JAssert(src, cond, msg, result)
     }
     P.oneOf(List(
       string.withRange.map(JString(_, _)),
@@ -279,7 +284,7 @@ object Json {
       val expr = fns.foldLeft(base) { (base, fn) => fn(base) }
       unaryOp match
         case None => expr
-        case Some(op) => JUnaryOp(JUnaryOperator(op), expr)
+        case Some(op) => JUnaryOp(Source.Generated, JUnaryOperator(op), expr)
     }
   }
 
@@ -298,7 +303,7 @@ object Json {
               val nextPrec = if op.isLeftAssociative then minPrec + 1 else minPrec
               exprs = exprs.tail
               val rhs = climb(expr, nextPrec)
-              result = JBinaryOp(result, op, rhs)
+              result = JBinaryOp(Source.Generated, result, op, rhs)
             cond
         do ()
         result

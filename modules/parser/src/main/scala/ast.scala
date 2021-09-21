@@ -84,6 +84,11 @@ enum Source:
   case Range(start: Int, end: Int)
   case Generated
 
+  def withStart(newStart: Int): Source =
+    this match
+    case Range(start, end) => Range(newStart, end)
+    case Generated => Generated
+
 object Source:
   def apply(start: Int, end: Int): Source.Range =
     Source.Range(start, end)
@@ -91,19 +96,22 @@ object Source:
 enum JObjMember:
   case JLocal(name: String, value: JValue)
   case JField(key: JValue, plus: Boolean, isHidden: Boolean, value: JValue)
-  case JAssert(cond: JValue, msg: Option[JValue])
+  case JAssert(src: Source, cond: JValue, msg: Option[JValue])
 
-enum JValue:
-  case JFalse(src: Source)
-  case JTrue(src: Source)
-  case JNull(src: Source)
-  case JSelf(src: Source)
-  case JSuper(src: Source)
-  case JOuter(src: Source)
-  case JString(src: Source, str: String)
-  case JNum(src: Source, str: String)
-  case JArray(src: Source, elements: Seq[JValue])
-  case JObject(src: Source, members: Seq[JObjMember])
+sealed trait HasSource:
+  def src: Source
+
+enum JValue(src: Source) extends HasSource:
+  case JFalse(src: Source) extends JValue(src)
+  case JTrue(src: Source) extends JValue(src)
+  case JNull(src: Source) extends JValue(src)
+  case JSelf(src: Source) extends JValue(src)
+  case JSuper(src: Source) extends JValue(src)
+  case JOuter(src: Source) extends JValue(src)
+  case JString(src: Source, str: String) extends JValue(src)
+  case JNum(src: Source, str: String) extends JValue(src)
+  case JArray(src: Source, elements: Seq[JValue]) extends JValue(src)
+  case JObject(src: Source, members: Seq[JObjMember]) extends JValue(src)
   case JObjectComprehension(
     src: Source,
     preLocals: Seq[JObjMember.JLocal],
@@ -113,29 +121,28 @@ enum JValue:
     forVar: String,
     inExpr: JValue,
     cond: Option[JValue],
-  )
-  case JId(src: Source, name: String)
-  case JGetField(src: Source, loc: JValue, field: String)
-  case JIndex(src: Source, loc: JValue, index: JValue)
-  case JSlice(src: Source, loc: JValue, index: JValue, endIndex: Option[JValue], stride: Option[JValue])
-  case JApply(src: Source, loc: JValue, positionalArgs: Seq[JValue], namedArgs: Seq[(String, JValue)])
-  case JBinaryOp(left: JValue, op: JBinaryOperator, right: JValue)
-  case JUnaryOp(op: JUnaryOperator, expr: JValue)
-  case JLocal(name: String, value: JValue, result: JValue)
-  case JArrComprehension(comp: JValue, inExprs: Seq[JValue], cond: Option[JValue])
-  case JFunction(params: JParamList, body: JValue)
-  case JIf(src: Source, cond: JValue, trueValue: JValue, elseValue: Option[JValue])
-  case JError(expr: JValue)
-  case JAssert(cond: JValue, msg: Option[JValue], expr: JValue)
-  case JImport(file: String)
-  case JImportStr(file: String)
+  ) extends JValue(src)
+  case JId(src: Source, name: String) extends JValue(src)
+  case JGetField(src: Source, loc: JValue, field: String) extends JValue(src)
+  case JIndex(src: Source, loc: JValue, index: JValue) extends JValue(src)
+  case JSlice(src: Source, loc: JValue, index: JValue, endIndex: Option[JValue], stride: Option[JValue]) extends JValue(src)
+  case JApply(src: Source, loc: JValue, positionalArgs: Seq[JValue], namedArgs: Seq[(String, JValue)]) extends JValue(src)
+  case JBinaryOp(src: Source, left: JValue, op: JBinaryOperator, right: JValue) extends JValue(src)
+  case JUnaryOp(src: Source, op: JUnaryOperator, expr: JValue) extends JValue(src)
+  case JLocal(src: Source, name: String, value: JValue, result: JValue) extends JValue(src)
+  case JFunction(src: Source, params: JParamList, body: JValue) extends JValue(src)
+  case JIf(src: Source, cond: JValue, trueValue: JValue, elseValue: Option[JValue]) extends JValue(src)
+  case JError(src: Source, expr: JValue) extends JValue(src)
+  case JAssert(src: Source, cond: JValue, msg: Option[JValue], expr: JValue) extends JValue(src)
+  case JImport(src: Source, file: String) extends JValue(src)
+  case JImportStr(src: Source, file: String) extends JValue(src)
   case JArrayComprehension(
     src: Source,
     forVar: String,
     forExpr: JValue,
     inExpr: JValue,
     cond: Option[JValue]
-  )
+  ) extends JValue(src)
 
   def isNull: Boolean = this match
     case _: JNull => true
