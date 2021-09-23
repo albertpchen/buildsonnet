@@ -44,9 +44,10 @@ local aaaaaa(arr) = arr[0:4:2];
   local z = a,
   zzzz: z,
   local a = self.c,
+  local c = b,
   a: a,
   local b = a + $.d,
-  b: b,
+  b: c,
   e: b + 9,
   s: "SDLKFJ",
   z: {
@@ -57,8 +58,18 @@ local aaaaaa(arr) = arr[0:4:2];
   },
   //[std.trace("outer ran", "asdf")]: 0
   zz: { z: {} } + child,
+  zzchild: (self.zz + child) {
+    c: "zzchild",
+  },
   zzz: zzz,
   // fff: if 0 then 0 else 1,
-  arr: [i for i in [0, 1, 2, 3, 4, 5, 6, 7,] if 0],
+  arr: [i for i in [0, 1, 2, 3, 4, 5, 6, 7,] if true],
   slice: aaaaaa(self.arr),
+  objComp:  {
+    local a = 0,
+    local b = c,
+    local c = a + 3,
+    local d = "s",
+    [i]: b for i in ["a", "b", "c"]
+  },
 } + child

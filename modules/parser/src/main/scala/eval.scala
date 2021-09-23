@@ -32,6 +32,7 @@ object LazyValue:
       val isHidden = hidden
       @scala.annotation.threadUnsafe
       lazy val evaluated: EvaluatedJValue = evalUnsafe(ctx)(code)
+
       def withHidden(hidden: Boolean) = withHiddenImp(hidden, this)
 
 final class EvaluationError(
@@ -105,6 +106,12 @@ object EvaluationContext:
     inline def expectBoolean(code: JValue): EvaluatedJValue.JBoolean = expectType[EvaluatedJValue.JBoolean](code)
     inline def expectNum(code: JValue): EvaluatedJValue.JNum = expectType[EvaluatedJValue.JNum](code)
     inline def expectString(code: JValue): EvaluatedJValue.JString = expectType[EvaluatedJValue.JString](code)
+    inline def expectFieldName(code: JValue): EvaluatedJValue.JString =
+      val expr = evalUnsafe(ctx)(code)
+      if expr.isInstanceOf[EvaluatedJValue.JString] then
+        expr.asInstanceOf[EvaluatedJValue.JString]
+      else
+        ctx.error(code.src, s"Field name must be string, got ${typeString(expr)}")
     inline def expectArray(code: JValue): EvaluatedJValue.JArray = expectType[EvaluatedJValue.JArray](code)
     inline def expectObject(code: JValue): EvaluatedJValue.JObject = expectType[EvaluatedJValue.JObject](code)
     inline def expectFunction(code: JValue): EvaluatedJValue.JFunction = expectType[EvaluatedJValue.JFunction](code)
@@ -333,34 +340,11 @@ object StackEntry:
   def objectField(file: SourceFile, src: Source): StackEntry =
     new StackEntry(file, src, "object")
 
-sealed trait JObjectImp(
-  ctxThunk: () => ObjectEvaluationContext,
-  rawMembers: Seq[JObjMember.JField],
-):
-  private def ctx = ctxThunk()
+sealed trait EvaluatedJObject:
+  def ctx: ObjectEvaluationContext
+  protected def cache: collection.Map[String, LazyObjectValue]
 
-  private var _cache: collection.mutable.HashMap[String, LazyObjectValue] = null
-  lazy val cache = {
-    val result = collection.mutable.HashMap[String, LazyObjectValue]()
-    rawMembers.foreach { case JObjMember.JField(src, rawKey, plus, isHidden, value) =>
-      val key = ctx.expectString(rawKey).str
-      val valueCtx = ctx.withStackEntry(StackEntry.objectField(ctx.file, value.src))
-      if plus then
-        result(key) = LazyValue(
-          valueCtx,
-          JValue.JBinaryOp(
-            src,
-            JValue.JGetField(src, JValue.JSuper(src), key),
-            JBinaryOperator.Op_+,
-            value
-          ),
-          isHidden
-        )
-      else
-        result(key) = LazyValue(valueCtx, value, isHidden)
-    }
-    result
-  }
+  def withCtx(newCtx: () => ObjectEvaluationContext): EvaluatedJObject
 
   def lookup(src: Source, field: String): EvaluatedJValue =
     cache.getOrElse(field, ctx.error(src, s"object missing field $field")).evaluated
@@ -381,9 +365,58 @@ sealed trait JObjectImp(
           }
         else
           cache
-      _members
-    else
-      _members
+    _members
+
+object EvaluatedJObject:
+  def comprehension(
+    ctxThunk: () => ObjectEvaluationContext,
+    arrayElements: Seq[(String, EvaluatedJValue)],
+    forVar: String,
+    value: JValue,
+  ): EvaluatedJObject = new EvaluatedJObject:
+    def ctx = ctxThunk()
+    def withCtx(newCtx: () => ObjectEvaluationContext) =
+      comprehension(newCtx, arrayElements, forVar, value)
+
+    lazy val cache = {
+      val result = collection.mutable.HashMap[String, LazyObjectValue]()
+      arrayElements.foreach { (key, e) =>
+        val valueCtx = ctx.bindEvaluated(forVar, e).withStackEntry(StackEntry.objectField(ctx.file, value.src))
+        result(key) = LazyValue(valueCtx, value, false)
+      }
+      result
+    }
+
+  def apply(
+    ctxThunk: () => ObjectEvaluationContext,
+    rawMembers: Seq[JObjMember.JField],
+  ): EvaluatedJObject = new EvaluatedJObject:
+    def ctx = ctxThunk()
+
+    def withCtx(newCtx: () => ObjectEvaluationContext) =
+      apply(newCtx, rawMembers)
+
+    lazy val cache = {
+      val result = collection.mutable.HashMap[String, LazyObjectValue]()
+      rawMembers.foreach { case JObjMember.JField(src, rawKey, plus, isHidden, value) =>
+        val key = ctx.expectFieldName(rawKey).str
+        val valueCtx = ctx.withStackEntry(StackEntry.objectField(ctx.file, value.src))
+        if plus then
+          result(key) = LazyValue(
+            valueCtx,
+            JValue.JBinaryOp(
+              src,
+              JValue.JGetField(src, JValue.JSuper(src), key),
+              JBinaryOperator.Op_+,
+              value
+            ),
+            isHidden
+          )
+        else
+          result(key) = LazyValue(valueCtx, value, isHidden)
+      }
+      result
+    }
 
 enum EvaluatedJValue extends HasSource:
   case JBoolean(src: Source, value: Boolean)
@@ -397,7 +430,7 @@ enum EvaluatedJValue extends HasSource:
     * - super lookup (dynamic), not in current object, but in super object
     * - self lookup (dynamic), lookup in current object, possibly in super
     */
-  case JObject(src: Source, ctx: () => ObjectEvaluationContext, rawMembers: Seq[JObjMember.JField]) extends EvaluatedJValue with JObjectImp(ctx, rawMembers)
+  case JObject(src: Source, imp: EvaluatedJObject) extends EvaluatedJValue
   case JFunction(src: Source, params: JParamList, body: JValue)
 
   def manifest(ctx: EvaluationContext): Either[String, ManifestedJValue] =
@@ -412,13 +445,27 @@ enum EvaluatedJValue extends HasSource:
         case (error, _) => error
       }.map(l => ManifestedJValue.JArray(l.reverse.toVector))
     case obj: JObject =>
-      obj.members().toSeq.sortBy(_._1).foldLeft(Right(Seq.empty):Either[String, Seq[(String, ManifestedJValue)]] ) {
+      val members = obj.members()
+      members.toSeq.sortBy(_._1).foldLeft(Right(Seq.empty):Either[String, Seq[(String, ManifestedJValue)]]) {
         case (Right(tail), (key, value)) => value.evaluated.manifest(ctx).map(v => (key -> v) +: tail)
         case (error, _) => error
       }.map(m => ManifestedJValue.JObject(m.reverse.toMap))
     case fn: JFunction => ctx.error(fn.src, "cannot manifest function")
 
 object EvaluatedJValue:
+  extension (obj: EvaluatedJValue.JObject)
+    // export obj.imp.lookup, obj.imp.members, obj.imp.withCtx
+    def ctx: ObjectEvaluationContext = obj.imp.ctx
+
+    def withCtx(ctx: () => ObjectEvaluationContext): EvaluatedJValue.JObject =
+      obj.copy(imp = obj.imp.withCtx(ctx))
+
+    def lookup(src: Source, field: String): EvaluatedJValue =
+      obj.imp.lookup(src, field)
+
+    def members(): collection.Map[String, LazyObjectValue] =
+      obj.imp.members()
+
   extension (arr: EvaluatedJValue.JArray)
     def index(src: Source, ctx: EvaluationContext, idx: Int, endIdxOpt: Option[Int], strideOpt: Option[Int]): EvaluatedJValue =
       // println(s"$idx, $endIdxOpt, $strideOpt")
@@ -442,10 +489,12 @@ object EvaluatedJValue:
 
 def manifest(ctx: EvaluationContext)(jvalue: JValue): Either[EvaluationError, ManifestedJValue] =
   try
-    evalUnsafe(ctx)(jvalue).manifest(ctx).fold(
+    val evaluated = evalUnsafe(ctx)(jvalue)
+    val result = evaluated.manifest(ctx).fold(
       msg => Left(new EvaluationError(ctx.file, Source.Generated, msg, List.empty)),
       Right(_),
     )
+    result
   catch
     case err: EvaluationError => Left(err)
 
@@ -464,10 +513,12 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
     var objCtx: ObjectEvaluationContext = null
     val obj: EvaluatedJValue.JObject = EvaluatedJValue.JObject(
       src,
-      () => objCtx,
-      members.collect {
-        case f: JObjMember.JField => f
-      }
+      EvaluatedJObject(
+        () => objCtx,
+        members.collect {
+          case f: JObjMember.JField => f
+        }
+      ),
     )
     objCtx = members.foldLeft(ctx.objectCtx(obj)) {
       case (ctx, local: JObjMember.JLocal) => ctx.bind(local.name, local.value)
@@ -484,7 +535,41 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
     }
     obj
 
-  // case JValue.JObjectComprehension()
+  case JValue.JObjectComprehension(src, preLocals, rawKey, value, postLocals, forVar, inExpr, condOpt) =>
+    var objCtx: ObjectEvaluationContext = null
+    val arr = ctx.expectArray(inExpr).elements
+    val arrElements =
+      if condOpt.isDefined then
+        val cond = condOpt.get
+        arr.flatMap { e =>
+          val forCtx = ctx.bindEvaluated(forVar, e)
+          val key = forCtx.expectFieldName(rawKey).str
+          Option.when(ctx.expectBoolean(cond).value) {
+            key -> evalUnsafe(forCtx)(inExpr)
+          }
+        }
+      else
+        arr.map { e =>
+          val forCtx = ctx.bindEvaluated(forVar, e)
+          val key = forCtx.expectFieldName(rawKey).str
+          key -> evalUnsafe(forCtx)(inExpr)
+        }
+    val obj: EvaluatedJValue.JObject = EvaluatedJValue.JObject(
+      src,
+      EvaluatedJObject.comprehension(
+        () => objCtx,
+        arrElements,
+        forVar,
+        value,
+      )
+    )
+    objCtx = postLocals.foldLeft(preLocals.foldLeft(ctx.objectCtx(obj)) { (ctx, local) =>
+      ctx.bind(local.name, local.value)
+    }) { (ctx, local) =>
+      ctx.bind(local.name, local.value)
+    }
+
+    obj
   case JValue.JId(src, name) => ctx.lookup(src, name)
   case JValue.JGetField(src, loc, field) =>
     ctx
@@ -542,11 +627,11 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
         EvaluatedJValue.JNum(src, op1.double + op2.double)
       case (op1: EvaluatedJValue.JObject, op2: EvaluatedJValue.JObject) =>
         var parentCtx: ObjectEvaluationContext = null
-        val parent: EvaluatedJValue.JObject = op1.copy(ctx = () => parentCtx)
+        val parent: EvaluatedJValue.JObject = op1.withCtx(ctx = () => parentCtx)
         var resultCtx: ObjectEvaluationContext = null
-        val result: EvaluatedJValue.JObject = op2.copy(ctx = () => resultCtx)
-        resultCtx = op2.ctx().withSelf(result).withParent(parent)
-        parentCtx = op1.ctx().withSelf(result)
+        val result: EvaluatedJValue.JObject = op2.withCtx(ctx = () => resultCtx)
+        resultCtx = op2.ctx.withSelf(result).withParent(parent)
+        parentCtx = op1.ctx.withSelf(result)
         result
       case (op1: EvaluatedJValue.JArray, op2: EvaluatedJValue.JArray) =>
         EvaluatedJValue.JArray(src, op1.elements ++ op2.elements)
