@@ -31,12 +31,13 @@ local dd = {
 local child = {
   c: 2,
   //[std.trace("inner ran", "asdf")]: 0
-  z: super.z + {
+  z +: {
     aa: 1234,
     c: $.c,
   }
 };
 
+local aaaaaa(arr) = arr[0:4:2];
 {
   c: 1,
   d: 2,
@@ -57,6 +58,7 @@ local child = {
   //[std.trace("outer ran", "asdf")]: 0
   zz: { z: {} } + child,
   zzz: zzz,
-  arr: [0, 1, 2, 3, 4, 5, 6, 7,],
-  slice: self.arr[0:4:2],
+  // fff: if 0 then 0 else 1,
+  arr: [i for i in [0, 1, 2, 3, 4, 5, 6, 7,] if 0],
+  slice: aaaaaa(self.arr),
 } + child
