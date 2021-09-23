@@ -13,6 +13,10 @@ object LazyValue:
       @scala.annotation.threadUnsafe
       lazy val evaluated: EvaluatedJValue = evalUnsafe(ctx)(code)
 
+  def strict(value: EvaluatedJValue): LazyValue =
+    new LazyValue:
+      val evaluated: EvaluatedJValue = value
+
   private def withHiddenImp(newIsHidden: Boolean, lazyVal: LazyObjectValue): LazyObjectValue =
     if newIsHidden ^ lazyVal.isHidden then
       new LazyObjectValue:
@@ -58,6 +62,7 @@ sealed trait EvaluationContext:
   def objectCtx(obj: EvaluatedJValue.JObject): ObjectEvaluationContext
   def functionCtx(fn: EvaluatedJValue.JFunction): EvaluationContext
   def bind(id: String, value: JValue): EvaluationContext
+  def bindEvaluated(id: String, value: EvaluatedJValue): EvaluationContext
   def importFile(src: Source, fileName: String): EvaluatedJValue
   def importStr(src: Source, fileName: String): EvaluatedJValue.JString
   def self(src: Source): EvaluatedJValue.JObject
@@ -67,6 +72,7 @@ sealed trait EvaluationContext:
 
 sealed trait ObjectEvaluationContext extends EvaluationContext:
   def bind(id: String, value: JValue): ObjectEvaluationContext
+  def bindEvaluated(id: String, value: EvaluatedJValue): ObjectEvaluationContext
   def withSelf(self: EvaluatedJValue.JObject): ObjectEvaluationContext
   def withParent(self: EvaluatedJValue.JObject): ObjectEvaluationContext
   def withStackEntry(entry: StackEntry): ObjectEvaluationContext
@@ -75,7 +81,7 @@ object EvaluationContext:
   private inline def typeString[T <: EvaluatedJValue]: String =
     inline compiletime.erasedValue[T] match
     case _: EvaluatedJValue.JBoolean => "bool"
-    case _: EvaluatedJValue.JNull.type => "null"
+    case _: EvaluatedJValue.JNull => "null"
     case _: EvaluatedJValue.JString => "string"
     case _: EvaluatedJValue.JNum => "number"
     case _: EvaluatedJValue.JArray => "array"
@@ -85,7 +91,7 @@ object EvaluationContext:
   private def typeString(expr: EvaluatedJValue): String =
     expr match
     case _: EvaluatedJValue.JBoolean => "bool"
-    case _: EvaluatedJValue.JNull.type => "null"
+    case _: EvaluatedJValue.JNull => "null"
     case _: EvaluatedJValue.JString => "string"
     case _: EvaluatedJValue.JNum => "number"
     case _: EvaluatedJValue.JArray => "array"
@@ -141,6 +147,10 @@ object EvaluationContext:
       val newScope = scope + (id -> LazyValue(this, value))
       new Imp(file, newScope, stack)
 
+    def bindEvaluated(id: String, value: EvaluatedJValue): Imp =
+      val newScope = scope + (id -> LazyValue.strict(value))
+      new Imp(file, newScope, stack)
+
     def importFile(src: Source, fileName: String): EvaluatedJValue = ???
     def importStr(src: Source, fileName: String): EvaluatedJValue.JString = ???
 
@@ -153,7 +163,7 @@ object EvaluationContext:
     selfObj: EvaluatedJValue.JObject,
     superOpt: Option[EvaluatedJValue.JObject],
     topCtx: Imp,
-    locals: Map[String, JValue],
+    locals: Map[String, JValue | EvaluatedJValue],
     stack: List[StackEntry],
   ) extends ObjectEvaluationContext:
 
@@ -167,8 +177,9 @@ object EvaluationContext:
 
     @scala.annotation.threadUnsafe
     lazy val cache = collection.mutable.HashMap[String, EvaluatedJValue]()
-    val scope = locals.map { (id, value) =>
-      id -> LazyValue(this, value)
+    val scope = locals.map {
+      case (id, value: JValue) => id -> LazyValue(this, value)
+      case (id, value: EvaluatedJValue) => id -> LazyValue.strict(value)
     }
     def lookup(src: Source, id: String): EvaluatedJValue =
       if scope.contains(id) then
@@ -198,6 +209,9 @@ object EvaluationContext:
         this.copy(superOpt = Some(parent))
 
     def bind(id: String, value: JValue) =
+      this.copy(locals = locals + (id -> value))
+
+    def bindEvaluated(id: String, value: EvaluatedJValue) =
       this.copy(locals = locals + (id -> value))
 
     def withStackEntry(entry: StackEntry) =
@@ -473,6 +487,7 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
     }
     obj
 
+  // case JValue.JObjectComprehension()
   case JValue.JId(src, name) => ctx.lookup(src, name)
   case JValue.JGetField(src, loc, field) =>
     ctx
@@ -582,11 +597,16 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
     ctx.importFile(src, file)
   case JValue.JImportStr(src, file) =>
     ctx.importStr(src, file)
-/*
-  case JValue.JArrayComprehension(
-    forVar: String,
-    forExpr: JValue,
-    inExpr: JValue,
-    cond: Option[JValue]
-  )
-*/
+  case JValue.JArrayComprehension(src, forVar, forExpr, inExpr, condOpt) =>
+    if condOpt.isDefined then
+      val cond = condOpt.get
+      EvaluatedJValue.JArray(src, ctx.expectArray(inExpr).elements.flatMap { e =>
+        val forCtx = ctx.bindEvaluated(forVar, e)
+        Option.when(forCtx.expectBoolean(cond).value) {
+          evalUnsafe(forCtx)(forExpr)
+        }
+      })
+    else
+      EvaluatedJValue.JArray(src, ctx.expectArray(inExpr).elements.map { e =>
+        evalUnsafe(ctx.bindEvaluated(forVar, e))(forExpr)
+      })

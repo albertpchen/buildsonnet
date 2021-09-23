@@ -160,7 +160,9 @@ object Json {
       __.with1 *> expr,
     ).tupled
   }
-  val ifspec = keyword("if") *> __ *> expr
+  val ifspec = P.defer {
+    keyword("if") *> __ *> expr
+  }
 
   val exprBase: P[JValue] = P.defer {
     val listComp = (
