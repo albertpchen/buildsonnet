@@ -1,22 +1,5 @@
 package root
 
-sealed trait EvaluationContext:
-  def error(src: Source, message: String): Nothing
-  def lookup(src: Source, id: String): EvaluatedJValue
-  def objectCtx(obj: EvaluatedJValue.JObject): ObjectEvaluationContext
-  def functionCtx(fn: EvaluatedJValue.JFunction): EvaluationContext
-  def bind(id: String, value: JValue): EvaluationContext
-  def importFile(fileName: String): EvaluatedJValue
-  def importStr(fileName: String): EvaluatedJValue.JString
-  def self(src: Source): EvaluatedJValue.JObject
-  def `super`(src: Source): EvaluatedJValue.JObject
-  def hasSuper: Boolean
-
-sealed trait ObjectEvaluationContext extends EvaluationContext:
-  def bind(id: String, value: JValue): ObjectEvaluationContext
-  def withSelf(self: EvaluatedJValue.JObject): ObjectEvaluationContext
-  def withParent(self: EvaluatedJValue.JObject): ObjectEvaluationContext
-
 sealed trait LazyValue:
   def evaluated: EvaluatedJValue
 
@@ -28,7 +11,7 @@ object LazyValue:
   def apply(ctx: EvaluationContext, code: JValue): LazyValue =
     new LazyValue:
       @scala.annotation.threadUnsafe
-      lazy val evaluated: EvaluatedJValue = eval(ctx)(code)
+      lazy val evaluated: EvaluatedJValue = evalUnsafe(ctx)(code)
 
   private def withHiddenImp(newIsHidden: Boolean, lazyVal: LazyObjectValue): LazyObjectValue =
     if newIsHidden ^ lazyVal.isHidden then
@@ -46,9 +29,47 @@ object LazyValue:
       @scala.annotation.threadUnsafe
       lazy val evaluated: EvaluatedJValue = {
         //println("SDFLKJ: " + code.toString)
-        eval(ctx)(code)
+        evalUnsafe(ctx)(code)
       }
       def withHidden(hidden: Boolean) = withHiddenImp(hidden, this)
+
+final class EvaluationError(
+  file: SourceFile,
+  src: Source,
+  message: String,
+  stack: List[StackEntry],
+) extends Exception(EvaluationError.toString(file, src, message, stack))
+
+object EvaluationError:
+  def toString(
+    file: SourceFile,
+    src: Source,
+    message: String,
+    stack: List[StackEntry],
+  ): String =
+    val stackSuffix = (StackEntry(file, src) +: stack).mkString("\n  ", "\n  ", "")
+    s"$message$stackSuffix"
+
+
+sealed trait EvaluationContext:
+  def file: SourceFile
+  def error(src: Source, message: String): Nothing
+  def lookup(src: Source, id: String): EvaluatedJValue
+  def objectCtx(obj: EvaluatedJValue.JObject): ObjectEvaluationContext
+  def functionCtx(fn: EvaluatedJValue.JFunction): EvaluationContext
+  def bind(id: String, value: JValue): EvaluationContext
+  def importFile(src: Source, fileName: String): EvaluatedJValue
+  def importStr(src: Source, fileName: String): EvaluatedJValue.JString
+  def self(src: Source): EvaluatedJValue.JObject
+  def `super`(src: Source): EvaluatedJValue.JObject
+  def hasSuper: Boolean
+  def withStackEntry(entry: StackEntry): EvaluationContext
+
+sealed trait ObjectEvaluationContext extends EvaluationContext:
+  def bind(id: String, value: JValue): ObjectEvaluationContext
+  def withSelf(self: EvaluatedJValue.JObject): ObjectEvaluationContext
+  def withParent(self: EvaluatedJValue.JObject): ObjectEvaluationContext
+  def withStackEntry(entry: StackEntry): ObjectEvaluationContext
 
 object EvaluationContext:
   private inline def typeString[T <: EvaluatedJValue]: String =
@@ -86,18 +107,18 @@ object EvaluationContext:
     inline def expectFunction(code: JValue): EvaluatedJValue.JFunction = expectType[EvaluatedJValue.JFunction](code)
 
     inline def expectType[T <: EvaluatedJValue](code: JValue): T =
-      val expr = eval(ctx)(code)
+      val expr = evalUnsafe(ctx)(code)
       if expr.isInstanceOf[T] then
         expr.asInstanceOf[T]
       else
         typeError[T](code.src, expr)
 
   private class Imp(
+    val file: SourceFile,
     val scope: Map[String, LazyValue],
-    val stack: List[EvaluatedJValue.JFunction | EvaluatedJValue.JObject],
+    val stack: List[StackEntry],
   ) extends EvaluationContext:
-    def error(src: Source, message: String): Nothing =
-      throw new Exception(s"$src: $message")
+    def error(src: Source, message: String): Nothing = throw new EvaluationError(file, src, message, stack)
 
     def lookup(src: Source, id: String): EvaluatedJValue =
       scope.get(id).fold {
@@ -114,31 +135,35 @@ object EvaluationContext:
       ).bind("$", JValue.JSelf(Source.Generated))
 
     def functionCtx(fn: EvaluatedJValue.JFunction): Imp =
-      new Imp(scope, fn +: stack)
+      new Imp(file, scope, StackEntry.function(file, fn) +: stack)
 
     def bind(id: String, value: JValue): Imp =
       val newScope = scope + (id -> LazyValue(this, value))
-      new Imp(newScope, stack)
+      new Imp(file, newScope, stack)
 
-    def importFile(fileName: String): EvaluatedJValue = ???
-    def importStr(fileName: String): EvaluatedJValue.JString = ???
+    def importFile(src: Source, fileName: String): EvaluatedJValue = ???
+    def importStr(src: Source, fileName: String): EvaluatedJValue.JString = ???
 
     def self(src: Source): EvaluatedJValue.JObject = error(src, "no self")
     def `super`(src: Source): EvaluatedJValue.JObject = error(src, "no super")
     def hasSuper: Boolean = false
+    def withStackEntry(entry: StackEntry) = new Imp(file, scope, entry +: stack)
 
   private case class ObjectImp(
     selfObj: EvaluatedJValue.JObject,
     superOpt: Option[EvaluatedJValue.JObject],
     topCtx: Imp,
     locals: Map[String, JValue],
-    stack: List[EvaluatedJValue.JFunction | EvaluatedJValue.JObject],
+    stack: List[StackEntry],
   ) extends ObjectEvaluationContext:
 
+    def file = topCtx.file
     def self(src: Source) = selfObj
     def `super`(src: Source) = superOpt.getOrElse(topCtx.`super`(src))
     def hasSuper: Boolean = superOpt.isDefined
-    export topCtx.error, topCtx.importStr, topCtx.importFile
+
+    def error(src: Source, message: String): Nothing = throw new EvaluationError(file, src, message, stack)
+    export topCtx.importStr, topCtx.importFile
 
     @scala.annotation.threadUnsafe
     lazy val cache = collection.mutable.HashMap[String, EvaluatedJValue]()
@@ -155,13 +180,13 @@ object EvaluationContext:
       new ObjectImp(
         obj,
         None,
-        new Imp(topCtx.scope ++ scope, topCtx.stack),
+        new Imp(topCtx.file, topCtx.scope ++ scope, topCtx.stack),
         Map.empty,
         stack,
       )
 
     def functionCtx(fn: EvaluatedJValue.JFunction) =
-      this.copy(stack = fn +: stack)
+      this.copy(stack = StackEntry.function(file, fn) +: stack)
 
     def withSelf(newSelf: EvaluatedJValue.JObject) =
       if `self` == newSelf then this else this.copy(selfObj = newSelf)
@@ -175,7 +200,10 @@ object EvaluationContext:
     def bind(id: String, value: JValue) =
       this.copy(locals = locals + (id -> value))
 
-  def apply(): EvaluationContext = Imp(Map.empty, List.empty)
+    def withStackEntry(entry: StackEntry) =
+      this.copy(stack = entry +: stack)
+
+  def apply(file: SourceFile): EvaluationContext = Imp(file, Map.empty, List.empty)
 
 case class ManifestError(msg: String)
 
@@ -267,6 +295,33 @@ object ManifestedJValue:
             builder ++= c.toString
       idx += 1
 
+final class StackEntry(
+  val file: SourceFile,
+  val src: Source,
+  val message: String,
+):
+  override def toString: String =
+    val srcString = src match
+    case Source.Generated => file.path
+    case src: Source.Range =>
+      val (startLine, startCol) = file.getLineCol(src.start)
+      val (endLine, endCol) = file.getLineCol(src.end)
+      if startLine == endLine then
+        s"${file.path}:$startLine:$startCol-$endCol"
+      else
+        s"${file.path}:($startLine:$startCol)-($endLine:$endCol)"
+    if message.isEmpty then srcString else s"$srcString $message"
+
+object StackEntry:
+  def function(file: SourceFile, fn: EvaluatedJValue.JFunction): StackEntry =
+    new StackEntry(file, fn.src, "function")
+
+  def apply(file: SourceFile, src: Source): StackEntry =
+    new StackEntry(file, src, "")
+
+  def objectField(file: SourceFile, src: Source): StackEntry =
+    new StackEntry(file, src, "object")
+
 sealed trait JObjectImp(
   ctxThunk: () => ObjectEvaluationContext,
   rawMembers: Seq[JObjMember.JField],
@@ -278,9 +333,10 @@ sealed trait JObjectImp(
     val result = collection.mutable.HashMap[String, LazyObjectValue]()
     rawMembers.foreach { case JObjMember.JField(_, rawKey, plus, isHidden, value) =>
       val key = ctx.expectString(rawKey).str
+      val valueCtx = ctx.withStackEntry(StackEntry.objectField(ctx.file, value.src))
       if plus then
         result(key) = LazyValue(
-          ctx,
+          valueCtx,
           JValue.JBinaryOp(
             Source.Generated,
             JValue.JGetField(Source.Generated, JValue.JSuper(Source.Generated), key),
@@ -290,7 +346,7 @@ sealed trait JObjectImp(
           isHidden
         )
       else
-        result(key) = LazyValue(ctx, value, isHidden)
+        result(key) = LazyValue(valueCtx, value, isHidden)
     }
     result
   }
@@ -318,29 +374,29 @@ sealed trait JObjectImp(
     else
       _members
 
-enum EvaluatedJValue:
-  case JBoolean(value: Boolean)
-  case JNull
-  case JString(str: String)
-  case JNum(double: Double)
-  case JArray(elements: Seq[EvaluatedJValue])
+enum EvaluatedJValue extends HasSource:
+  case JBoolean(src: Source, value: Boolean)
+  case JNull(src: Source)
+  case JString(src: Source, str: String)
+  case JNum(src: Source, double: Double)
+  case JArray(src: Source, elements: Seq[EvaluatedJValue])
   /** needs to handle:
     *
     * - simple lookup, defined in current object
     * - super lookup (dynamic), not in current object, but in super object
     * - self lookup (dynamic), lookup in current object, possibly in super
     */
-  case JObject(ctx: () => ObjectEvaluationContext, rawMembers: Seq[JObjMember.JField]) extends EvaluatedJValue with JObjectImp(ctx, rawMembers)
-  case JFunction(params: JParamList, body: JValue)
+  case JObject(src: Source, ctx: () => ObjectEvaluationContext, rawMembers: Seq[JObjMember.JField]) extends EvaluatedJValue with JObjectImp(ctx, rawMembers)
+  case JFunction(src: Source, params: JParamList, body: JValue)
 
   def manifest(ctx: EvaluationContext): Either[String, ManifestedJValue] =
     this match
-    case JBoolean(value) => Right(ManifestedJValue.JBoolean(value))
-    case JNull => Right(ManifestedJValue.JNull)
-    case JString(str) => Right(ManifestedJValue.JString(str))
-    case JNum(double) => Right(ManifestedJValue.JNum(double))
-    case JArray(elements) =>
-      elements.foldLeft(Right(Seq.empty): Either[String, Seq[ManifestedJValue]]) {
+    case value: JBoolean => Right(ManifestedJValue.JBoolean(value.value))
+    case value: JNull => Right(ManifestedJValue.JNull)
+    case value: JString => Right(ManifestedJValue.JString(value.str))
+    case value: JNum => Right(ManifestedJValue.JNum(value.double))
+    case value: JArray =>
+      value.elements.foldLeft(Right(Seq.empty): Either[String, Seq[ManifestedJValue]]) {
         case (Right(tail), element) => element.manifest(ctx).map(_ +: tail)
         case (error, _) => error
       }.map(l => ManifestedJValue.JArray(l.reverse.toVector))
@@ -349,12 +405,12 @@ enum EvaluatedJValue:
         case (Right(tail), (key, value)) => value.evaluated.manifest(ctx).map(v => (key -> v) +: tail)
         case (error, _) => error
       }.map(m => ManifestedJValue.JObject(m.reverse.toMap))
-    case fn: JFunction => ctx.error(???, "cannot manifest function")
+    case fn: JFunction => ctx.error(fn.src, "cannot manifest function")
 
 object EvaluatedJValue:
   extension (arr: EvaluatedJValue.JArray)
     def index(src: Source, ctx: EvaluationContext, idx: Int, endIdxOpt: Option[Int], strideOpt: Option[Int]): EvaluatedJValue =
-      println(s"$idx, $endIdxOpt, $strideOpt")
+      // println(s"$idx, $endIdxOpt, $strideOpt")
       if idx < 0 || endIdxOpt.exists(_ < 0) || strideOpt.exists(_ < 0) then
         ctx.error(src, s"negative index, end, or stride are not allowed")
       val size = arr.elements.size
@@ -365,28 +421,38 @@ object EvaluatedJValue:
         val stride = strideOpt.getOrElse(1)
         val endIdx = endIdxOpt.getOrElse(size - 1)
         if idx >= endIdx then
-          EvaluatedJValue.JArray(Vector.empty)
+          EvaluatedJValue.JArray(src, Vector.empty)
         else
           val elements = for
             i <- idx until endIdx by stride
             if i < size
           yield arr.elements(i)
-          EvaluatedJValue.JArray(elements.toVector)
+          EvaluatedJValue.JArray(src, elements.toVector)
 
-def eval(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
+def manifest(ctx: EvaluationContext)(jvalue: JValue): Either[EvaluationError, ManifestedJValue] =
+  try
+    evalUnsafe(ctx)(jvalue).manifest(ctx).fold(
+      msg => Left(new EvaluationError(ctx.file, Source.Generated, msg, List.empty)),
+      Right(_),
+    )
+  catch
+    case err: EvaluationError => Left(err)
+
+def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
   jvalue match
-  case _: JValue.JFalse => EvaluatedJValue.JBoolean(false)
-  case _: JValue.JTrue => EvaluatedJValue.JBoolean(true)
-  case _: JValue.JNull => EvaluatedJValue.JNull
+  case JValue.JFalse(src) => EvaluatedJValue.JBoolean(src, false)
+  case JValue.JTrue(src) => EvaluatedJValue.JBoolean(src, true)
+  case JValue.JNull(src) => EvaluatedJValue.JNull(src)
   case JValue.JSelf(src) => ctx.self(src)
   case JValue.JSuper(src) => ctx.`super`(src)
   case JValue.JOuter(src) => ctx.lookup(src, "$")
-  case JValue.JString(_, str) => EvaluatedJValue.JString(str)
-  case JValue.JNum(_, str) => EvaluatedJValue.JNum(str.toDouble)
-  case JValue.JArray(_, elements) => EvaluatedJValue.JArray(elements.map(eval(ctx)))
-  case JValue.JObject(_, members) =>
+  case JValue.JString(src, str) => EvaluatedJValue.JString(src, str)
+  case JValue.JNum(src, str) => EvaluatedJValue.JNum(src, str.toDouble)
+  case JValue.JArray(src, elements) => EvaluatedJValue.JArray(src, elements.map(evalUnsafe(ctx)))
+  case JValue.JObject(src, members) =>
     var objCtx: ObjectEvaluationContext = null
     val obj: EvaluatedJValue.JObject = EvaluatedJValue.JObject(
+      src,
       () => objCtx,
       members.collect {
         case f: JObjMember.JField => f
@@ -415,17 +481,17 @@ def eval(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
       .getOrElse(field, ctx.error(src, s"object does not have field $field"))
       .evaluated
   case JValue.JIndex(src, loc, rawIndex) =>
-    eval(ctx)(loc) match
+    evalUnsafe(ctx)(loc) match
     case obj: EvaluatedJValue.JObject =>
       val field = ctx.expectString(rawIndex)
       obj.lookup(src, field.str)
-    case EvaluatedJValue.JArray(elements) =>
+    case arr: EvaluatedJValue.JArray =>
       val index = ctx.expectNum(rawIndex).double.toInt
-      elements(index)
+      arr.elements(index)
     case expr => ctx.typeError2[EvaluatedJValue.JArray, EvaluatedJValue.JObject](loc.src, expr)
   case JValue.JSlice(src, loc, rawIndex, rawEndIndex, rawStride) =>
-    println(s"$rawIndex, $rawEndIndex, $rawStride")
-    eval(ctx)(loc) match
+    // println(s"$rawIndex, $rawEndIndex, $rawStride")
+    evalUnsafe(ctx)(loc) match
     case obj: EvaluatedJValue.JObject =>
       ctx.error(src, "no end index or stride allowed for object index")
     case arr: EvaluatedJValue.JArray =>
@@ -455,13 +521,13 @@ def eval(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
           ctx.error(src, s"missing argument $argName")
     }
     val functionCtx = argsCtx.functionCtx(fn)
-    eval(functionCtx)(fn.body)
-  case JValue.JBinaryOp(_, left, op, right) =>
+    evalUnsafe(functionCtx)(fn.body)
+  case JValue.JBinaryOp(src, left, op, right) =>
     op match
     case JBinaryOperator.Op_+ =>
-      (eval(ctx)(left), eval(ctx)(right)) match
+      (evalUnsafe(ctx)(left), evalUnsafe(ctx)(right)) match
       case (op1: EvaluatedJValue.JNum, op2: EvaluatedJValue.JNum) =>
-        EvaluatedJValue.JNum(op1.double + op2.double)
+        EvaluatedJValue.JNum(src, op1.double + op2.double)
       case (op1: EvaluatedJValue.JObject, op2: EvaluatedJValue.JObject) =>
         var parentCtx: ObjectEvaluationContext = null
         val parent: EvaluatedJValue.JObject = op1.copy(ctx = () => parentCtx)
@@ -471,7 +537,7 @@ def eval(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
         parentCtx = op1.ctx().withSelf(result)
         result
       case (op1: EvaluatedJValue.JArray, op2: EvaluatedJValue.JArray) =>
-        EvaluatedJValue.JArray(op1.elements ++ op2.elements)
+        EvaluatedJValue.JArray(src, op1.elements ++ op2.elements)
       case (op1: EvaluatedJValue.JNum, op2) => ctx.typeError[EvaluatedJValue.JNum](right.src, op2)
       case (op1, op2: EvaluatedJValue.JNum) => ctx.typeError[EvaluatedJValue.JNum](right.src, op2)
       case (op1: EvaluatedJValue.JObject, op2) => ctx.typeError[EvaluatedJValue.JObject](right.src, op2)
@@ -479,30 +545,30 @@ def eval(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
       case (op1, _) =>
         ctx.typeError2[EvaluatedJValue.JNum, EvaluatedJValue.JObject](left.src, op1)
 
-  case JValue.JUnaryOp(_, op, rawOperand) =>
+  case JValue.JUnaryOp(src, op, rawOperand) =>
     op match
     case JUnaryOperator.Op_! =>
       val operand = ctx.expectBoolean(rawOperand)
-      EvaluatedJValue.JBoolean(!operand.value)
+      EvaluatedJValue.JBoolean(src, !operand.value)
     case JUnaryOperator.Op_+  =>
       val operand = ctx.expectNum(rawOperand).double
-      EvaluatedJValue.JNum(operand.toInt)
+      EvaluatedJValue.JNum(src, operand.toInt)
     case JUnaryOperator.Op_-  =>
       val operand = ctx.expectNum(rawOperand).double
-      EvaluatedJValue.JNum(-operand.toInt)
+      EvaluatedJValue.JNum(src, -operand.toInt)
     case JUnaryOperator.Op_~  =>
       val operand = ctx.expectNum(rawOperand).double
-      EvaluatedJValue.JNum(~operand.toInt)
+      EvaluatedJValue.JNum(src, ~operand.toInt)
   case JValue.JLocal(_, name, value, result) =>
-    eval(ctx.bind(name, value))(result)
-  case JValue.JFunction(_, params, body) =>
-    EvaluatedJValue.JFunction(params, body)
+    evalUnsafe(ctx.bind(name, value))(result)
+  case JValue.JFunction(src, params, body) =>
+    EvaluatedJValue.JFunction(src, params, body)
   case JValue.JIf(src, rawCond, trueValue, elseValue) =>
     val cond = ctx.expectBoolean(rawCond)
     if cond.value then
-      eval(ctx)(trueValue)
+      evalUnsafe(ctx)(trueValue)
     else
-      elseValue.fold(EvaluatedJValue.JNull)(eval(ctx))
+      elseValue.fold(EvaluatedJValue.JNull(src))(evalUnsafe(ctx))
   case JValue.JError(src, rawExpr) =>
     val msg = ctx.expectString(rawExpr)
     ctx.error(src, msg.str)
@@ -511,11 +577,11 @@ def eval(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
     if !cond.value then
       val msg = rawMsg.map(msg => ctx.expectString(msg).str)
       ctx.error(src, msg.getOrElse(s"assertion failed"))
-    eval(ctx)(expr)
-  case JValue.JImport(_, file) =>
-    ctx.importFile(file)
-  case JValue.JImportStr(_, file) =>
-    ctx.importStr(file)
+    evalUnsafe(ctx)(expr)
+  case JValue.JImport(src, file) =>
+    ctx.importFile(src, file)
+  case JValue.JImportStr(src, file) =>
+    ctx.importStr(src, file)
 /*
   case JValue.JArrayComprehension(
     forVar: String,

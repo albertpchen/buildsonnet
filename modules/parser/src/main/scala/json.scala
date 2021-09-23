@@ -252,7 +252,7 @@ object Json {
         .<*(__)
         .flatMap {
           case (start, '.') => (id ~ P.index).map { (field, end) =>
-            JGetField(Source(start, end), _, field)
+            (jv: JValue) => JGetField(jv.src.withEnd(end), jv, field)
           }
           case (start, '[') =>
             val exprOrJNull = expr.?
@@ -260,12 +260,11 @@ object Json {
             (
               (expr <* __) ~ (suffix ~ suffix.?).?.<*(P.char(']')) ~ P.index
             ).map { case ((index, opt), end) =>
-              val src = Source(start, end)
               if opt.isEmpty then
-                JIndex(src, _, index)
+                (jv: JValue) => JIndex(jv.src.withEnd(end), jv, index)
               else
                 val (endIndex, strideOpt) = opt.get
-                JSlice(src, _, index, endIndex, strideOpt.flatten)
+                (jv: JValue) => JSlice(jv.src.withEnd(end), jv, index, endIndex, strideOpt.flatten)
             }
           case (start, '(') => ((args <* __  <* P.char(')')) ~ P.index).flatMap { (args, end) =>
             val namedAfterPositional = args.size >= 2 && args.sliding(2).exists { window =>
@@ -276,7 +275,7 @@ object Json {
               P.failWith("Positional argument after a named argument is not allowed")
             else
               val (positional, named) = args.partition(_._1.isEmpty)
-              P.pure(JApply(Source(start, end), _, positional.map(_._2), named.map((id, expr) => id.get -> expr)))
+              P.pure((jv: JValue) => JApply(jv.src.withEnd(end), jv, positional.map(_._2), named.map((id, expr) => id.get -> expr)))
           }
         }
         <* __
@@ -321,6 +320,7 @@ def asdf(args: String*): Unit =
   //println((Json.id *> P.char('(') *> Json.exprAtom.surroundedBy(Json.__) <* Json.__ <* P.char(')')).parseAll(args(0)))
   val filename = args(0)
   val source = scala.io.Source.fromFile(filename).getLines.mkString("\n")
+  val sourceFile = SourceFile(filename, source)
   val parser = Json.parserFile
   println("START")
   parser.parseAll(source).fold(
@@ -330,10 +330,8 @@ def asdf(args: String*): Unit =
     },
     ast => {
       println("END PARSE")
-      val ctx = EvaluationContext()
-      val evaluated = eval(ctx)(ast)
-      val manifested = evaluated.manifest(ctx)
-      println("END EVAL")
+      val ctx = EvaluationContext(sourceFile)
+      val manifested = manifest(ctx)(ast)
       manifested.fold(
         msg => println(s"FAIL: $msg"),
         value => println(value),
