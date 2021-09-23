@@ -250,13 +250,13 @@ object Json {
     val suffix: P[JValue => JValue] =
       P.index
         .with1
-        .~(P.charIn(Array('.', '(', '[')))
+        .~(P.charIn(Array('.', '(', '[', '{')))
         .<*(__)
         .flatMap {
-          case (start, '.') => (id ~ P.index).map { (field, end) =>
+          case (_, '.') => (id ~ P.index).map { (field, end) =>
             (jv: JValue) => JGetField(jv.src.withEnd(end), jv, field)
           }
-          case (start, '[') =>
+          case (_, '[') =>
             val exprOrJNull = expr.?
             val suffix = P.char(':') *> __ *> exprOrJNull <* __
             (
@@ -268,7 +268,7 @@ object Json {
                 val (endIndex, strideOpt) = opt.get
                 (jv: JValue) => JSlice(jv.src.withEnd(end), jv, index, endIndex, strideOpt.flatten)
             }
-          case (start, '(') => ((args <* __  <* P.char(')')) ~ P.index).flatMap { (args, end) =>
+          case (_, '(') => ((args <* __  <* P.char(')')) ~ P.index).flatMap { (args, end) =>
             val namedAfterPositional = args.size >= 2 && args.sliding(2).exists { window =>
               val Seq((first, _), (second, _)) = window
               first.isDefined && second.isEmpty
@@ -278,6 +278,14 @@ object Json {
             else
               val (positional, named) = args.partition(_._1.isEmpty)
               P.pure((jv: JValue) => JApply(jv.src.withEnd(end), jv, positional.map(_._2), named.map((id, expr) => id.get -> expr)))
+          }
+          case (start, '{') => ((objInside <* __  <* P.char('}')) ~ P.index).map { (objInside, end) =>
+            (jv: JValue) => JBinaryOp(
+              jv.src.withEnd(end),
+              jv,
+              JBinaryOperator.Op_+,
+              objInside(Source(start, end)),
+            )
           }
         }
         <* __

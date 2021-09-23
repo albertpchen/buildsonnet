@@ -31,10 +31,7 @@ object LazyValue:
       self =>
       val isHidden = hidden
       @scala.annotation.threadUnsafe
-      lazy val evaluated: EvaluatedJValue = {
-        //println("SDFLKJ: " + code.toString)
-        evalUnsafe(ctx)(code)
-      }
+      lazy val evaluated: EvaluatedJValue = evalUnsafe(ctx)(code)
       def withHidden(hidden: Boolean) = withHiddenImp(hidden, this)
 
 final class EvaluationError(
@@ -345,15 +342,15 @@ sealed trait JObjectImp(
   private var _cache: collection.mutable.HashMap[String, LazyObjectValue] = null
   lazy val cache = {
     val result = collection.mutable.HashMap[String, LazyObjectValue]()
-    rawMembers.foreach { case JObjMember.JField(_, rawKey, plus, isHidden, value) =>
+    rawMembers.foreach { case JObjMember.JField(src, rawKey, plus, isHidden, value) =>
       val key = ctx.expectString(rawKey).str
       val valueCtx = ctx.withStackEntry(StackEntry.objectField(ctx.file, value.src))
       if plus then
         result(key) = LazyValue(
           valueCtx,
           JValue.JBinaryOp(
-            Source.Generated,
-            JValue.JGetField(Source.Generated, JValue.JSuper(Source.Generated), key),
+            src,
+            JValue.JGetField(src, JValue.JSuper(src), key),
             JBinaryOperator.Op_+,
             value
           ),
