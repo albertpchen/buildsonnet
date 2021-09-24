@@ -340,7 +340,7 @@ def asdf(args: String*): Unit =
     },
     ast => {
       println("END PARSE")
-      val ctx = EvaluationContext(sourceFile)
+      val ctx = EvaluationContext(sourceFile).bindEvaluated("std", Std.obj)
       val manifested = manifest(ctx)(ast)
       manifested.fold(
         msg => println(s"FAIL: $msg"),

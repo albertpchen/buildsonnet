@@ -17,6 +17,12 @@ object LazyValue:
     new LazyValue:
       val evaluated: EvaluatedJValue = value
 
+  def strictObject(value: EvaluatedJValue, hidden: Boolean): LazyObjectValue =
+    new LazyObjectValue:
+      val isHidden = hidden
+      def withHidden(isHidden: Boolean) = strictObject(value, isHidden)
+      val evaluated: EvaluatedJValue = value
+
   private def withHiddenImp(newIsHidden: Boolean, lazyVal: LazyObjectValue): LazyObjectValue =
     if newIsHidden ^ lazyVal.isHidden then
       new LazyObjectValue:
@@ -124,7 +130,7 @@ object EvaluationContext:
       else
         typeError[T](code.src, expr)
 
-  private class Imp(
+  private[root] class Imp(
     val file: SourceFile,
     val scope: Map[String, LazyValue],
     val stack: List[StackEntry],
@@ -168,7 +174,7 @@ object EvaluationContext:
     def hasSuper: Boolean = false
     def withStackEntry(entry: StackEntry) = new Imp(file, scope, entry +: stack)
 
-  private case class ObjectImp(
+  private[root] case class ObjectImp(
     selfObj: EvaluatedJValue.JObject,
     superOpt: Option[EvaluatedJValue.JObject],
     topCtx: Imp,
@@ -446,7 +452,7 @@ enum EvaluatedJValue extends HasSource:
     * - self lookup (dynamic), lookup in current object, possibly in super
     */
   case JObject(src: Source, imp: EvaluatedJObject) extends EvaluatedJValue
-  case JFunction(src: Source, params: JParamList, body: JValue, fn: (EvaluationContext, EvaluatedJFunctionParameters) => EvaluatedJValue)
+  case JFunction(src: Source, fn: (EvaluationContext, EvaluatedJFunctionParameters) => EvaluatedJValue)
 
   def manifest(ctx: EvaluationContext): Either[String, ManifestedJValue] =
     this match
@@ -681,11 +687,11 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
       EvaluatedJValue.JNum(src, -operand)
     case JUnaryOperator.Op_~  =>
       val operand = ctx.expectNum(rawOperand).double
-      EvaluatedJValue.JNum(src, ~operand.toLong)
+      EvaluatedJValue.JNum(src, (~operand.toLong).toDouble)
   case JValue.JLocal(_, name, value, result) =>
     evalUnsafe(ctx.bind(name, value))(result)
   case JValue.JFunction(src, params, body) =>
-    EvaluatedJValue.JFunction(src, params, body, applyArgs(ctx, src, params, body))
+    EvaluatedJValue.JFunction(src, applyArgs(ctx, src, params, body))
   case JValue.JIf(src, rawCond, trueValue, elseValue) =>
     val cond = ctx.expectBoolean(rawCond)
     if cond.value then
@@ -718,3 +724,63 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
       EvaluatedJValue.JArray(src, ctx.expectArray(inExpr).elements.map { e =>
         evalUnsafe(ctx.bindEvaluated(forVar, e))(forExpr)
       })
+
+object Std:
+
+  private val ctx = new EvaluationContext.Imp(
+    SourceFile.std,
+    Map.empty,
+    List.empty,
+  )
+
+  private inline def function1[Name1 <: String, A1 <: EvaluatedJValue](
+    fn: (EvaluationContext, Source, A1) => EvaluatedJValue,
+  ): EvaluatedJValue.JFunction =
+    EvaluatedJValue.JFunction(
+      Source.Generated,
+      (applyCtx, params) => {
+        val positionalArgs = params.positionalArgs
+        val namedArgs = params.namedArgs
+        val numGivenArgs = positionalArgs.size + namedArgs.size
+        if numGivenArgs > 1 then
+          applyCtx.error(params.src, "to many arguments for function")
+        val arg = if positionalArgs.nonEmpty then
+          positionalArgs(0)
+        else
+          val (argName, arg) = namedArgs.head
+          val name1 = compiletime.constValue[Name1]
+          if argName == name1 then
+            arg
+          else
+           applyCtx.error(params.src, s"no argument provided for $name1")
+        fn(ctx, params.src, applyCtx.expectType[A1](arg))
+      }
+    )
+
+  private def makeObject(
+    staticMembers: Map[String, EvaluatedJValue],
+  ): EvaluatedJValue.JObject =
+    var objCtx: ObjectEvaluationContext = null
+    val obj: EvaluatedJValue.JObject = EvaluatedJValue.JObject(
+      Source.Generated,
+      new EvaluatedJObject:
+        def ctx = objCtx
+        def withCtx(newCtx: () => ObjectEvaluationContext) = this
+        val cache = staticMembers.map { (key, value) =>
+          key -> LazyValue.strictObject(value, false)
+        }
+    )
+    objCtx = EvaluationContext.ObjectImp(
+      obj,
+      None,
+      ctx,
+      Map.empty,
+      List.empty,
+    )
+    obj
+
+  val obj = makeObject(Map(
+    "addOne" -> function1["num", EvaluatedJValue.JNum] { (ctx, src, num) =>
+      EvaluatedJValue.JNum(src, num.double + 1)
+    }
+  ))

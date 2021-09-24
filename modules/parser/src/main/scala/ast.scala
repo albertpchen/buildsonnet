@@ -85,6 +85,10 @@ sealed trait SourceFile:
   def getLineCol(offset: Int): (Int, Int)
 
 object SourceFile:
+  val std: SourceFile = new SourceFile:
+    val path = "<std>"
+    def getLineCol(offset: Int) = (0, offset)
+
   val empty: SourceFile = new SourceFile:
     val path = "<empty>"
     def getLineCol(offset: Int) = (0, offset)
