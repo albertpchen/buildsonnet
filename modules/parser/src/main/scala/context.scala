@@ -41,6 +41,15 @@ object LazyValue:
 
       def withHidden(hidden: Boolean) = withHiddenImp(hidden, this)
 
+enum ExprMapper[T <: EvaluatedJValue.JNow]:
+  case Future(ctx: concurrent.ExecutionContext, future: concurrent.Future[T])
+  case Now(expr: T)
+
+  def map[A <: EvaluatedJValue.JNow](fn: T => A): ExprMapper[A] =
+    this match
+    case Future(ctx @ given concurrent.ExecutionContext, future) => Future(ctx, future.map(fn))
+    case Now(expr) => Now(fn(expr))
+
 final class StackEntry(
   val file: SourceFile,
   val src: Source,
@@ -87,6 +96,7 @@ object EvaluationError:
 
 
 sealed trait EvaluationContext:
+  def executionContext: concurrent.ExecutionContext
   def file: SourceFile
   def error(src: Source, message: String): Nothing
   def lookup(src: Source, id: String): LazyValue
@@ -119,6 +129,7 @@ object EvaluationContext:
       case _: EvaluatedJValue.JArray => "array"
       case _: EvaluatedJValue.JObject => "object"
       case _: EvaluatedJValue.JFunction => "function"
+      case _: EvaluatedJValue.JFuture => "future"
     }
     if types.size == 1 then
       types.head
@@ -138,40 +149,53 @@ object EvaluationContext:
     case _: EvaluatedJValue.JArray => "array"
     case _: EvaluatedJValue.JObject => "object"
     case _: EvaluatedJValue.JFunction => "function"
+    case _: EvaluatedJValue.JFuture => "future"
 
+  import concurrent.Future
   extension (ctx: EvaluationContext)
-    inline def expectBoolean(code: JValue): EvaluatedJValue.JBoolean = expectType[EvaluatedJValue.JBoolean](code)
-    inline def expectBoolean(expr: EvaluatedJValue): EvaluatedJValue.JBoolean = expectType[EvaluatedJValue.JBoolean](expr)
-    inline def expectNum(code: JValue): EvaluatedJValue.JNum = expectType[EvaluatedJValue.JNum](code)
-    inline def expectNum(expr: EvaluatedJValue): EvaluatedJValue.JNum = expectType[EvaluatedJValue.JNum](expr)
-    inline def expectString(code: JValue): EvaluatedJValue.JString = expectType[EvaluatedJValue.JString](code)
-    inline def expectString(expr: EvaluatedJValue): EvaluatedJValue.JString = expectType[EvaluatedJValue.JString](expr)
-    inline def expectFieldName(code: JValue): EvaluatedJValue.JString =
+    inline def expectBoolean(code: JValue): Future[EvaluatedJValue.JBoolean] = expectType[EvaluatedJValue.JBoolean](code)
+    inline def expectBoolean(expr: EvaluatedJValue): Future[EvaluatedJValue.JBoolean] = expectType[EvaluatedJValue.JBoolean](expr)
+    inline def expectNum(code: JValue): Future[EvaluatedJValue.JNum] = expectType[EvaluatedJValue.JNum](code)
+    inline def expectNum(expr: EvaluatedJValue): Future[EvaluatedJValue.JNum] = expectType[EvaluatedJValue.JNum](expr)
+    inline def expectString(code: JValue): Future[EvaluatedJValue.JString] = expectType[EvaluatedJValue.JString](code)
+    inline def expectString(expr: EvaluatedJValue): Future[EvaluatedJValue.JString] = expectType[EvaluatedJValue.JString](expr)
+    inline def expectFieldName(code: JValue): Future[EvaluatedJValue.JString] =
       val expr = evalUnsafe(ctx)(code)
-      if expr.isInstanceOf[EvaluatedJValue.JString] then
-        expr.asInstanceOf[EvaluatedJValue.JString]
-      else
-        ctx.error(code.src, s"Field name must be string, got ${typeString(expr)}")
-    inline def expectArray(code: JValue): EvaluatedJValue.JArray = expectType[EvaluatedJValue.JArray](code)
-    inline def expectArray(expr: EvaluatedJValue): EvaluatedJValue.JArray = expectType[EvaluatedJValue.JArray](expr)
-    inline def expectObject(code: JValue): EvaluatedJValue.JObject = expectType[EvaluatedJValue.JObject](code)
-    inline def expectObject(expr: EvaluatedJValue): EvaluatedJValue.JObject = expectType[EvaluatedJValue.JObject](expr)
-    inline def expectFunction(code: JValue): EvaluatedJValue.JFunction = expectType[EvaluatedJValue.JFunction](code)
-    inline def expectFunction(expr: EvaluatedJValue): EvaluatedJValue.JFunction = expectType[EvaluatedJValue.JFunction](expr)
+      expectType[EvaluatedJValue.JString](expr, s"Field name must be string, got ${typeString(expr)}")
+    inline def expectArray(code: JValue): Future[EvaluatedJValue.JArray] = expectType[EvaluatedJValue.JArray](code)
+    inline def expectArray(expr: EvaluatedJValue): Future[EvaluatedJValue.JArray] = expectType[EvaluatedJValue.JArray](expr)
+    inline def expectObject(code: JValue): Future[EvaluatedJValue.JObject] = expectType[EvaluatedJValue.JObject](code)
+    inline def expectObject(expr: EvaluatedJValue): Future[EvaluatedJValue.JObject] = expectType[EvaluatedJValue.JObject](expr)
+    inline def expectFunction(code: JValue): Future[EvaluatedJValue.JFunction] = expectType[EvaluatedJValue.JFunction](code)
+    inline def expectFunction(expr: EvaluatedJValue): Future[EvaluatedJValue.JFunction] = expectType[EvaluatedJValue.JFunction](expr)
 
-    inline def expectType[T <: EvaluatedJValue](expr: EvaluatedJValue): T =
-      if expr.isInstanceOf[T] then
-        expr.asInstanceOf[T]
-      else
-        ctx.error(expr.src, s"Unexpected type ${typeString(expr)}, expected ${typeString[T]}")
+    inline def expectType[T <: EvaluatedJValue](expr: EvaluatedJValue, msg: String): Future[T] =
+      implicit val ec = ctx.executionContext
+      expr match
+      case t: T => Future(t)
+      case f: EvaluatedJValue.JFuture => f.future.map {
+        case t: T => t
+        case _ => ctx.error(expr.src, msg)
+      }
+      case _ => ctx.error(expr.src, msg)
 
-    inline def expectType[T <: EvaluatedJValue](code: JValue): T =
+    inline def expectType[T <: EvaluatedJValue](expr: EvaluatedJValue): Future[T] =
+      expectType[T](expr, s"Unexpected type ${typeString(expr)}, expected ${typeString[T]}")
+
+    // inline def expectType[T <: EvaluatedJValue](expr: EvaluatedJValue): T =
+    //   if expr.isInstanceOf[T] then
+    //     expr.asInstanceOf[T]
+    //   else
+    //     ctx.error(expr.src, s"Unexpected type ${typeString(expr)}, expected ${typeString[T]}")
+
+    inline def expectType[T <: EvaluatedJValue](code: JValue): Future[T] =
       expectType[T](evalUnsafe(ctx)(code))
 
-  private[root] class Imp(
+  private[root] case class Imp(
     val file: SourceFile,
     val scope: Map[String, LazyValue],
     val stack: List[StackEntry],
+    val executionContext: concurrent.ExecutionContext,
   ) extends EvaluationContext:
     def error(src: Source, message: String): Nothing = throw new EvaluationError(file, src, message, stack)
 
@@ -190,19 +214,19 @@ object EvaluationContext:
       ).bind("$", JValue.JSelf(Source.Generated))
 
     def functionCtx(fn: Source) =
-      new Imp(file, scope, StackEntry.function(file, fn) +: stack)
+      this.copy(stack = StackEntry.function(file, fn) +: stack)
 
     def bind(id: String, value: JValue) =
       val newScope = scope + (id -> LazyValue(this, value))
-      new Imp(file, newScope, stack)
+      this.copy(scope = newScope)
 
     def bindEvaluated(id: String, value: EvaluatedJValue) =
       val newScope = scope + (id -> LazyValue.strict(value))
-      new Imp(file, newScope, stack)
+      this.copy(scope = newScope)
 
     def bindWithCtx(id: String, ctx: EvaluationContext, value: JValue) =
       val newScope = scope + (id -> LazyValue(ctx, value))
-      new Imp(file, newScope, stack)
+      this.copy(scope = newScope)
 
     def importFile(src: Source, fileName: String): EvaluatedJValue = ???
     def importStr(src: Source, fileName: String): EvaluatedJValue.JString = ???
@@ -210,7 +234,7 @@ object EvaluationContext:
     def self(src: Source): EvaluatedJValue.JObject = error(src, "no self")
     def `super`(src: Source): EvaluatedJValue.JObject = error(src, "no super")
     def hasSuper: Boolean = false
-    def withStackEntry(entry: StackEntry) = new Imp(file, scope, entry +: stack)
+    def withStackEntry(entry: StackEntry) = this.copy(stack = entry +: stack)
 
   private[root] case class ObjectImp(
     selfObj: EvaluatedJValue.JObject,
@@ -219,6 +243,7 @@ object EvaluationContext:
     locals: Map[String, JValue | EvaluatedJValue | LazyValue],
     stack: List[StackEntry],
   ) extends ObjectEvaluationContext:
+    def executionContext = topCtx.executionContext
 
     def file = topCtx.file
     def self(src: Source) = selfObj
@@ -245,7 +270,7 @@ object EvaluationContext:
       new ObjectImp(
         obj,
         None,
-        new Imp(topCtx.file, topCtx.scope ++ scope, topCtx.stack),
+        topCtx.copy(scope = topCtx.scope ++ scope),
         Map.empty,
         stack,
       )
@@ -274,4 +299,5 @@ object EvaluationContext:
     def withStackEntry(entry: StackEntry) =
       this.copy(stack = entry +: stack)
 
-  def apply(file: SourceFile): EvaluationContext = Imp(file, Map.empty, List.empty)
+  def apply(file: SourceFile)(implicit executionContext: concurrent.ExecutionContext): EvaluationContext =
+    Imp(file, Map.empty, List.empty, executionContext)

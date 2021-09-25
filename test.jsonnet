@@ -75,5 +75,6 @@ local aaaaaa(arr) = arr[0:4:2];
   objObj: std.toString(self.objComp) + 1234,
   objTpe: std.type(self.objComp),
   bad: std.length(aaaaaa),
-  asdf: std.get({ a:: 0}, "a", inc_hidden=false)
+  asdf: std.get({ a:: 0}, "a", inc_hidden=false),
+  cs: ["asdfasdf"] + std.cs("org.tpolecat", "doobie-core_2.12", "0.6.0"),
 } + child

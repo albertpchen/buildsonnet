@@ -335,6 +335,7 @@ def asdf(argss: String*): Unit =
     },
     ast => {
       println("END PARSE")
+      implicit val ec = concurrent.ExecutionContext.global
       val ctx = EvaluationContext(sourceFile).bindEvaluated("std", Std.obj)
       val manifested = manifest(ctx)(ast)
       manifested.fold(
