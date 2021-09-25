@@ -448,34 +448,76 @@ object Std:
   val Arg = temp.Arg
 
   private inline def function1[Name1 <: String](
-    arg1: temp.Arg[Name1] = temp.Arg[Name1],
+    arg1: temp.Arg[Name1],
+  )(
     fn: (EvaluationContext, Source, EvaluatedJValue) => EvaluatedJValue,
   ): EvaluatedJValue.JFunction =
-    EvaluatedJValue.JFunction(
-      Source.Generated,
-      1,
-      (applyCtx, params) => {
-        val Array(arg) = bindArgs(Seq(
-          compiletime.constValue[Name1] -> arg1.default
-        ), applyCtx, params)
-        fn(ctx, params.src, arg)
-      }
-    )
+    EvaluatedJValue.JFunction( Source.Generated, 1, (applyCtx, params) => {
+      val Array(arg) = bindArgs(Seq(
+        compiletime.constValue[Name1] -> arg1.default
+      ), applyCtx, params)
+      fn(ctx, params.src, arg)
+    })
 
-  private inline def function2[Name1 <: String, Name2 <: String](
+  private inline def function2[
+    Name1 <: String,
+    Name2 <: String,
+  ](
+    arg1: temp.Arg[Name1],
+    arg2: temp.Arg[Name2],
+  )(
     fn: (EvaluationContext, Source, EvaluatedJValue, EvaluatedJValue) => EvaluatedJValue,
   ): EvaluatedJValue.JFunction =
-    EvaluatedJValue.JFunction(
-      Source.Generated,
-      2,
-      (applyCtx, params) => {
-        val Array(arg1, arg2) = bindArgs(Seq(
-          compiletime.constValue[Name1] -> None,
-          compiletime.constValue[Name2] -> None,
-        ), applyCtx, params)
-        fn(ctx, params.src, arg1, arg2)
-      }
-    )
+    EvaluatedJValue.JFunction(Source.Generated, 2, (applyCtx, params) => {
+      val Array(arg1, arg2) = bindArgs(Seq(
+        compiletime.constValue[Name1] -> None,
+        compiletime.constValue[Name2] -> None,
+      ), applyCtx, params)
+      fn(ctx, params.src, arg1, arg2)
+    })
+
+  private inline def function3[
+    Name1 <: String,
+    Name2 <: String,
+    Name3 <: String,
+  ](
+    arg1: temp.Arg[Name1],
+    arg2: temp.Arg[Name2],
+    arg3: temp.Arg[Name3],
+  )(
+    fn: (EvaluationContext, Source, EvaluatedJValue, EvaluatedJValue, EvaluatedJValue) => EvaluatedJValue,
+  ): EvaluatedJValue.JFunction =
+    EvaluatedJValue.JFunction( Source.Generated, 3, (applyCtx, params) => {
+      val Array(arg1, arg2, arg3) = bindArgs(Seq(
+        compiletime.constValue[Name1] -> None,
+        compiletime.constValue[Name2] -> None,
+        compiletime.constValue[Name3] -> None,
+      ), applyCtx, params)
+      fn(ctx, params.src, arg1, arg2, arg3)
+    })
+
+  private inline def function4[
+    Name1 <: String,
+    Name2 <: String,
+    Name3 <: String,
+    Name4 <: String,
+  ](
+    arg1: temp.Arg[Name1],
+    arg2: temp.Arg[Name2],
+    arg3: temp.Arg[Name3],
+    arg4: temp.Arg[Name4],
+  )(
+    fn: (EvaluationContext, Source, EvaluatedJValue, EvaluatedJValue, EvaluatedJValue, EvaluatedJValue) => EvaluatedJValue,
+  ): EvaluatedJValue.JFunction =
+    EvaluatedJValue.JFunction( Source.Generated, 4, (applyCtx, params) => {
+      val Array(arg1, arg2, arg3, arg4) = bindArgs(Seq(
+        compiletime.constValue[Name1] -> None,
+        compiletime.constValue[Name2] -> None,
+        compiletime.constValue[Name3] -> None,
+        compiletime.constValue[Name4] -> None,
+      ), applyCtx, params)
+      fn(ctx, params.src, arg1, arg2, arg3, arg4)
+    })
 
   private def makeObject(
     staticMembers: Map[String, EvaluatedJValue],
@@ -509,12 +551,11 @@ object Std:
   }
 
   val obj = makeObject(Map(
-    "toString" -> function1(Arg["x"], toStringImp),
-    "type" -> function1(Arg["x"], { (ctx, src, x) =>
-      val value = EvaluationContext.typeString(x)
-      EvaluatedJValue.JString(src, value)
-    }),
-    "length" -> function1(Arg["x"], { (ctx, src, x) =>
+    "toString" -> function1(Arg["x"])(toStringImp),
+    "type" -> function1(Arg["x"]) { (ctx, src, x) =>
+      EvaluatedJValue.JString(src, EvaluationContext.typeString(x))
+    },
+    "length" -> function1(Arg["x"]) { (ctx, src, x) =>
       val value = ctx.expectType[
         EvaluatedJValue.JArray
         | EvaluatedJValue.JString
@@ -526,5 +567,5 @@ object Std:
       case e: EvaluatedJValue.JObject => e.members().size
       case e: EvaluatedJValue.JFunction => e.numParams
       EvaluatedJValue.JNum(src, value)
-    })
+    }
   ))

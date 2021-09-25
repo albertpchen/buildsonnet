@@ -111,7 +111,7 @@ sealed trait ObjectEvaluationContext extends EvaluationContext:
 
 object EvaluationContext:
   inline private def typeString[T]: String =
-    val types = macros.mapUnionType2[T, String] {
+    val types = macros.mapUnionType[T, String] {
       case _: EvaluatedJValue.JBoolean => "bool"
       case _: EvaluatedJValue.JNull => "null"
       case _: EvaluatedJValue.JString => "string"
@@ -128,16 +128,6 @@ object EvaluationContext:
       types.reverse.tail.fold(s"or ${types.last}") {
         (str, tpe) => s"$tpe, $str"
       }
-
-  private inline def typeStringImp[T]: String =
-    inline compiletime.erasedValue[T] match
-    case _: EvaluatedJValue.JBoolean => "bool"
-    case _: EvaluatedJValue.JNull => "null"
-    case _: EvaluatedJValue.JString => "string"
-    case _: EvaluatedJValue.JNum => "number"
-    case _: EvaluatedJValue.JArray => "array"
-    case _: EvaluatedJValue.JObject => "object"
-    case _: EvaluatedJValue.JFunction => "function"
 
   def typeString(expr: EvaluatedJValue): String =
     expr match
