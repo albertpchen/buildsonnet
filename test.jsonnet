@@ -68,8 +68,12 @@ local aaaaaa(arr) = arr[0:4:2];
   objComp:  {
     local a = 0,
     local b = c,
-    local c = a + std.addOne(3),
+    local c = a + 3,
     local d = "s",
-    [i]: b for i in ["a", "b", "c"]
+    [std.toString(i)]: b for i in ["a", "b", "c"]
   },
+  objObj: std.toString(self.objComp) + 1234,
+  objTpe: std.type(self.objComp),
+  bad: std.length(aaaaaa),
+  asdf: std.get({ a:: 0}, "a", inc_hidden=false)
 } + child

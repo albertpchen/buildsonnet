@@ -42,7 +42,7 @@ object Json {
 
   val pnull = keyword("null").map(JNull(_))
   val ptrue = keyword("true").map(JTrue(_))
-  val pfalse = keyword("false").map(JTrue(_))
+  val pfalse = keyword("false").map(JFalse(_))
   val psuper = keyword("super").map(JSuper(_))
   val self = keyword("self").map(JSelf(_))
 

@@ -122,7 +122,7 @@ object EvaluationContext:
     }
     if types.size == 1 then
       types.head
-    if types.size == 2 then
+    else if types.size == 2 then
       s"${types(0)} or ${types(1)}"
     else
       types.reverse.tail.fold(s"or ${types.last}") {
@@ -140,9 +140,6 @@ object EvaluationContext:
     case _: EvaluatedJValue.JFunction => "function"
 
   extension (ctx: EvaluationContext)
-    inline def typeError[T](expr: EvaluatedJValue): T =
-      ctx.error(expr.src, s"Unexpected type ${typeString(expr)}, expected ${typeString[T]}")
-
     inline def expectBoolean(code: JValue): EvaluatedJValue.JBoolean = expectType[EvaluatedJValue.JBoolean](code)
     inline def expectBoolean(expr: EvaluatedJValue): EvaluatedJValue.JBoolean = expectType[EvaluatedJValue.JBoolean](expr)
     inline def expectNum(code: JValue): EvaluatedJValue.JNum = expectType[EvaluatedJValue.JNum](code)
@@ -166,7 +163,7 @@ object EvaluationContext:
       if expr.isInstanceOf[T] then
         expr.asInstanceOf[T]
       else
-        typeError[T](expr)
+        ctx.error(expr.src, s"Unexpected type ${typeString(expr)}, expected ${typeString[T]}")
 
     inline def expectType[T <: EvaluatedJValue](code: JValue): T =
       expectType[T](evalUnsafe(ctx)(code))

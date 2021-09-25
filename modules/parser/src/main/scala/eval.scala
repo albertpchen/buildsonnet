@@ -397,7 +397,6 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
       })
 
 object Std:
-
   private val ctx = new EvaluationContext.Imp(
     SourceFile.std,
     Map.empty,
@@ -418,9 +417,9 @@ object Std:
       (argName, defaultOpt) <- argNames
     do
       result(i) =
-        if positionalArgs.nonEmpty then
-          if namedArgs.contains(argName) then ctx.error(positionalArgs.head.src, s"multiple values provided for argument $argName")
-          evalUnsafe(ctx)(positionalArgs.head)
+        if i < positionalArgs.size then
+          if namedArgs.contains(argName) then ctx.error(positionalArgs(i).src, s"multiple values provided for argument $argName")
+          evalUnsafe(ctx)(positionalArgs(i))
         else if namedArgs.contains(argName) then
           evalUnsafe(ctx)(namedArgs(argName))
         else if defaultOpt.isDefined then
@@ -448,15 +447,15 @@ object Std:
   val Arg = temp.Arg
 
   private inline def function1[Name1 <: String](
-    arg1: temp.Arg[Name1],
+    arg1: Arg[Name1],
   )(
     fn: (EvaluationContext, Source, EvaluatedJValue) => EvaluatedJValue,
   ): EvaluatedJValue.JFunction =
     EvaluatedJValue.JFunction( Source.Generated, 1, (applyCtx, params) => {
-      val Array(arg) = bindArgs(Seq(
+      val Array(a1) = bindArgs(Seq(
         compiletime.constValue[Name1] -> arg1.default
       ), applyCtx, params)
-      fn(ctx, params.src, arg)
+      fn(applyCtx, params.src, a1)
     })
 
   private inline def function2[
@@ -469,11 +468,11 @@ object Std:
     fn: (EvaluationContext, Source, EvaluatedJValue, EvaluatedJValue) => EvaluatedJValue,
   ): EvaluatedJValue.JFunction =
     EvaluatedJValue.JFunction(Source.Generated, 2, (applyCtx, params) => {
-      val Array(arg1, arg2) = bindArgs(Seq(
-        compiletime.constValue[Name1] -> None,
-        compiletime.constValue[Name2] -> None,
+      val Array(a1, a2) = bindArgs(Seq(
+        compiletime.constValue[Name1] -> arg1.default,
+        compiletime.constValue[Name2] -> arg2.default,
       ), applyCtx, params)
-      fn(ctx, params.src, arg1, arg2)
+      fn(applyCtx, params.src, a1, a2)
     })
 
   private inline def function3[
@@ -488,12 +487,12 @@ object Std:
     fn: (EvaluationContext, Source, EvaluatedJValue, EvaluatedJValue, EvaluatedJValue) => EvaluatedJValue,
   ): EvaluatedJValue.JFunction =
     EvaluatedJValue.JFunction( Source.Generated, 3, (applyCtx, params) => {
-      val Array(arg1, arg2, arg3) = bindArgs(Seq(
-        compiletime.constValue[Name1] -> None,
-        compiletime.constValue[Name2] -> None,
-        compiletime.constValue[Name3] -> None,
+      val Array(a1, a2, a3) = bindArgs(Seq(
+        compiletime.constValue[Name1] -> arg1.default,
+        compiletime.constValue[Name2] -> arg2.default,
+        compiletime.constValue[Name3] -> arg3.default,
       ), applyCtx, params)
-      fn(ctx, params.src, arg1, arg2, arg3)
+      fn(applyCtx, params.src, a1, a2, a3)
     })
 
   private inline def function4[
@@ -510,13 +509,13 @@ object Std:
     fn: (EvaluationContext, Source, EvaluatedJValue, EvaluatedJValue, EvaluatedJValue, EvaluatedJValue) => EvaluatedJValue,
   ): EvaluatedJValue.JFunction =
     EvaluatedJValue.JFunction( Source.Generated, 4, (applyCtx, params) => {
-      val Array(arg1, arg2, arg3, arg4) = bindArgs(Seq(
-        compiletime.constValue[Name1] -> None,
-        compiletime.constValue[Name2] -> None,
-        compiletime.constValue[Name3] -> None,
-        compiletime.constValue[Name4] -> None,
+      val Array(a1, a2, a3, a4) = bindArgs(Seq(
+        compiletime.constValue[Name1] -> arg1.default,
+        compiletime.constValue[Name2] -> arg2.default,
+        compiletime.constValue[Name3] -> arg3.default,
+        compiletime.constValue[Name4] -> arg4.default,
       ), applyCtx, params)
-      fn(ctx, params.src, arg1, arg2, arg3, arg4)
+      fn(applyCtx, params.src, a1, a2, a3, a4)
     })
 
   private def makeObject(
@@ -550,6 +549,7 @@ object Std:
     EvaluatedJValue.JString(src, value)
   }
 
+  private val jnull = EvaluatedJValue.JNull(Source.Generated)
   val obj = makeObject(Map(
     "toString" -> function1(Arg["x"])(toStringImp),
     "type" -> function1(Arg["x"]) { (ctx, src, x) =>
@@ -567,5 +567,18 @@ object Std:
       case e: EvaluatedJValue.JObject => e.members().size
       case e: EvaluatedJValue.JFunction => e.numParams
       EvaluatedJValue.JNum(src, value)
-    }
+    },
+    "get" -> function4(
+        Arg["o"],
+        Arg["f"],
+        Arg["default"](EvaluatedJValue.JNull(Source.Generated)),
+        Arg["inc_hidden"](EvaluatedJValue.JBoolean(Source.Generated, true)),
+    ) { (ctx, src, o, f, default, i) =>
+      val members = ctx.expectObject(o).members()
+      val field = ctx.expectString(f).str
+      val inc_hidden = ctx.expectBoolean(i).value
+      members.get(field).fold(default) { m =>
+        if !inc_hidden && m.isHidden then default else m.evaluated
+      }
+    },
   ))
