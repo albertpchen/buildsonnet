@@ -2,13 +2,13 @@ package root
 
 import scala.quoted.*
 
-opaque type Case[V] = Unit
-
-object Case:
-  def apply[T]: [V] => V => Case[V] =
-    [V] => (e: V) => ()
-
 object macros:
+  opaque type Case[V] = Unit
+
+  object Case:
+    def apply[T]: [V] => V => Case[V] =
+      [V] => (e: V) => ()
+
   def unfoldUnionType(
     quotes: Quotes,
   )(

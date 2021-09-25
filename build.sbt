@@ -1,4 +1,4 @@
-val scala3Version = "3.0.1"
+val scala3Version = "3.0.2"
 
 // project for JVM build (default)
 lazy val parser = project

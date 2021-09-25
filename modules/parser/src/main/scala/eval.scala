@@ -429,22 +429,19 @@ object Std:
       i += 1
     result
 
-  object temp:
-    type ArgTuple[ArgNames] <: Tuple = ArgNames match
-      case EmptyTuple => EmptyTuple
-      case (arg *: tail) => EvaluatedJValue *: ArgTuple[tail]
+  type ArgTuple[ArgNames] <: Tuple = ArgNames match
+    case EmptyTuple => EmptyTuple
+    case (arg *: tail) => EvaluatedJValue *: ArgTuple[tail]
 
-    opaque type Arg[Name] = Option[EvaluatedJValue]
+  opaque type Arg[Name] = Option[EvaluatedJValue]
 
-    object Arg:
-      def apply[Name](default: EvaluatedJValue): Arg[Name] = Some(default)
-      def apply[Name]: Arg[Name] = None
+  import scala.language.dynamics
+  object Arg extends Dynamic:
+    def selectDynamic(name: String): Arg[name.type] = None
+    def applyDynamic(name: String)(default: EvaluatedJValue): Arg[name.type] = Some(default)
 
-    extension [T](arg: Arg[T])
-      def default: Option[EvaluatedJValue] = arg
-
-  type Arg[T] = temp.Arg[T]
-  val Arg = temp.Arg
+  extension [T](arg: Arg[T])
+    def default: Option[EvaluatedJValue] = arg
 
   private inline def function1[Name1 <: String](
     arg1: Arg[Name1],
@@ -462,8 +459,8 @@ object Std:
     Name1 <: String,
     Name2 <: String,
   ](
-    arg1: temp.Arg[Name1],
-    arg2: temp.Arg[Name2],
+    arg1: Arg[Name1],
+    arg2: Arg[Name2],
   )(
     fn: (EvaluationContext, Source, EvaluatedJValue, EvaluatedJValue) => EvaluatedJValue,
   ): EvaluatedJValue.JFunction =
@@ -480,9 +477,9 @@ object Std:
     Name2 <: String,
     Name3 <: String,
   ](
-    arg1: temp.Arg[Name1],
-    arg2: temp.Arg[Name2],
-    arg3: temp.Arg[Name3],
+    arg1: Arg[Name1],
+    arg2: Arg[Name2],
+    arg3: Arg[Name3],
   )(
     fn: (EvaluationContext, Source, EvaluatedJValue, EvaluatedJValue, EvaluatedJValue) => EvaluatedJValue,
   ): EvaluatedJValue.JFunction =
@@ -501,10 +498,10 @@ object Std:
     Name3 <: String,
     Name4 <: String,
   ](
-    arg1: temp.Arg[Name1],
-    arg2: temp.Arg[Name2],
-    arg3: temp.Arg[Name3],
-    arg4: temp.Arg[Name4],
+    arg1: Arg[Name1],
+    arg2: Arg[Name2],
+    arg3: Arg[Name3],
+    arg4: Arg[Name4],
   )(
     fn: (EvaluationContext, Source, EvaluatedJValue, EvaluatedJValue, EvaluatedJValue, EvaluatedJValue) => EvaluatedJValue,
   ): EvaluatedJValue.JFunction =
@@ -550,12 +547,13 @@ object Std:
   }
 
   private val jnull = EvaluatedJValue.JNull(Source.Generated)
+  private val jtrue = EvaluatedJValue.JBoolean(Source.Generated, true)
   val obj = makeObject(Map(
-    "toString" -> function1(Arg["x"])(toStringImp),
-    "type" -> function1(Arg["x"]) { (ctx, src, x) =>
+    "toString" -> function1(Arg.x)(toStringImp),
+    "type" -> function1(Arg.x) { (ctx, src, x) =>
       EvaluatedJValue.JString(src, EvaluationContext.typeString(x))
     },
-    "length" -> function1(Arg["x"]) { (ctx, src, x) =>
+    "length" -> function1(Arg.x) { (ctx, src, x) =>
       val value = ctx.expectType[
         EvaluatedJValue.JArray
         | EvaluatedJValue.JString
@@ -568,17 +566,13 @@ object Std:
       case e: EvaluatedJValue.JFunction => e.numParams
       EvaluatedJValue.JNum(src, value)
     },
-    "get" -> function4(
-        Arg["o"],
-        Arg["f"],
-        Arg["default"](EvaluatedJValue.JNull(Source.Generated)),
-        Arg["inc_hidden"](EvaluatedJValue.JBoolean(Source.Generated, true)),
-    ) { (ctx, src, o, f, default, i) =>
-      val members = ctx.expectObject(o).members()
-      val field = ctx.expectString(f).str
-      val inc_hidden = ctx.expectBoolean(i).value
-      members.get(field).fold(default) { m =>
-        if !inc_hidden && m.isHidden then default else m.evaluated
-      }
+    "get" -> function4(Arg.x, Arg.f, Arg.default(jnull), Arg.inc_hidden(jtrue)) {
+      (ctx, src, o, f, default, i) =>
+        val members = ctx.expectObject(o).members()
+        val field = ctx.expectString(f).str
+        val inc_hidden = ctx.expectBoolean(i).value
+        members.get(field).fold(default) { m =>
+          if !inc_hidden && m.isHidden then default else m.evaluated
+        }
     },
   ))
