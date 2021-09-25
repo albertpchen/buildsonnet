@@ -298,7 +298,7 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
         case (op1, op2: EvaluatedJValue.JString) =>
           EvaluatedJValue.JString(src, Std.toStringImp(ctx, op1.src, op1).str + op2)
         case (left, right) =>
-          ctx.expectType[EvaluatedJValue.JNum | EvaluatedJValue.JObject | EvaluatedJValue.JArray | EvaluatedJValue.JString](left) match
+          ctx.expectType[EvaluatedJValue.JNum | EvaluatedJValue.JObject | EvaluatedJValue.JArray](left) match
             case op1: EvaluatedJValue.JNum =>
               val op2 = ctx.expectNum(right)
               EvaluatedJValue.JNum(src, op1.double + op2.double)
@@ -460,7 +460,7 @@ object Std:
     Name2 <: String,
   ](
     arg1: Arg[Name1],
-    arg2: Arg[Name2],
+    arg2: Arg[Name1],
   )(
     fn: (EvaluationContext, Source, EvaluatedJValue, EvaluatedJValue) => EvaluatedJValue,
   ): EvaluatedJValue.JFunction =
@@ -575,4 +575,17 @@ object Std:
           if !inc_hidden && m.isHidden then default else m.evaluated
         }
     },
+    "cs" -> function3(Arg.org, Arg.name, Arg.version) { (ctx, src, org, name, version) =>
+      import coursier._
+      val files = Fetch()
+        .addDependencies(Dependency(
+          Module(
+            Organization(ctx.expectString(org).str),
+            ModuleName(ctx.expectString(name).str)),
+            ctx.expectString(version).str
+        ))
+        .run()
+      //EvaluatedJValue.JString(src, resolution.minDependencies.map(d => s"${d.module.repr}:${d.version}").mkString("(", ", ", ")"))
+      EvaluatedJValue.JArray(src, files.map(a => EvaluatedJValue.JString(src, a.toString)))
+    }
   ))

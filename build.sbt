@@ -10,6 +10,7 @@ lazy val parser = project
     libraryDependencies ++= Seq(
       "org.typelevel" %% "cats-parse" % "0.3.4",
       "org.scalameta" %%% "munit" % "0.7.26" % Test,
+      ("io.get-coursier" %% "coursier" % "2.0.16").cross(CrossVersion.for3Use2_13),
     ),
     nativeImageOptions ++= List(
       "-H:+ReportExceptionStackTraces",

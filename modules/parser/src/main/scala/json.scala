@@ -3,14 +3,17 @@ package root
 import cats.parse.{Parser0 => P0, Parser => P, Numbers}
 import cats.syntax.all._
 
-object Json {
+object Json:
+  val a = 0
+  import cats.instances.all._
+  import JValue._
+
   extension [T](p: P[T])
     def withRange: P[(Source, T)] =
       (P.index.with1 ~ p ~ P.index).map { case ((start, t), end) =>
         (Source(start, end), t)
       }
 
-  import JValue._
   val whitespace: P[Unit] = P.oneOf(List(
     P.charIn(" \t\r\n").void,
     P.char('#') *> P.charsWhile0(_ != '\n').void,
@@ -99,10 +102,26 @@ object Json {
     head +: tail
   }.?.map(_.getOrElse(List.empty))
 
-  val assert = P.defer {
+  var expr: P[JValue] = null
+  val exprDefer = P.defer(expr)
+  val assert = {
     ((keyword("assert") *> __ *> expr).withRange <* __) ~ (P.char(':') *> __ *> expr).?
   }.map {
     case ((src, cond), msg) => (src, cond, msg)
+  }
+  val ifspec = keyword("if") *> __ *> exprDefer
+  val forspec = (keyword("for") *> id.surroundedBy(__) <* keyword("in")) ~ (__.with1 *> exprDefer)
+  val params: P0[List[(String, Option[JValue])]] = P.defer0 {
+    P.char('(') *> commaList(id.<*(__) ~ (P.char('=') *> __ *> expr).?) <* P.char(')')
+  }
+  val bind: P[(Int, String, Option[JParamList], JValue)] = {
+    (
+      P.index.with1 ~ id.<*(__),
+      params.?.with1 <*(P.char('=').surroundedBy(__)),
+      exprDefer,
+    ).tupled.map { case ((start, name), params, value) =>
+      (start, name, params, value)
+    }
   }
   val objInside: P0[Source => JValue] = P.defer0 {
     val bindLocal: P[JObjMember.JLocal] = (keyword("local") *> whitespaces *> bind).map { (start, id, paramsOpt, expr) =>
@@ -142,39 +161,18 @@ object Json {
       commaList(keyValue).map(members => JValue.JObject(_, members)),
     ))
   }
-  val params: P0[List[(String, Option[JValue])]] = P.defer0 {
-    P.char('(') *> commaList(id.<*(__) ~ (P.char('=') *> __ *> expr).?) <* P.char(')')
-  }
-  val bind: P[(Int, String, Option[JParamList], JValue)] = P.defer {
-    (
-      P.index.with1 ~ id.<*(__),
-      params.?.with1 <*(P.char('=').surroundedBy(__)),
-      expr,
-    ).tupled.map { case ((start, name), params, value) =>
-      (start, name, params, value)
-    }
-  }
-  val forspec = P.defer {
-    (
-      keyword("for") *> id.surroundedBy(__) <* keyword("in"),
-      __.with1 *> expr,
-    ).tupled
-  }
-  val ifspec = P.defer {
-    keyword("if") *> __ *> expr
-  }
 
-  val exprBase: P[JValue] = P.defer {
-    val listComp = (
-      expr,
-      forspec.surroundedBy(__) ~ ifspec.?,
-    ).tupled.map { case (forExpr, ((forVar, inExpr), cond)) =>
-      JArrayComprehension(_, forVar, forExpr, inExpr, cond)
-    }
+  val listComp = (
+    exprDefer,
+    forspec.surroundedBy(__) ~ ifspec.?,
+  ).tupled.map { case (forExpr, ((forVar, inExpr), cond)) =>
+    JArrayComprehension(_, forVar, forExpr, inExpr, cond)
+  }
+  val exprBase: P[JValue] = {
     val list =
       P.oneOf0(List(
         listComp.backtrack,
-        commaList(expr).map(elements => JArray(_, elements)),
+        commaList(exprDefer).map(elements => JArray(_, elements)),
       ))
         .surroundedBy(__)
         .with1
@@ -182,13 +180,13 @@ object Json {
         .withRange
         .map((src, fn) => fn(src))
 
-    val function = (keyword("function") *> __ *> (params <* __) ~ expr).withRange.map {
+    val function = (keyword("function") *> __ *> (params <* __) ~ exprDefer).withRange.map {
       case (range, (params, body)) => JFunction(range, params, body)
     }
     val ifExpr = (
-      (P.index.with1 ~ (keyword("if") *> __ *> expr <* __)) ~
-      (keyword("then") *> __ *> expr <* __) ~
-      (keyword("else") *> __ *> expr).?
+      (P.index.with1 ~ (keyword("if") *> __ *> exprDefer <* __)) ~
+      (keyword("then") *> __ *> exprDefer <* __) ~
+      (keyword("else") *> __ *> exprDefer).?
     ).map { case (((startIdx, cond), trueValue), elseValue) =>
       val src = elseValue.getOrElse(trueValue).src.withStart(startIdx)
       JIf(src, cond, trueValue, elseValue)
@@ -197,19 +195,19 @@ object Json {
       (P.char('{') *> __ *> objInside <* __ <* P.char('}'))
         .withRange
         .map((src, fn) => fn(src))
-    val grouped = P.char('(') *> __ *> expr <* __ <* P.char(')')
+    val grouped = P.char('(') *> __ *> exprDefer <* __ <* P.char(')')
     val local = (
       keyword("local") *> __ *> bind.repSep(__ *> P.char(',') *> __) ~
-      (__ *> P.char(';') *> __ *> expr)
+      (__ *> P.char(';') *> __ *> exprDefer)
     ).withRange.map { case (src, (binds, result)) =>
       binds.toList.foldRight(result) { case ((start, id, paramsOpt, expr), acc) =>
         JLocal(src, id, paramsOpt.fold(expr)(JFunction(expr.src.withStart(start), _, expr)), acc)
       }
     }
-    val error = (keyword("error") *> __ *> expr).withRange.map(JError(_, _))
+    val error = (keyword("error") *> __ *> exprDefer).withRange.map(JError(_, _))
     val importExpr = (keyword("import") *> __ *> string).withRange.map(JImport(_, _))
     val importStrExpr = (keyword("importstr") *> __ *> string).withRange.map(JImportStr(_, _))
-    val assertExp = ((assert <* __ <* P.char(';') <* __) ~ expr).map { case ((src, cond, msg), result) =>
+    val assertExp = ((assert <* __ <* P.char(';') <* __) ~ exprDefer).map { case ((src, cond, msg), result) =>
       JAssert(src, cond, msg, result)
     }
     P.oneOf(List(
@@ -240,13 +238,13 @@ object Json {
     "*", "/", "%", "+", "-", "<", ">", "&", "^", "|", "in",
   )).map(JBinaryOperator(_))
 
-  val args: P0[List[(Option[String], JValue)]] = P.defer0 {
+  val args: P0[List[(Option[String], JValue)]] = {
     val argName = (id <* __ <* P.char('=')).backtrack.?
-    commaList(argName.<*(__).with1 ~ expr)
+    commaList(argName.<*(__).with1 ~ exprDefer)
   }
 
   val unaryOp = P.charIn("+-!~")
-  val exprAtom: P[JValue] = P.defer {
+  val exprAtom: P[JValue] = {
     val suffix: P[JValue => JValue] =
       P.index
         .with1
@@ -257,10 +255,9 @@ object Json {
             (jv: JValue) => JGetField(jv.src.withEnd(end), jv, field)
           }
           case (_, '[') =>
-            val exprOrJNull = expr.?
-            val suffix = P.char(':') *> __ *> exprOrJNull <* __
+            val suffix = P.char(':') *> __ *> exprDefer.? <* __
             (
-              (expr <* __) ~ (suffix ~ suffix.?).?.<*(P.char(']')) ~ P.index
+              (exprDefer <* __) ~ (suffix ~ suffix.?).?.<*(P.char(']')) ~ P.index
             ).map { case ((index, opt), end) =>
               if opt.isEmpty then
                 (jv: JValue) => JIndex(jv.src.withEnd(end), jv, index)
@@ -297,7 +294,7 @@ object Json {
     }
   }
 
-  val expr = P.defer {
+  expr = {
     (exprAtom.<*(__) ~ (op.surroundedBy(__) ~ exprAtom).rep0).map { (head, tail) =>
       var exprs = tail
       def climb(curr: JValue, minPrec: Int): JValue =
@@ -319,16 +316,14 @@ object Json {
       climb(head, 0)
     }
   }
-
-  // any whitespace followed by json followed by whitespace followed by end
   val parserFile = __ *> expr <* __
-}
+
+
 
 @main
-def asdf(args: String*): Unit =
-  import cats.instances.all._
+def asdf(argss: String*): Unit =
   //println((Json.id *> P.char('(') *> Json.exprAtom.surroundedBy(Json.__) <* Json.__ <* P.char(')')).parseAll(args(0)))
-  val filename = args(0)
+  val filename = argss(0)
   val source = scala.io.Source.fromFile(filename).getLines.mkString("\n")
   val sourceFile = SourceFile(filename, source)
   val parser = Json.parserFile
