@@ -663,21 +663,23 @@ object Std:
             }
         }.toJValue
     },
-    "cs" -> function3(Arg.org, Arg.name, Arg.version) { (ctx, src, org, name, version) =>
-      import coursier._
-      given concurrent.ExecutionContext = ctx.executionContext
-      ctx.expectString(org).zip(ctx.expectString(name)).zip(ctx.expectString(version)).flatMap {
-        case ((org, name), version) => Fetch()
-          .addDependencies(Dependency(
-            Module(
-              Organization(org.str),
-              ModuleName(name.str)),
-              version.str
-          ))
-          .future()
-          .map { files =>
-            EvaluatedJValue.JArray(src, files.map(a => EvaluatedJValue.JString(src, a.toString)))
-          }
-      }.toJValue
-    }
+    "scala" -> makeObject(Map(
+      "cs" -> function3(Arg.org, Arg.name, Arg.version) { (ctx, src, org, name, version) =>
+        import coursier._
+        given concurrent.ExecutionContext = ctx.executionContext
+        ctx.expectString(org).zip(ctx.expectString(name)).zip(ctx.expectString(version)).flatMap {
+          case ((org, name), version) => Fetch()
+            .addDependencies(Dependency(
+              Module(
+                Organization(org.str),
+                ModuleName(name.str)),
+                version.str
+            ))
+            .future()
+            .map { files =>
+              EvaluatedJValue.JArray(src, files.map(a => EvaluatedJValue.JString(src, a.toString)))
+            }
+        }.toJValue
+      }
+    ))
   ))
