@@ -35,12 +35,12 @@ object macros:
       case c =>
         report.throwError(s"cases must be type of the form 'case _: Type => expr'")
     }
-    val types = unfoldUnionType(quotes)(TypeRepr.of[T]).toSeq
+    val types = unfoldUnionType(quotes)(TypeRepr.of[T].dealias).toSeq
     val applications = Varargs(types.map { tpe =>
       typeMap.collectFirst {
         case (matchType, value) if tpe <:< matchType =>
           value.asExprOf[V]
-      }.getOrElse(report.throwError(s"invlid type ${tpe.show}, expected one of: ${typeMap.map(_._1.show).mkString(", ")}"))
+      }.getOrElse(report.throwError(s"invalid type ${tpe.show}, expected one of: ${typeMap.map(_._1.show).mkString(", ")}"))
     })
     applications
 

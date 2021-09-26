@@ -124,12 +124,16 @@ enum EvaluatedJValue extends HasSource:
       concurrent.Await.result(f.future, concurrent.duration.Duration.Inf).manifest(ctx)
 
 object EvaluatedJValue:
-  extension (future: concurrent.Future[EvaluatedJValue])
-    def toJValue(using ctx: concurrent.ExecutionContext): EvaluatedJValue =
-      EvaluatedJValue.JFuture(Source.Generated, future.flatMap {
-        case future: EvaluatedJValue.JFuture => future.future
-        case now: EvaluatedJValue.JNow => concurrent.Future(now)
-      })
+  extension [T <: EvaluatedJValue](future: concurrent.Future[T])
+    inline def toJValue(using ctx: concurrent.ExecutionContext): EvaluatedJValue =
+      inline future match
+      case future: concurrent.Future[EvaluatedJValue.JNow] => EvaluatedJValue.JFuture(Source.Generated, future)
+      case future: concurrent.Future[EvaluatedJValue.JFuture] => EvaluatedJValue.JFuture(Source.Generated, future.flatMap(_.future))
+      case future: concurrent.Future[EvaluatedJValue] =>
+        EvaluatedJValue.JFuture(Source.Generated, future.flatMap {
+          case now: EvaluatedJValue.JNow => concurrent.Future(now)
+          case future: EvaluatedJValue.JFuture => future.future
+        })
 
   type JNow = 
     JBoolean
@@ -386,72 +390,94 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
         EvaluatedJValue.JBoolean(src, left.double >= right.double)
       }.toJValue
     case JBinaryOperator.Op_>> =>
-      val rhs = ctx.expectNum(right).double.toLong
-      val shamt =
-        if rhs >= 0 then
-          rhs % 64
-        else
-          ctx.error(right.src, s"shift amount cannot be negative, got $rhs")
-      EvaluatedJValue.JNum(src, (ctx.expectNum(left).double.toLong >> shamt).toDouble)
+      ctx.expectNum(right).zip(ctx.expectNum(left)).map { (right, left) =>
+        val rhs = right.double.toLong
+        val shamt =
+          if rhs >= 0 then
+            rhs % 64
+          else
+            ctx.error(right.src, s"shift amount cannot be negative, got $rhs")
+        EvaluatedJValue.JNum(src, (left.double.toLong >> shamt).toDouble)
+      }.toJValue
     case JBinaryOperator.Op_<< =>
-      val rhs = ctx.expectNum(right).double.toLong
-      val shamt =
-        if rhs >= 0 then
-          rhs % 64
-        else
-          ctx.error(right.src, s"shift amount cannot be negative, got $rhs")
-      EvaluatedJValue.JNum(src, (ctx.expectNum(left).double.toLong << shamt).toDouble)
+      ctx.expectNum(right).zip(ctx.expectNum(left)).map { (right, left) =>
+        val rhs = right.double.toLong
+        val shamt =
+          if rhs >= 0 then
+            rhs % 64
+          else
+            ctx.error(right.src, s"shift amount cannot be negative, got $rhs")
+        EvaluatedJValue.JNum(src, (left.double.toLong << shamt).toDouble)
+      }.toJValue
 
   case JValue.JUnaryOp(src, op, rawOperand) =>
+    given concurrent.ExecutionContext = ctx.executionContext
     op match
     case JUnaryOperator.Op_! =>
-      val operand = ctx.expectBoolean(rawOperand)
-      EvaluatedJValue.JBoolean(src, !operand.value)
-    case JUnaryOperator.Op_+  =>
-      val operand = ctx.expectNum(rawOperand).double
-      EvaluatedJValue.JNum(src, operand)
-    case JUnaryOperator.Op_-  =>
-      val operand = ctx.expectNum(rawOperand).double
-      EvaluatedJValue.JNum(src, -operand)
+      ctx.expectBoolean(rawOperand).map { operand =>
+        EvaluatedJValue.JBoolean(src, !operand.value)
+      }.toJValue
+    case JUnaryOperator.Op_+ => ctx.expectNum(rawOperand).toJValue
+    case JUnaryOperator.Op_- =>
+      ctx.expectNum(rawOperand).map { operand =>
+        EvaluatedJValue.JNum(src, -operand.double)
+      }.toJValue
     case JUnaryOperator.Op_~  =>
-      val operand = ctx.expectNum(rawOperand).double
-      EvaluatedJValue.JNum(src, (~operand.toLong).toDouble)
+      ctx.expectNum(rawOperand).map { operand =>
+        EvaluatedJValue.JNum(src, (~operand.double.toLong).toDouble)
+      }.toJValue
   case JValue.JLocal(_, name, value, result) =>
     evalUnsafe(ctx.bind(name, value))(result)
   case JValue.JFunction(src, params, body) =>
     EvaluatedJValue.JFunction(src, params.size, applyArgs(ctx, src, params, body))
   case JValue.JIf(src, rawCond, trueValue, elseValue) =>
-    val cond = ctx.expectBoolean(rawCond)
-    if cond.value then
-      evalUnsafe(ctx)(trueValue)
-    else
-      elseValue.fold(EvaluatedJValue.JNull(src))(evalUnsafe(ctx))
+    given concurrent.ExecutionContext = ctx.executionContext
+    ctx.expectBoolean(rawCond).map { cond =>
+      if cond.value then
+        evalUnsafe(ctx)(trueValue)
+      else
+        elseValue.fold(EvaluatedJValue.JNull(src))(evalUnsafe(ctx))
+    }.toJValue
   case JValue.JError(src, rawExpr) =>
-    val msg = ctx.expectString(rawExpr)
-    ctx.error(src, msg.str)
+    given concurrent.ExecutionContext = ctx.executionContext
+    ctx.expectString(rawExpr).map { msg =>
+      ctx.error(src, msg.str): EvaluatedJValue.JString
+    }.toJValue
   case JValue.JAssert(src, rawCond, rawMsg, expr) =>
-    val cond = ctx.expectBoolean(rawCond)
-    if !cond.value then
-      val msg = rawMsg.map(msg => ctx.expectString(msg).str)
-      ctx.error(src, msg.getOrElse(s"assertion failed"))
-    evalUnsafe(ctx)(expr)
+    given concurrent.ExecutionContext = ctx.executionContext
+    val msg = rawMsg.fold(Future(Option.empty[String])) { msg => ctx.expectString(msg).map(m => Some(m.str)) }
+    ctx.expectBoolean(rawCond).zip(msg).map { (cond, msgOpt) =>
+      if !cond.value then
+        ctx.error(src, msgOpt.getOrElse(s"assertion failed"))
+      evalUnsafe(ctx)(expr)
+    }.toJValue
   case JValue.JImport(src, file) =>
     ctx.importFile(src, file)
   case JValue.JImportStr(src, file) =>
     ctx.importStr(src, file)
   case JValue.JArrayComprehension(src, forVar, forExpr, inExpr, condOpt) =>
+    given concurrent.ExecutionContext = ctx.executionContext
     if condOpt.isDefined then
       val cond = condOpt.get
-      EvaluatedJValue.JArray(src, ctx.expectArray(inExpr).elements.flatMap { e =>
-        val forCtx = ctx.bindEvaluated(forVar, e)
-        Option.when(forCtx.expectBoolean(cond).value) {
-          evalUnsafe(forCtx)(forExpr)
+      ctx.expectArray(inExpr)
+        .flatMap { array =>
+          Future.sequence(array.elements.map { e =>
+            val forCtx = ctx.bindEvaluated(forVar, e)
+            forCtx.expectBoolean(cond).map { cond =>
+              Option.when(cond.value) {
+                evalUnsafe(forCtx)(forExpr)
+              }
+            }
+          })
         }
-      })
+        .map(elements => EvaluatedJValue.JArray(src, elements.flatten))
+        .toJValue
     else
-      EvaluatedJValue.JArray(src, ctx.expectArray(inExpr).elements.map { e =>
-        evalUnsafe(ctx.bindEvaluated(forVar, e))(forExpr)
-      })
+      ctx.expectArray(inExpr).map { array =>
+        EvaluatedJValue.JArray(src, array.elements.map { e =>
+          evalUnsafe(ctx.bindEvaluated(forVar, e))(forExpr)
+        })
+      }.toJValue
 
 object Std:
   private val ctx = new EvaluationContext.Imp(
@@ -612,41 +638,46 @@ object Std:
       EvaluatedJValue.JString(src, EvaluationContext.typeString(x))
     },
     "length" -> function1(Arg.x) { (ctx, src, x) =>
-      val value = ctx.expectType[
+      given concurrent.ExecutionContext = ctx.executionContext
+      ctx.expectType[
         EvaluatedJValue.JArray
         | EvaluatedJValue.JString
         | EvaluatedJValue.JObject
         | EvaluatedJValue.JFunction
-      ](x) match
-      case e: EvaluatedJValue.JArray => e.elements.size
-      case e: EvaluatedJValue.JString => e.str.size
-      case e: EvaluatedJValue.JObject => e.members().size
-      case e: EvaluatedJValue.JFunction => e.numParams
-      EvaluatedJValue.JNum(src, value)
+      ](x).map {
+        case e: EvaluatedJValue.JArray => e.elements.size
+        case e: EvaluatedJValue.JString => e.str.size
+        case e: EvaluatedJValue.JObject => e.members().size
+        case e: EvaluatedJValue.JFunction => e.numParams
+      }.map {
+        EvaluatedJValue.JNum(src, _)
+      }.toJValue
     },
     "get" -> function4(Arg.x, Arg.f, Arg.default(jnull), Arg.inc_hidden(jtrue)) {
       (ctx, src, o, f, default, i) =>
-        val members = ctx.expectObject(o).members()
-        val field = ctx.expectString(f).str
-        val inc_hidden = ctx.expectBoolean(i).value
-        members.get(field).fold(default) { m =>
-          if !inc_hidden && m.isHidden then default else m.evaluated
-        }
+        given concurrent.ExecutionContext = ctx.executionContext
+        ctx.expectObject(o).zip(ctx.expectString(f)).zip(ctx.expectBoolean(i)).map {
+          case ((members, field), inc_hidden) =>
+            members.members().get(field.str).fold(default) { m =>
+              if !inc_hidden.value && m.isHidden then default else m.evaluated
+            }
+        }.toJValue
     },
     "cs" -> function3(Arg.org, Arg.name, Arg.version) { (ctx, src, org, name, version) =>
       import coursier._
-      implicit val ec = ctx.executionContext
-      val future = Fetch()
-        .addDependencies(Dependency(
-          Module(
-            Organization(ctx.expectString(org).str),
-            ModuleName(ctx.expectString(name).str)),
-            ctx.expectString(version).str
-        ))
-        .future()
-        .map { files =>
-          EvaluatedJValue.JArray(src, files.map(a => EvaluatedJValue.JString(src, a.toString)))
-        }
-      EvaluatedJValue.JFuture(src, future)
+      given concurrent.ExecutionContext = ctx.executionContext
+      ctx.expectString(org).zip(ctx.expectString(name)).zip(ctx.expectString(version)).flatMap {
+        case ((org, name), version) => Fetch()
+          .addDependencies(Dependency(
+            Module(
+              Organization(org.str),
+              ModuleName(name.str)),
+              version.str
+          ))
+          .future()
+          .map { files =>
+            EvaluatedJValue.JArray(src, files.map(a => EvaluatedJValue.JString(src, a.toString)))
+          }
+      }.toJValue
     }
   ))
