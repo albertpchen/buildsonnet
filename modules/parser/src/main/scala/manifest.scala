@@ -7,7 +7,7 @@ enum ManifestedJValue:
   case JNull
   case JString(str: String)
   case JNum(double: Double)
-  case JArray(elements: Vector[ManifestedJValue])
+  case JArray(elements: Seq[ManifestedJValue])
   case JObject(members: Map[String, ManifestedJValue])
 
   override def toString: String =

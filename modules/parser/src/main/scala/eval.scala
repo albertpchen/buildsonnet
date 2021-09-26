@@ -103,25 +103,26 @@ enum EvaluatedJValue extends HasSource:
   case JFunction(src: Source, numParams: Int, fn: (EvaluationContext, EvaluatedJFunctionParameters) => EvaluatedJValue)
   case JFuture(src: Source, future: concurrent.Future[EvaluatedJValue.JNow])
 
-  def manifest(ctx: EvaluationContext): ManifestedJValue =
+  import concurrent.{Await, Future, ExecutionContext, duration}
+  def manifestFuture(ctx: EvaluationContext): Future[ManifestedJValue] =
+    given ExecutionContext = ctx.executionContext
     this match
-    case value: JBoolean => ManifestedJValue.JBoolean(value.value)
-    case value: JNull => ManifestedJValue.JNull
-    case value: JString => ManifestedJValue.JString(value.str)
-    case value: JNum => ManifestedJValue.JNum(value.double)
+    case value: JBoolean => Future(ManifestedJValue.JBoolean(value.value))
+    case value: JNull => Future(ManifestedJValue.JNull)
+    case value: JString => Future(ManifestedJValue.JString(value.str))
+    case value: JNum => Future(ManifestedJValue.JNum(value.double))
     case value: JArray =>
-      val elements = value.elements.foldLeft(Seq.empty[ManifestedJValue]) {
-        (tail, element) => element.manifest(ctx) +: tail
-      }.reverse.toVector
-      ManifestedJValue.JArray(elements)
+      Future.sequence(value.elements.map(_.manifestFuture(ctx))).map(ManifestedJValue.JArray(_))
     case obj: JObject =>
-      val members = obj.members().toSeq.sortBy(_._1).foldLeft(Seq.empty[(String, ManifestedJValue)]) {
-        case (tail, (key, value)) => (key -> value.evaluated.manifest(ctx)) +: tail
-      }.reverse.toMap
-      ManifestedJValue.JObject(members)
+      val members = obj.members().map { (key, value) =>
+        value.evaluated.manifestFuture(ctx).map(key -> _)
+      }
+      Future.sequence(members).map(members => ManifestedJValue.JObject(members.toMap))
     case fn: JFunction => ctx.error(fn.src, "cannot manifest function")
-    case f: JFuture =>
-      concurrent.Await.result(f.future, concurrent.duration.Duration.Inf).manifest(ctx)
+    case f: JFuture => f.future.map(_.manifest(ctx))
+
+  def manifest(ctx: EvaluationContext): ManifestedJValue =
+      Await.result(manifestFuture(ctx), duration.Duration.Inf)
 
 object EvaluatedJValue:
   extension [T <: EvaluatedJValue](future: concurrent.Future[T])
@@ -544,7 +545,7 @@ object Std:
     Name2 <: String,
   ](
     arg1: Arg[Name1],
-    arg2: Arg[Name1],
+    arg2: Arg[Name2],
   )(
     fn: (EvaluationContext, Source, EvaluatedJValue, EvaluatedJValue) => EvaluatedJValue,
   ): EvaluatedJValue.JFunction =
@@ -662,6 +663,17 @@ object Std:
               if !inc_hidden.value && m.isHidden then default else m.evaluated
             }
         }.toJValue
+    },
+    "trace" -> function2(Arg.str, Arg.rest) { (ctx, src, str, rest) =>
+      given concurrent.ExecutionContext = ctx.executionContext
+      ctx.expectString(str).map { str =>
+        val file = ctx.file
+        val lineNum = src match
+        case Source.Range(start, _) => ":" + file.getLineCol(start)._1
+        case _ => ""
+        println(s"TRACE: ${file.path}$lineNum: ${str.str}")
+        rest
+      }.toJValue
     },
     "scala" -> makeObject(Map(
       "cs" -> function3(Arg.org, Arg.name, Arg.version) { (ctx, src, org, name, version) =>
