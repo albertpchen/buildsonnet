@@ -182,6 +182,11 @@ enum Source:
     case Range(start, end) => Range(start, newEnd)
     case Generated => Generated
 
+  def merge(other: Source): Source =
+    (this, other) match
+    case (Range(start, _), Range(_, end)) => Range(start, end)
+    case _ => this
+
 object Source:
   def apply(start: Int, end: Int): Source.Range =
     Source.Range(start, end)

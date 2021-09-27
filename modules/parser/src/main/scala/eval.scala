@@ -15,7 +15,7 @@ sealed trait EvaluatedJObject:
       _members =
         if ctx.hasSuper then
           val superMembers = ctx.`super`(Source.Generated).members()
-          superMembers ++ cache.map { (k, v) =>
+          val hereMembers = cache.map { (k, v) =>
             val newValue =
               if superMembers.contains(k) && superMembers(k).isHidden && !v.isHidden then
                 v.withHidden(superMembers(k).isHidden)
@@ -23,6 +23,7 @@ sealed trait EvaluatedJObject:
                 v
             k -> newValue
           }
+          superMembers ++ hereMembers
         else
           cache
     _members
@@ -168,7 +169,6 @@ object EvaluatedJValue:
 
   extension (arr: EvaluatedJValue.JArray)
     def index(src: Source, ctx: EvaluationContext, idx: Int, endIdxOpt: Option[Int], strideOpt: Option[Int]): EvaluatedJValue =
-      // println(s"$idx, $endIdxOpt, $strideOpt")
       if idx < 0 || endIdxOpt.exists(_ < 0) || strideOpt.exists(_ < 0) then
         ctx.error(src, s"negative index, end, or stride are not allowed")
       val size = arr.elements.size
@@ -365,7 +365,7 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
           val parent: EvaluatedJValue.JObject = op1.withCtx(ctx = () => parentCtx)
           var resultCtx: ObjectEvaluationContext = null
           val result: EvaluatedJValue.JObject = op2.withCtx(ctx = () => resultCtx)
-          resultCtx = op2.ctx.withSelf(result).withParent(parent)
+          resultCtx = op2.ctx.withSelf(result).withSuper(parent)
           parentCtx = op1.ctx.withSelf(result)
           result
         case (op1: EvaluatedJValue.JArray, op2: EvaluatedJValue.JArray) =>
@@ -463,10 +463,8 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
         ctx.error(src, msgOpt.getOrElse(s"assertion failed"))
       evalUnsafe(ctx)(expr)
     }.toJValue
-  case JValue.JImport(src, file) =>
-    ctx.importFile(src, file)
-  case JValue.JImportStr(src, file) =>
-    ctx.importStr(src, file)
+  case JValue.JImport(src, file) => ctx.`import`(src, file)
+  case JValue.JImportStr(src, file) => ctx.importStr(src, file)
   case JValue.JArrayComprehension(src, forVar, forExpr, inExpr, condOpt) =>
     given concurrent.ExecutionContext = ctx.executionContext
     if condOpt.isDefined then
@@ -493,6 +491,7 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
 
 object Std:
   private val ctx = new EvaluationContext.Imp(
+    Importer.std,
     SourceFile.std,
     Map.empty,
     List.empty,
@@ -544,7 +543,7 @@ object Std:
   )(
     fn: (EvaluationContext, Source, EvaluatedJValue) => EvaluatedJValue,
   ): EvaluatedJValue.JFunction =
-    EvaluatedJValue.JFunction( Source.Generated, 1, (applyCtx, params) => {
+    EvaluatedJValue.JFunction(Source.Generated, 1, (applyCtx, params) => {
       val Array(a1) = bindArgs(Seq(
         compiletime.constValue[Name1] -> arg1.default
       ), applyCtx, params)
@@ -626,7 +625,7 @@ object Std:
     )
     objCtx = EvaluationContext.ObjectImp(
       obj,
-      None,
+      collection.immutable.Queue.empty,
       ctx,
       Map.empty,
       List.empty,

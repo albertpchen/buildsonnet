@@ -1,5 +1,52 @@
 package root
 
+sealed trait Importer:
+  def `import`(ctx: EvaluationContext, src: Source, fileName: String): EvaluatedJValue
+  def importStr(ctx: EvaluationContext, src: Source, fileName: String): EvaluatedJValue.JString
+
+object Importer:
+  private[root] val std: Importer = new Importer:
+    def `import`(ctx: EvaluationContext, src: Source, fileName: String) = throw new Exception("internal error, std context import should never be called")
+    def importStr(ctx: EvaluationContext, src: Source, fileName: String) = throw new Exception("internal error, std context importStr should never be called")
+
+  def apply(): Importer = new Importer:
+    private val cache = new collection.concurrent.TrieMap[String, EvaluatedJValue]()
+    private val strCache = new collection.concurrent.TrieMap[String, String]()
+    def `import`(ctx: EvaluationContext, src: Source, fileName: String): EvaluatedJValue =
+      val currFile = new java.io.File(ctx.file.path)
+      val currFileParent = 
+        currFile
+          .toPath
+          .getParent
+      val importFile =
+        (if currFileParent eq null then new java.io.File(fileName).toPath else currFileParent.resolve(fileName))
+          .normalize()
+          .toFile
+      if importFile == currFile then
+        ctx.error(src, s"file $importFile imports itself")
+      val normalized = importFile.toString
+      cache.getOrElseUpdate(normalized, {
+        val source = scala.io.Source.fromFile(normalized).getLines.mkString("\n")
+        Json.parserFile.parseAll(source).fold(
+          error => ctx.error(src, error.toString),
+          ast => {
+            given concurrent.ExecutionContext = ctx.executionContext
+            val sourceFile = SourceFile(normalized, source)
+            val newCtx = EvaluationContext(sourceFile).bindEvaluated("std", Std.obj)
+            evalUnsafe(newCtx)(ast)
+          }
+        )
+      })
+
+    def importStr(ctx: EvaluationContext, src: Source, fileName: String): EvaluatedJValue.JString =
+      val currFile = new java.io.File(ctx.file.path)
+      val normalized = currFile.toPath.resolve(fileName).normalize().toFile.toString
+      val contents = strCache.getOrElseUpdate(normalized, {
+        val source = scala.io.Source.fromFile(normalized).getLines.mkString("\n")
+        source
+      })
+      EvaluatedJValue.JString(src, contents)
+
 sealed trait LazyValue:
   def evaluated: EvaluatedJValue
 
@@ -12,16 +59,19 @@ object LazyValue:
     new LazyValue:
       @scala.annotation.threadUnsafe
       lazy val evaluated: EvaluatedJValue = evalUnsafe(ctx)(code)
+      override def toString = code.toString
 
   def strict(value: EvaluatedJValue): LazyValue =
     new LazyValue:
       val evaluated: EvaluatedJValue = value
+      override def toString = value.toString
 
   def strictObject(value: EvaluatedJValue, hidden: Boolean): LazyObjectValue =
     new LazyObjectValue:
       val isHidden = hidden
       def withHidden(isHidden: Boolean) = strictObject(value, isHidden)
       val evaluated: EvaluatedJValue = value
+      override def toString = value.toString
 
   private def withHiddenImp(newIsHidden: Boolean, lazyVal: LazyObjectValue): LazyObjectValue =
     if newIsHidden ^ lazyVal.isHidden then
@@ -29,6 +79,7 @@ object LazyValue:
         val isHidden = newIsHidden
         def evaluated = lazyVal.evaluated
         def withHidden(isHidden: Boolean) = withHiddenImp(isHidden, this)
+        override def toString = lazyVal.toString
     else
       lazyVal
 
@@ -40,6 +91,7 @@ object LazyValue:
       lazy val evaluated: EvaluatedJValue = evalUnsafe(ctx)(code)
 
       def withHidden(hidden: Boolean) = withHiddenImp(hidden, this)
+      override def toString = code.toString
 
 enum ExprMapper[T <: EvaluatedJValue.JNow]:
   case Future(ctx: concurrent.ExecutionContext, future: concurrent.Future[T])
@@ -98,6 +150,13 @@ object EvaluationError:
 sealed trait EvaluationContext:
   def executionContext: concurrent.ExecutionContext
   def file: SourceFile
+
+  protected def importer: Importer
+  final def `import`(src: Source, fileName: String): EvaluatedJValue =
+    importer.`import`(this, src, fileName)
+  final def importStr(src: Source, fileName: String): EvaluatedJValue.JString =
+    importer.importStr(this, src, fileName)
+
   def error(src: Source, message: String): Nothing
   def lookup(src: Source, id: String): LazyValue
   def objectCtx(obj: EvaluatedJValue.JObject): ObjectEvaluationContext
@@ -105,8 +164,6 @@ sealed trait EvaluationContext:
   def bind(id: String, value: JValue): EvaluationContext
   def bindEvaluated(id: String, value: EvaluatedJValue): EvaluationContext
   def bindWithCtx(id: String, ctx: EvaluationContext, value: JValue): EvaluationContext
-  def importFile(src: Source, fileName: String): EvaluatedJValue
-  def importStr(src: Source, fileName: String): EvaluatedJValue.JString
   def self(src: Source): EvaluatedJValue.JObject
   def `super`(src: Source): EvaluatedJValue.JObject
   def hasSuper: Boolean
@@ -116,7 +173,7 @@ sealed trait ObjectEvaluationContext extends EvaluationContext:
   def bind(id: String, value: JValue): ObjectEvaluationContext
   def bindEvaluated(id: String, value: EvaluatedJValue): ObjectEvaluationContext
   def withSelf(self: EvaluatedJValue.JObject): ObjectEvaluationContext
-  def withParent(self: EvaluatedJValue.JObject): ObjectEvaluationContext
+  def withSuper(self: EvaluatedJValue.JObject): ObjectEvaluationContext
   def withStackEntry(entry: StackEntry): ObjectEvaluationContext
 
 object EvaluationContext:
@@ -192,10 +249,11 @@ object EvaluationContext:
       expectType[T](evalUnsafe(ctx)(code))
 
   private[root] case class Imp(
-    val file: SourceFile,
-    val scope: Map[String, LazyValue],
-    val stack: List[StackEntry],
-    val executionContext: concurrent.ExecutionContext,
+    val importer: Importer,
+    file: SourceFile,
+    scope: Map[String, LazyValue],
+    stack: List[StackEntry],
+    executionContext: concurrent.ExecutionContext,
   ) extends EvaluationContext:
     def error(src: Source, message: String): Nothing = throw new EvaluationError(file, src, message, stack)
 
@@ -207,7 +265,7 @@ object EvaluationContext:
     def objectCtx(obj: EvaluatedJValue.JObject): ObjectEvaluationContext =
       new ObjectImp(
         obj,
-        None,
+        collection.immutable.Queue.empty,
         this,
         Map.empty,
         stack,
@@ -228,9 +286,6 @@ object EvaluationContext:
       val newScope = scope + (id -> LazyValue(ctx, value))
       this.copy(scope = newScope)
 
-    def importFile(src: Source, fileName: String): EvaluatedJValue = ???
-    def importStr(src: Source, fileName: String): EvaluatedJValue.JString = ???
-
     def self(src: Source): EvaluatedJValue.JObject = error(src, "no self")
     def `super`(src: Source): EvaluatedJValue.JObject = error(src, "no super")
     def hasSuper: Boolean = false
@@ -238,20 +293,18 @@ object EvaluationContext:
 
   private[root] case class ObjectImp(
     selfObj: EvaluatedJValue.JObject,
-    superOpt: Option[EvaluatedJValue.JObject],
+    superChain: collection.immutable.Queue[EvaluatedJValue.JObject],
     topCtx: Imp,
     locals: Map[String, JValue | EvaluatedJValue | LazyValue],
     stack: List[StackEntry],
   ) extends ObjectEvaluationContext:
-    def executionContext = topCtx.executionContext
+    export topCtx.{importer, file, executionContext}
 
-    def file = topCtx.file
     def self(src: Source) = selfObj
-    def `super`(src: Source) = superOpt.getOrElse(topCtx.`super`(src))
-    def hasSuper: Boolean = superOpt.isDefined
+    def `super`(src: Source) = superChain.headOption.getOrElse(topCtx.`super`(src))
+    def hasSuper: Boolean = superChain.headOption.isDefined
 
     def error(src: Source, message: String): Nothing = throw new EvaluationError(file, src, message, stack)
-    export topCtx.importStr, topCtx.importFile
 
     @scala.annotation.threadUnsafe
     lazy val cache = collection.mutable.HashMap[String, EvaluatedJValue]()
@@ -269,7 +322,7 @@ object EvaluationContext:
     def objectCtx(obj: EvaluatedJValue.JObject): ObjectEvaluationContext =
       new ObjectImp(
         obj,
-        None,
+        collection.immutable.Queue.empty,
         topCtx.copy(scope = topCtx.scope ++ scope),
         Map.empty,
         stack,
@@ -281,11 +334,8 @@ object EvaluationContext:
     def withSelf(newSelf: EvaluatedJValue.JObject) =
       if `self` == newSelf then this else this.copy(selfObj = newSelf)
 
-    def withParent(parent: EvaluatedJValue.JObject) =
-      if superOpt.isDefined && superOpt.get == parent then
-        this
-      else
-        this.copy(superOpt = Some(parent))
+    def withSuper(parent: EvaluatedJValue.JObject) =
+        this.copy(superChain = superChain :+ parent)
 
     def bind(id: String, value: JValue) =
       this.copy(locals = locals + (id -> value))
@@ -300,4 +350,4 @@ object EvaluationContext:
       this.copy(stack = entry +: stack)
 
   def apply(file: SourceFile)(implicit executionContext: concurrent.ExecutionContext): EvaluationContext =
-    Imp(file, Map.empty, List.empty, executionContext)
+    Imp(Importer(), file, Map.empty, List.empty, executionContext)

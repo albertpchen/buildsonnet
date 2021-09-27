@@ -296,6 +296,7 @@ object Json:
 
   expr = {
     (exprAtom.<*(__) ~ (op.surroundedBy(__) ~ exprAtom).rep0).map { (head, tail) =>
+      val tailSize = tail.size
       var exprs = tail
       def climb(curr: JValue, minPrec: Int): JValue =
         var result = curr
@@ -309,7 +310,7 @@ object Json:
               val nextPrec = if op.isLeftAssociative then minPrec + 1 else minPrec
               exprs = exprs.tail
               val rhs = climb(expr, nextPrec)
-              result = JBinaryOp(Source.Generated, result, op, rhs)
+              result = JBinaryOp(result.src.merge(rhs.src), result, op, rhs)
             cond
         do ()
         result
@@ -322,7 +323,6 @@ object Json:
 
 @main
 def asdf(argss: String*): Unit =
-  //println((Json.id *> P.char('(') *> Json.exprAtom.surroundedBy(Json.__) <* Json.__ <* P.char(')')).parseAll(args(0)))
   val filename = argss(0)
   val source = scala.io.Source.fromFile(filename).getLines.mkString("\n")
   val sourceFile = SourceFile(filename, source)
