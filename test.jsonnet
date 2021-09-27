@@ -75,9 +75,12 @@ local aaaaaa(arr) = arr[0:4:2];
   objObj: std.toString(self.objComp) + 1234,
   objTpe: std.type(self.objComp),
   bad: std.length(aaaaaa),
-  asdf: std.get({ a:: 0}, "a", inc_hidden=false),
+  // asdf: std.get({ a:: 0}, "a", inc_hidden=false),
   // cs: ["asdfasdf"] + std.scala.cs("org.tpolecat", "doobie-core_2.12", "0.6.0"),
   // css: std.scala.cs("org.typelevel", "cats-core_2.11", "0.6.0"),
+  cs: std.scala.cs([
+    { org: "org.typelevel", name:"cats-core_2.11", version:"0.6.0"},
+  ]),
   p1: [
     std.trace("P1: 1", 0),
     std.trace("P1: 2", 0),
@@ -96,4 +99,5 @@ local aaaaaa(arr) = arr[0:4:2];
     std.trace("P2: 6", 0),
     std.trace("P2: 7", 0),
   ],
+  //file: std.thisFile
 } + child

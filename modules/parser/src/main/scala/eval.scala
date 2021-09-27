@@ -114,8 +114,8 @@ enum EvaluatedJValue extends HasSource:
     case value: JArray =>
       Future.sequence(value.elements.map(_.manifestFuture(ctx))).map(ManifestedJValue.JArray(_))
     case obj: JObject =>
-      val members = obj.members().map { (key, value) =>
-        value.evaluated.manifestFuture(ctx).map(key -> _)
+      val members = obj.members().collect {
+        case (key, value) if !value.isHidden => value.evaluated.manifestFuture(ctx).map(key -> _)
       }
       Future.sequence(members).map(members => ManifestedJValue.JObject(members.toMap))
     case fn: JFunction => ctx.error(fn.src, "cannot manifest function")
@@ -664,6 +664,26 @@ object Std:
             }
         }.toJValue
     },
+    "objectHas" -> function2(Arg.o, Arg.f) { (ctx, src, o, f) =>
+      given concurrent.ExecutionContext = ctx.executionContext
+      ctx.expectObject(o).zip(ctx.expectString(f)).map { (o, f) =>
+        EvaluatedJValue.JBoolean(src, o.members().contains(f.str))
+      }.toJValue
+    },
+    "objectFields" -> function1(Arg.o) { (ctx, src, o) =>
+      given concurrent.ExecutionContext = ctx.executionContext
+      ctx.expectObject(o).map { o =>
+        // EvaluatedJValue.JArray(src, o.members().keys.toSeq.sorted) // BUG
+        val keys =
+          o
+            .members()
+            .keys
+            .map(EvaluatedJValue.JString(src, _): EvaluatedJValue.JString)
+            .toSeq
+            .sortBy(_.str)
+        EvaluatedJValue.JArray(src, keys)
+      }.toJValue
+    },
     "trace" -> function2(Arg.str, Arg.rest) { (ctx, src, str, rest) =>
       given concurrent.ExecutionContext = ctx.executionContext
       ctx.expectString(str).map { str =>
@@ -676,22 +696,18 @@ object Std:
       }.toJValue
     },
     "scala" -> makeObject(Map(
-      "cs" -> function3(Arg.org, Arg.name, Arg.version) { (ctx, src, org, name, version) =>
-        import coursier._
+      "cs" -> function1(Arg.deps) { (ctx, src, deps) =>
+        import coursier.{Dependency, Fetch, Module, ModuleName, Organization}
         given concurrent.ExecutionContext = ctx.executionContext
-        ctx.expectString(org).zip(ctx.expectString(name)).zip(ctx.expectString(version)).flatMap {
-          case ((org, name), version) => Fetch()
-            .addDependencies(Dependency(
-              Module(
-                Organization(org.str),
-                ModuleName(name.str)),
-                version.str
-            ))
+        JDecoder[Seq[CoursierDependency]].decode(ctx, deps).flatMap { deps =>
+          Fetch()
+            .withDependencies(deps.map(_.toDependency))
+            // .addDependencies(params.deps.map(_.toDependency)) // BUG
             .future()
             .map { files =>
               EvaluatedJValue.JArray(src, files.map(a => EvaluatedJValue.JString(src, a.toString)))
             }
         }.toJValue
-      }
+      },
     ))
   ))
