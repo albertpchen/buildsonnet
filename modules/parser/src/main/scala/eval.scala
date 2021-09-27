@@ -60,25 +60,29 @@ object EvaluatedJObject:
       implicit val ec = ctx.executionContext
       val result = collection.mutable.HashMap[String, LazyObjectValue]()
       val futures = rawMembers.map { case JObjMember.JField(src, rawKey, plus, isHidden, value) =>
-        ctx.expectFieldName(rawKey).map { expr =>
-          val key = expr.str
-          val valueCtx = ctx.withStackEntry(StackEntry.objectField(ctx.file, value.src))
-          if plus then
-            key -> LazyValue(
-              valueCtx,
-              JValue.JBinaryOp(
-                src,
-                JValue.JGetField(src, JValue.JSuper(src), key),
-                JBinaryOperator.Op_+,
-                value
-              ),
-              isHidden
-            )
-          else
-            key -> LazyValue(valueCtx, value, isHidden)
+        ctx.expectFieldName(rawKey).map {
+          case _: EvaluatedJValue.JNull => None
+          case expr: EvaluatedJValue.JString =>
+            val key = expr.str
+            val valueCtx = ctx.withStackEntry(StackEntry.objectField(ctx.file, value.src))
+            Some(
+              if plus then
+                key -> LazyValue(
+                  valueCtx,
+                  JValue.JBinaryOp(
+                    src,
+                    JValue.JGetField(src, JValue.JSuper(src), key),
+                    JBinaryOperator.Op_+,
+                    value
+                  ),
+                  isHidden
+                )
+              else
+                key -> LazyValue(valueCtx, value, isHidden)
+          )
         }
       }
-      concurrent.Await.result(concurrent.Future.sequence(futures).map(_.toMap), concurrent.duration.Duration.Inf)
+      concurrent.Await.result(concurrent.Future.sequence(futures).map(_.flatten.toMap), concurrent.duration.Duration.Inf)
     }
 
 final class EvaluatedJFunctionParameters(
@@ -102,6 +106,11 @@ enum EvaluatedJValue extends HasSource:
   case JObject(src: Source, imp: EvaluatedJObject) extends EvaluatedJValue
   case JFunction(src: Source, numParams: Int, fn: (EvaluationContext, EvaluatedJFunctionParameters) => EvaluatedJValue)
   case JFuture(src: Source, future: concurrent.Future[EvaluatedJValue.JNow])
+
+  def isNull: Boolean =
+    this match
+    case _: JNull => true
+    case _ => false
 
   import concurrent.{Await, Future, ExecutionContext, duration}
   def manifestFuture(ctx: EvaluationContext): Future[ManifestedJValue] =
@@ -265,8 +274,9 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
         val cond = condOpt.get
         Future.sequence(arr.elements.map { e =>
           val forCtx = ctx.bindEvaluated(forVar, e)
-          forCtx.expectFieldName(rawKey).zip(ctx.expectBoolean(cond)).map { (key, cond) => 
-            Option.when(cond.value) {
+          forCtx.expectFieldName(rawKey).zip(ctx.expectBoolean(cond)).map {
+            case (_: EvaluatedJValue.JNull, _) => None
+            case (key: EvaluatedJValue.JString, cond) => Option.when(cond.value) {
               key.str -> evalUnsafe(forCtx)(inExpr)
             }
           }
@@ -274,10 +284,11 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
       else
         Future.sequence(arr.elements.map { e =>
           val forCtx = ctx.bindEvaluated(forVar, e)
-          forCtx.expectFieldName(rawKey).map { key =>
-            key.str -> evalUnsafe(forCtx)(inExpr)
+          forCtx.expectFieldName(rawKey).map {
+            case _: EvaluatedJValue.JNull => None
+            case key: EvaluatedJValue.JString => Some(key.str -> evalUnsafe(forCtx)(inExpr))
           }
-        })
+        }).map(_.flatten)
     }
     val obj: EvaluatedJValue.JObject = EvaluatedJValue.JObject(
       src,

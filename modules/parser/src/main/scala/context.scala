@@ -159,9 +159,9 @@ object EvaluationContext:
     inline def expectNum(expr: EvaluatedJValue): Future[EvaluatedJValue.JNum] = expectType[EvaluatedJValue.JNum](expr)
     inline def expectString(code: JValue): Future[EvaluatedJValue.JString] = expectType[EvaluatedJValue.JString](code)
     inline def expectString(expr: EvaluatedJValue): Future[EvaluatedJValue.JString] = expectType[EvaluatedJValue.JString](expr)
-    inline def expectFieldName(code: JValue): Future[EvaluatedJValue.JString] =
+    inline def expectFieldName(code: JValue): Future[EvaluatedJValue.JString | EvaluatedJValue.JNull] =
       val expr = evalUnsafe(ctx)(code)
-      expectType[EvaluatedJValue.JString](expr, s"Field name must be string, got ${typeString(expr)}")
+      expectType[EvaluatedJValue.JString | EvaluatedJValue.JNull](expr, s"Field name must be string or null, got ${typeString(expr)}")
     inline def expectArray(code: JValue): Future[EvaluatedJValue.JArray] = expectType[EvaluatedJValue.JArray](code)
     inline def expectArray(expr: EvaluatedJValue): Future[EvaluatedJValue.JArray] = expectType[EvaluatedJValue.JArray](expr)
     inline def expectObject(code: JValue): Future[EvaluatedJValue.JObject] = expectType[EvaluatedJValue.JObject](code)
@@ -169,7 +169,7 @@ object EvaluationContext:
     inline def expectFunction(code: JValue): Future[EvaluatedJValue.JFunction] = expectType[EvaluatedJValue.JFunction](code)
     inline def expectFunction(expr: EvaluatedJValue): Future[EvaluatedJValue.JFunction] = expectType[EvaluatedJValue.JFunction](expr)
 
-    inline def expectType[T <: EvaluatedJValue](expr: EvaluatedJValue, msg: String): Future[T] =
+    inline def expectType[T <: EvaluatedJValue.JNow](expr: EvaluatedJValue, msg: String): Future[T] =
       implicit val ec = ctx.executionContext
       expr match
       case t: T => Future(t)
@@ -179,7 +179,7 @@ object EvaluationContext:
       }
       case _ => ctx.error(expr.src, msg)
 
-    inline def expectType[T <: EvaluatedJValue](expr: EvaluatedJValue): Future[T] =
+    inline def expectType[T <: EvaluatedJValue.JNow](expr: EvaluatedJValue): Future[T] =
       expectType[T](expr, s"Unexpected type ${typeString(expr)}, expected ${typeString[T]}")
 
     // inline def expectType[T <: EvaluatedJValue](expr: EvaluatedJValue): T =
@@ -188,7 +188,7 @@ object EvaluationContext:
     //   else
     //     ctx.error(expr.src, s"Unexpected type ${typeString(expr)}, expected ${typeString[T]}")
 
-    inline def expectType[T <: EvaluatedJValue](code: JValue): Future[T] =
+    inline def expectType[T <: EvaluatedJValue.JNow](code: JValue): Future[T] =
       expectType[T](evalUnsafe(ctx)(code))
 
   private[root] case class Imp(
