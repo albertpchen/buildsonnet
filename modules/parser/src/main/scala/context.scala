@@ -175,6 +175,7 @@ sealed trait ObjectEvaluationContext extends EvaluationContext:
   def withSelf(self: EvaluatedJValue.JObject): ObjectEvaluationContext
   def withSuper(self: EvaluatedJValue.JObject): ObjectEvaluationContext
   def withStackEntry(entry: StackEntry): ObjectEvaluationContext
+  def superChain: collection.immutable.Queue[EvaluatedJValue.JObject]
 
 object EvaluationContext:
   inline private def typeString[T]: String =
@@ -335,7 +336,7 @@ object EvaluationContext:
       if `self` == newSelf then this else this.copy(selfObj = newSelf)
 
     def withSuper(parent: EvaluatedJValue.JObject) =
-        this.copy(superChain = superChain :+ parent)
+      this.copy(superChain = superChain :+ parent)
 
     def bind(id: String, value: JValue) =
       this.copy(locals = locals + (id -> value))

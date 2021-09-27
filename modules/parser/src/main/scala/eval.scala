@@ -1,31 +1,46 @@
 package root
 
+import concurrent.{ExecutionContext, Future}
+
 sealed trait EvaluatedJObject:
   def ctx: ObjectEvaluationContext
-  protected def cache: collection.Map[String, LazyObjectValue]
+  protected def cache: Future[collection.Map[String, LazyObjectValue]]
 
   def withCtx(newCtx: () => ObjectEvaluationContext): EvaluatedJObject
 
-  def lookup(src: Source, field: String): LazyValue =
-    cache.getOrElse(field, ctx.error(src, s"object missing field $field"))
+  def lookup(src: Source, field: String): Future[LazyValue] =
+    given ExecutionContext = ctx.executionContext
+    cache.map(_.getOrElse(field, ctx.error(src, s"object missing field $field")))
 
-  private var _members: collection.Map[String, LazyObjectValue] = null
-  def members(): collection.Map[String, LazyObjectValue] =
-    if _members == null then
-      _members =
-        if ctx.hasSuper then
-          val superMembers = ctx.`super`(Source.Generated).members()
-          val hereMembers = cache.map { (k, v) =>
-            val newValue =
-              if superMembers.contains(k) && superMembers(k).isHidden && !v.isHidden then
-                v.withHidden(superMembers(k).isHidden)
-              else
-                v
-            k -> newValue
-          }
-          superMembers ++ hereMembers
-        else
-          cache
+  private lazy val _members: Future[collection.Map[String, LazyObjectValue]] =
+    val members = new collection.mutable.HashMap[String, LazyObjectValue]()
+    given ExecutionContext = ctx.executionContext
+    val superMembers = ctx.superChain.foldLeft(Future(members)) { (members, s) =>
+      members.zip(s.members()).map { (members, sMembers) =>
+        sMembers.foreach { (k, v) =>
+          val newValue =
+            if members.contains(k) && members(k).isHidden && !v.isHidden then
+              v.withHidden(members(k).isHidden)
+            else
+              v
+          members(k) = newValue
+        }
+        members
+      }
+    }
+    superMembers.zip(cache).map { (members, cache) =>
+      cache.foreach { (k, v) =>
+        val newValue =
+          if members.contains(k) && members(k).isHidden && !v.isHidden then
+            v.withHidden(members(k).isHidden)
+          else
+            v
+        members(k) = newValue
+      }
+      members
+    }
+
+  def members(): Future[collection.Map[String, LazyObjectValue]] =
     _members
 
 object EvaluatedJObject:
@@ -41,11 +56,10 @@ object EvaluatedJObject:
 
     lazy val cache = {
       implicit val ec = ctx.executionContext
-      val future = arrayElementsFuture.map(_.map { (key, e) =>
+      arrayElementsFuture.map(_.map { (key, e) =>
         val valueCtx = ctx.bindEvaluated(forVar, e).withStackEntry(StackEntry.objectField(ctx.file, value.src))
         key -> LazyValue(valueCtx, value, false)
       }.toMap)
-      concurrent.Await.result(future, concurrent.duration.Duration.Inf)
     }
 
   def apply(
@@ -59,7 +73,6 @@ object EvaluatedJObject:
 
     lazy val cache = {
       implicit val ec = ctx.executionContext
-      val result = collection.mutable.HashMap[String, LazyObjectValue]()
       val futures = rawMembers.map { case JObjMember.JField(src, rawKey, plus, isHidden, value) =>
         ctx.expectFieldName(rawKey).map {
           case _: EvaluatedJValue.JNull => None
@@ -83,7 +96,7 @@ object EvaluatedJObject:
           )
         }
       }
-      concurrent.Await.result(concurrent.Future.sequence(futures).map(_.flatten.toMap), concurrent.duration.Duration.Inf)
+      concurrent.Future.sequence(futures).map(_.flatten.toMap)
     }
 
 final class EvaluatedJFunctionParameters(
@@ -124,15 +137,17 @@ enum EvaluatedJValue extends HasSource:
     case value: JArray =>
       Future.sequence(value.elements.map(_.manifestFuture(ctx))).map(ManifestedJValue.JArray(_))
     case obj: JObject =>
-      val members = obj.members().collect {
-        case (key, value) if !value.isHidden => value.evaluated.manifestFuture(ctx).map(key -> _)
+      obj.members().flatMap { members =>
+        val futures = members.collect {
+          case (key, value) if !value.isHidden => value.evaluated.manifestFuture(ctx).map(key -> _)
+        }
+        Future.sequence(futures).map(members => ManifestedJValue.JObject(members.toMap))
       }
-      Future.sequence(members).map(members => ManifestedJValue.JObject(members.toMap))
     case fn: JFunction => ctx.error(fn.src, "cannot manifest function")
     case f: JFuture => f.future.map(_.manifest(ctx))
 
   def manifest(ctx: EvaluationContext): ManifestedJValue =
-      Await.result(manifestFuture(ctx), duration.Duration.Inf)
+    Await.result(manifestFuture(ctx), duration.Duration.Inf)
 
 object EvaluatedJValue:
   extension [T <: EvaluatedJValue](future: concurrent.Future[T])
@@ -162,9 +177,10 @@ object EvaluatedJValue:
       obj.copy(imp = obj.imp.withCtx(ctx))
 
     def lookup(src: Source, field: String): EvaluatedJValue =
-      obj.imp.lookup(src, field).evaluated
+      given ExecutionContext = ctx.executionContext
+      obj.imp.lookup(src, field).map(_.evaluated).toJValue
 
-    def members(): collection.Map[String, LazyObjectValue] =
+    def members(): Future[collection.Map[String, LazyObjectValue]] =
       obj.imp.members()
 
   extension (arr: EvaluatedJValue.JArray)
@@ -267,7 +283,6 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
     obj
 
   case JValue.JObjectComprehension(src, preLocals, rawKey, value, postLocals, forVar, inExpr, condOpt) =>
-    var objCtx: ObjectEvaluationContext = null
     implicit val ec = ctx.executionContext
     val arrElements: Future[Seq[(String, EvaluatedJValue)]] = ctx.expectArray(inExpr).flatMap { arr =>
       if condOpt.isDefined then
@@ -290,6 +305,7 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
           }
         }).map(_.flatten)
     }
+    var objCtx: ObjectEvaluationContext = null
     val obj: EvaluatedJValue.JObject = EvaluatedJValue.JObject(
       src,
       EvaluatedJObject.comprehension(
@@ -311,12 +327,10 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
     implicit val ec = ctx.executionContext
     ctx
       .expectObject(loc)
-      .map(
-        _
-          .members()
-          .getOrElse(field, ctx.error(loc.src, s"object does not have field $field"))
-          .evaluated
-      )
+      .flatMap { a =>
+        a.members().map(
+          _.getOrElse(field, ctx.error(loc.src, s"object does not have field $field")).evaluated)
+      }
       .toJValue
   case JValue.JIndex(src, loc, rawIndex) =>
     implicit val ec = ctx.executionContext
@@ -619,8 +633,11 @@ object Std:
       new EvaluatedJObject:
         def ctx = objCtx
         def withCtx(newCtx: () => ObjectEvaluationContext) = this
-        val cache = staticMembers.map { (key, value) =>
-          key -> LazyValue.strictObject(value, false)
+        lazy val cache = {
+          given ExecutionContext = ctx.executionContext
+          Future(staticMembers.map { (key, value) =>
+            key -> LazyValue.strictObject(value, false)
+          })
         }
     )
     objCtx = EvaluationContext.ObjectImp(
@@ -656,44 +673,46 @@ object Std:
         | EvaluatedJValue.JObject
         | EvaluatedJValue.JFunction
       ](x).map {
-        case e: EvaluatedJValue.JArray => e.elements.size
-        case e: EvaluatedJValue.JString => e.str.size
-        case e: EvaluatedJValue.JObject => e.members().size
-        case e: EvaluatedJValue.JFunction => e.numParams
-      }.map {
-        EvaluatedJValue.JNum(src, _)
+        case e: EvaluatedJValue.JArray => EvaluatedJValue.JNum(src, e.elements.size)
+        case e: EvaluatedJValue.JString => EvaluatedJValue.JNum(src, e.str.size)
+        case e: EvaluatedJValue.JObject => e.members().map(m => EvaluatedJValue.JNum(src, m.size)).toJValue
+        case e: EvaluatedJValue.JFunction => EvaluatedJValue.JNum(src, e.numParams)
       }.toJValue
     },
     "get" -> function4(Arg.x, Arg.f, Arg.default(jnull), Arg.inc_hidden(jtrue)) {
       (ctx, src, o, f, default, i) =>
         given concurrent.ExecutionContext = ctx.executionContext
-        ctx.expectObject(o).zip(ctx.expectString(f)).zip(ctx.expectBoolean(i)).map {
+        ctx.expectObject(o).zip(ctx.expectString(f)).zip(ctx.expectBoolean(i)).flatMap {
           case ((members, field), inc_hidden) =>
-            members.members().get(field.str).fold(default) { m =>
-              if !inc_hidden.value && m.isHidden then default else m.evaluated
+            members.members().map { members =>
+              members.get(field.str).fold(default) { m =>
+                if !inc_hidden.value && m.isHidden then default else m.evaluated
+              }
             }
         }.toJValue
     },
     "objectHas" -> function2(Arg.o, Arg.f) { (ctx, src, o, f) =>
       given concurrent.ExecutionContext = ctx.executionContext
-      ctx.expectObject(o).zip(ctx.expectString(f)).map { (o, f) =>
-        EvaluatedJValue.JBoolean(src, o.members().contains(f.str))
+      ctx.expectObject(o).zip(ctx.expectString(f)).flatMap { (o, f) =>
+        o.members().map { members =>
+          EvaluatedJValue.JBoolean(src, members.contains(f.str))
+        }
       }.toJValue
     },
-    "objectFields" -> function1(Arg.o) { (ctx, src, o) =>
-      given concurrent.ExecutionContext = ctx.executionContext
-      ctx.expectObject(o).map { o =>
-        // EvaluatedJValue.JArray(src, o.members().keys.toSeq.sorted) // BUG
-        val keys =
-          o
-            .members()
-            .keys
-            .map(EvaluatedJValue.JString(src, _): EvaluatedJValue.JString)
-            .toSeq
-            .sortBy(_.str)
-        EvaluatedJValue.JArray(src, keys)
-      }.toJValue
-    },
+    // "objectFields" -> function1(Arg.o) { (ctx, src, o) =>
+    //   given concurrent.ExecutionContext = ctx.executionContext
+    //   ctx.expectObject(o).map { o =>
+    //     // EvaluatedJValue.JArray(src, o.members().keys.toSeq.sorted) // BUG
+    //     val keys =
+    //       o
+    //         .members().
+    //         .keys
+    //         .map(EvaluatedJValue.JString(src, _): EvaluatedJValue.JString)
+    //         .toSeq
+    //         .sortBy(_.str)
+    //     EvaluatedJValue.JArray(src, keys)
+    //   }.toJValue
+    // },
     "trace" -> function2(Arg.str, Arg.rest) { (ctx, src, str, rest) =>
       given concurrent.ExecutionContext = ctx.executionContext
       ctx.expectString(str).map { str =>

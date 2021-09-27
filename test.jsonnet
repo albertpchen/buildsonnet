@@ -57,7 +57,7 @@ local aaaaaa(arr) = arr[0:4:2];
     [$.s]: 0,
   },
   //[std.trace("outer ran", "asdf")]: 0
-  zz: { z: {} } + child,
+  zz: {} + { z: {} } + child,
   zzchild: (self.zz + child) {
     c: "zzchild",
   },

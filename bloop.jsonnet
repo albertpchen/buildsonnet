@@ -1,5 +1,5 @@
 local ScalaProject = {
-  ivyDep:: function (org, name, version) {
+  scalaDep:: function (org, name, version) {
     org: org,
     name: name,
     version: version,
@@ -33,7 +33,7 @@ local bloopConfig(project) = {
       name: "scala-compiler",
       version: "3.0.2",
       options: [ ],
-      jars: std.scala.cs([project.ivyDep("org.scala-lang", "scala3-compiler_3", "3.0.2")]),
+      jars: std.scala.cs([project.scalaDep("org.scala-lang", "scala3-compiler_3", "3.0.2")]),
       analysis: project.bloop.out + "/inc_compile_3.zip",
       setup: {
         "order": "mixed",
@@ -73,12 +73,12 @@ local project = ScalaProject {
   dependencies: [],
   sources: [self.directory + "/src/main/scala"],
   libraries: [
-    self.ivyDep("org.typelevel", "shapeless3-deriving_3", "3.0.3"),
-    self.ivyDep("org.typelevel", "cats-parse_3", "0.3.4",),
-    self.ivyDep("io.get-coursier", "coursier_2.13", "2.0.16"),
+    self.scalaDep("org.typelevel", "shapeless3-deriving_3", "3.0.3"),
+    self.scalaDep("org.typelevel", "cats-parse_3", "0.3.4",),
+    self.scalaDep("io.get-coursier", "coursier_2.13", "2.0.16"),
   ],
   runtimeJavaOpts: [
     "-agentpath:/home/achen2012/tools/async-profiler-2.0-linux-x64/build/libasyncProfiler.so=start,event=cpu,file=profile.html"
   ]
 };
-bloopConfig(project)
+bloopConfig(project) + (import "test.jsonnet")
