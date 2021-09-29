@@ -1,6 +1,5 @@
 [
   {
-    "condition" : { "typeReachable" : "scala.runtime.LazyVals" },
     "name":"sun.misc.Unsafe",
     "fields":[
       {"name":"theUnsafe", "allowUnsafeAccess" : true}
