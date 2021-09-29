@@ -1,0 +1,45 @@
+[
+  {
+    "condition" : { "typeReachable" : "scala.runtime.LazyVals" },
+    "name":"sun.misc.Unsafe",
+    "fields":[
+      {"name":"theUnsafe", "allowUnsafeAccess" : true}
+    ]
+  },
+  {
+    "name":"cats.parse.Parser0",
+    "fields":[
+      {"name":"0bitmap$1"}
+    ]
+  },
+  {
+    "name":"root.EvaluatedJObject$$anon$1",
+    "fields":[
+      {"name":"0bitmap$1"}
+    ]
+  },
+  {
+    "name":"root.EvaluatedJObject$$anon$2",
+    "fields":[
+      {"name":"0bitmap$2"}
+    ]
+  },
+  {
+    "name":"root.Std$$anon$1",
+    "fields":[
+      {"name":"0bitmap$3"}
+    ]
+  },
+  {
+    "name":"root.CoursierDependency$",
+    "fields":[
+      {"name":"0bitmap$2"}
+    ]
+  },
+  {
+    "name":"root.CoursierParams$",
+    "fields":[
+      {"name":"0bitmap$1"}
+    ]
+  }
+]

@@ -46,7 +46,7 @@ sealed trait EvaluatedJObject:
 object EvaluatedJObject:
   def comprehension(
     ctxThunk: () => ObjectEvaluationContext,
-    arrayElementsFuture: concurrent.Future[Seq[(String, EvaluatedJValue)]],
+    arrayElementsFuture: Future[Seq[(String, EvaluatedJValue)]],
     forVar: String,
     value: JValue,
   ): EvaluatedJObject = new EvaluatedJObject:
@@ -55,7 +55,7 @@ object EvaluatedJObject:
       comprehension(newCtx, arrayElementsFuture, forVar, value)
 
     lazy val cache = {
-      implicit val ec = ctx.executionContext
+      given ExecutionContext = ctx.executionContext
       arrayElementsFuture.map(_.map { (key, e) =>
         val valueCtx = ctx.bindEvaluated(forVar, e).withStackEntry(StackEntry.objectField(ctx.file, value.src))
         key -> LazyValue(valueCtx, value, false)
@@ -72,31 +72,30 @@ object EvaluatedJObject:
       apply(newCtx, rawMembers)
 
     lazy val cache = {
-      implicit val ec = ctx.executionContext
+      given ExecutionContext = ctx.executionContext
       val futures = rawMembers.map { case JObjMember.JField(src, rawKey, plus, isHidden, value) =>
         ctx.expectFieldName(rawKey).map {
           case _: EvaluatedJValue.JNull => None
           case expr: EvaluatedJValue.JString =>
             val key = expr.str
             val valueCtx = ctx.withStackEntry(StackEntry.objectField(ctx.file, value.src))
-            Some(
-              if plus then
-                key -> LazyValue(
-                  valueCtx,
-                  JValue.JBinaryOp(
-                    src,
-                    JValue.JGetField(src, JValue.JSuper(src), key),
-                    JBinaryOperator.Op_+,
-                    value
-                  ),
-                  isHidden
-                )
-              else
-                key -> LazyValue(valueCtx, value, isHidden)
-          )
+            val lazyValue = if plus then
+              LazyValue(
+                valueCtx,
+                JValue.JBinaryOp(
+                  src,
+                  JValue.JGetField(src, JValue.JSuper(src), key),
+                  JBinaryOperator.Op_+,
+                  value
+                ),
+                isHidden
+              )
+            else
+              LazyValue(valueCtx, value, isHidden)
+            Some(key -> lazyValue)
         }
       }
-      concurrent.Future.sequence(futures).map(_.flatten.toMap)
+      Future.sequence(futures).map(_.flatten.toMap)
     }
 
 final class EvaluatedJFunctionParameters(
@@ -119,14 +118,14 @@ enum EvaluatedJValue extends HasSource:
     */
   case JObject(src: Source, imp: EvaluatedJObject) extends EvaluatedJValue
   case JFunction(src: Source, numParams: Int, fn: (EvaluationContext, EvaluatedJFunctionParameters) => EvaluatedJValue)
-  case JFuture(src: Source, future: concurrent.Future[EvaluatedJValue.JNow])
+  case JFuture(src: Source, future: Future[EvaluatedJValue.JNow])
 
   def isNull: Boolean =
     this match
     case _: JNull => true
     case _ => false
 
-  import concurrent.{Await, Future, ExecutionContext, duration}
+  import concurrent.{Await, duration}
   def manifestFuture(ctx: EvaluationContext): Future[ManifestedJValue] =
     given ExecutionContext = ctx.executionContext
     this match
@@ -147,7 +146,7 @@ enum EvaluatedJValue extends HasSource:
     case f: JFuture => f.future.map(_.manifest(ctx))
 
   def manifest(ctx: EvaluationContext): ManifestedJValue =
-    Await.result(manifestFuture(ctx), duration.Duration.Inf)
+    concurrent.Await.result(manifestFuture(ctx), duration.Duration.Inf)
 
 object EvaluatedJValue:
   extension [T <: EvaluatedJValue](future: concurrent.Future[T])
@@ -169,8 +168,8 @@ object EvaluatedJValue:
     | JArray
     | JObject
     | JFunction
+
   extension (obj: EvaluatedJValue.JObject)
-    // export obj.imp.lookup, obj.imp.members, obj.imp.withCtx
     def ctx: ObjectEvaluationContext = obj.imp.ctx
 
     def withCtx(ctx: () => ObjectEvaluationContext): EvaluatedJValue.JObject =
@@ -270,7 +269,7 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
     // evaluate asserts inside object
     members.collect {
       case JObjMember.JAssert(src, rawCond, rawMsg) =>
-        implicit val ec = objCtx.executionContext
+        given ExecutionContext = objCtx.executionContext
         val cond = objCtx.expectBoolean(rawCond)
         val condWithMsg = rawMsg.fold(cond.map(_ -> Option.empty[String])) { msg =>
           cond.zip(objCtx.expectString(msg).map(m => Some(m.str)))
@@ -283,7 +282,7 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
     obj
 
   case JValue.JObjectComprehension(src, preLocals, rawKey, value, postLocals, forVar, inExpr, condOpt) =>
-    implicit val ec = ctx.executionContext
+    given ExecutionContext = ctx.executionContext
     val arrElements: Future[Seq[(String, EvaluatedJValue)]] = ctx.expectArray(inExpr).flatMap { arr =>
       if condOpt.isDefined then
         val cond = condOpt.get
@@ -315,16 +314,16 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
         value,
       )
     )
-    objCtx = postLocals.foldLeft(preLocals.foldLeft(ctx.objectCtx(obj)) { (ctx, local) =>
-      ctx.bind(local.name, local.value)
-    }) { (ctx, local) =>
+    objCtx = preLocals.foldLeft(ctx.objectCtx(obj)) { (ctx, local) =>
       ctx.bind(local.name, local.value)
     }
-
+    objCtx = postLocals.foldLeft(objCtx) { (ctx, local) =>
+      ctx.bind(local.name, local.value)
+    }
     obj
   case JValue.JId(src, name) => ctx.lookup(src, name).evaluated
   case JValue.JGetField(src, loc, field) =>
-    implicit val ec = ctx.executionContext
+    given ExecutionContext = ctx.executionContext
     ctx
       .expectObject(loc)
       .flatMap { a =>
@@ -333,7 +332,7 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
       }
       .toJValue
   case JValue.JIndex(src, loc, rawIndex) =>
-    implicit val ec = ctx.executionContext
+    given ExecutionContext = ctx.executionContext
     ctx.expectType[EvaluatedJValue.JArray | EvaluatedJValue.JObject](evalUnsafe(ctx)(loc)).flatMap {
     case obj: EvaluatedJValue.JObject =>
       ctx.expectString(rawIndex).map { field =>
