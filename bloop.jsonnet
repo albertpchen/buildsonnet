@@ -76,9 +76,12 @@ local project = ScalaProject {
     self.scalaDep("org.typelevel", "shapeless3-deriving_3", "3.0.3"),
     self.scalaDep("org.typelevel", "cats-parse_3", "0.3.4",),
     self.scalaDep("io.get-coursier", "coursier_2.13", "2.0.16"),
+    self.scalaDep("com.typesafe.slick", "slick_2.13", "3.3.3"),
+    self.scalaDep("org.xerial", "sqlite-jdbc", "3.36.0.3"),
+    self.scalaDep("org.slf4j", "slf4j-nop", "1.6.4"),
   ],
   runtimeJavaOpts: [
     "-agentpath:/home/achen2012/tools/async-profiler-2.0-linux-x64/build/libasyncProfiler.so=start,event=cpu,file=profile.html"
   ]
 };
-bloopConfig(project) + (import "test.jsonnet")
+bloopConfig(project)/// + (import "test.jsonnet")

@@ -6,6 +6,53 @@
     ]
   },
   {
+    "name":"org.slf4j.helpers.NOPLoggerFactory"
+  },
+  {
+    "name": "java.sql.Types",
+    "fields": [
+      { "name": "BIT" },
+      { "name": "TINYINT" },
+      { "name": "SMALLINT" },
+      { "name": "INTEGER" },
+      { "name": "BIGINT" },
+      { "name": "FLOAT" },
+      { "name": "REAL" },
+      { "name": "DOUBLE" },
+      { "name": "NUMERIC" },
+      { "name": "DECIMAL" },
+      { "name": "CHAR" },
+      { "name": "VARCHAR" },
+      { "name": "LONGVARCHAR" },
+      { "name": "DATE" },
+      { "name": "TIME" },
+      { "name": "TIMESTAMP" },
+      { "name": "BINARY" },
+      { "name": "VARBINARY" },
+      { "name": "LONGVARBINARY" },
+      { "name": "NULL" },
+      { "name": "OTHER" },
+      { "name": "JAVA_OBJECT" },
+      { "name": "DISTINCT" },
+      { "name": "STRUCT" },
+      { "name": "ARRAY" },
+      { "name": "BLOB" },
+      { "name": "CLOB" },
+      { "name": "REF" },
+      { "name": "DATALINK" },
+      { "name": "BOOLEAN" },
+      { "name": "ROWID" },
+      { "name": "NCHAR" },
+      { "name": "NVARCHAR" },
+      { "name": "LONGNVARCHAR" },
+      { "name": "NCLOB" },
+      { "name": "SQLXML" },
+      { "name": "REF_CURSOR" },
+      { "name": "TIME_WITH_TIMEZONE" },
+      { "name": "TIMESTAMP_WITH_TIMEZONE" }
+    ]
+  },
+  {
     "name":"cats.parse.Parser0",
     "fields":[
       {"name":"0bitmap$1"}

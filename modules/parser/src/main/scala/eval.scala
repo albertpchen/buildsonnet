@@ -726,11 +726,16 @@ object Std:
     "scala" -> makeObject(Map(
       "cs" -> function1(Arg.deps) { (ctx, src, deps) =>
         import coursier.{Dependency, Fetch, Module, ModuleName, Organization}
+        import coursier.cache.FileCache
+        import coursier.cache.loggers.RefreshLogger
         given concurrent.ExecutionContext = ctx.executionContext
         JDecoder[Seq[CoursierDependency]].decode(ctx, deps).flatMap { deps =>
           Fetch()
             .withDependencies(deps.map(_.toDependency))
             // .addDependencies(params.deps.map(_.toDependency)) // BUG
+            .withCache(
+              FileCache().withLogger(RefreshLogger.create(System.out))
+            )
             .future()
             .map { files =>
               EvaluatedJValue.JArray(src, files.map(a => EvaluatedJValue.JString(src, a.toString)))

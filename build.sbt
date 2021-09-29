@@ -1,5 +1,7 @@
 val scala3Version = "3.0.2"
 
+lazy val root = project.in(file("."))
+
 // project for JVM build (default)
 lazy val parser = project
   .in(file("modules/parser"))
@@ -12,15 +14,17 @@ lazy val parser = project
       "org.typelevel" %% "cats-parse" % "0.3.4",
       "org.scalameta" %%% "munit" % "0.7.26" % Test,
       ("io.get-coursier" %% "coursier" % "2.0.16").cross(CrossVersion.for3Use2_13),
+      ("com.typesafe.slick" %% "slick" % "3.3.3").cross(CrossVersion.for3Use2_13),
+      "org.slf4j" % "slf4j-nop" % "1.6.4",
+      "org.xerial" % "sqlite-jdbc" % "3.36.0.3",
     ),
     nativeImageOptions ++= List(
-      // "-H:+ReportExceptionStackTraces",
-      // "--verbose",
-      "-H:TempDirectory=~/projects/scala3/build/target/native-image",
-      "-H:ReflectionConfigurationFiles=/home/achen2012/projects/scala3/build/native-image-reflect-config.json",
+      //"-H:TempDirectory=" + nativeImageOutput.value.getAbsolutePath,
+      "-H:ReflectionConfigurationFiles=" + (root / baseDirectory).value.getAbsolutePath + "/native-image-reflect-config.json",
+      "--initialize-at-build-time",
     ),
-    nativeImageVersion := "21.3.0-dev",
-    nativeImageInstalled := true,
-    nativeImageCommand := Seq("/home/achen2012/tools/graalvm-ce-java11-21.3.0-dev/bin/native-image"),
+    nativeImageVersion := "21.2.0",
     testFrameworks += new TestFramework("munit.Framework"),
   )
+
+onLoad in Global ~= (_ andThen ("project parser" :: _))
