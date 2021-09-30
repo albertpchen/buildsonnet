@@ -12,6 +12,10 @@ sealed trait EvaluatedJObject:
     given ExecutionContext = ctx.executionContext
     cache.map(_.getOrElse(field, ctx.error(src, s"object missing field $field")))
 
+  def lookupOpt(src: Source, field: String): Future[Option[LazyValue]] =
+    given ExecutionContext = ctx.executionContext
+    cache.map(_.get(field))
+
   private lazy val _members: Future[collection.Map[String, LazyObjectValue]] =
     val members = new collection.mutable.HashMap[String, LazyObjectValue]()
     given ExecutionContext = ctx.executionContext
@@ -104,11 +108,14 @@ final class EvaluatedJFunctionParameters(
   val namedArgs: Seq[(String, JValue)],
 )
 
+opaque type JobId = Int
 enum EvaluatedJValue extends HasSource:
   case JBoolean(src: Source, value: Boolean)
   case JNull(src: Source)
   case JString(src: Source, str: String)
   case JNum(src: Source, double: Double)
+  case JPath(src: Source, name: String)
+  case JJob(src: Source, desc: JobDescription, stdout: String, stderr: String, outputs: Seq[JPath], exitCode: Int)
   case JArray(src: Source, elements: Seq[EvaluatedJValue])
   /** needs to handle:
     *
@@ -142,6 +149,8 @@ enum EvaluatedJValue extends HasSource:
         }
         Future.sequence(futures).map(members => ManifestedJValue.JObject(members.toMap))
       }
+    case path: JPath => ctx.error(path.src, "cannot manifest path")
+    case job: JJob => ctx.error(job.src, "cannot manifest job")
     case fn: JFunction => ctx.error(fn.src, "cannot manifest function")
     case f: JFuture => f.future.map(_.manifest(ctx))
 
@@ -165,6 +174,8 @@ object EvaluatedJValue:
     | JNull
     | JString
     | JNum
+    | JPath
+    | JJob
     | JArray
     | JObject
     | JFunction
@@ -324,13 +335,22 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
   case JValue.JId(src, name) => ctx.lookup(src, name).evaluated
   case JValue.JGetField(src, loc, field) =>
     given ExecutionContext = ctx.executionContext
-    ctx
-      .expectObject(loc)
-      .flatMap { a =>
-        a.members().map(
-          _.getOrElse(field, ctx.error(loc.src, s"object does not have field $field")).evaluated)
-      }
-      .toJValue
+    ctx.expectType[EvaluatedJValue.JObject | EvaluatedJValue.JJob](loc).flatMap {
+      case o: EvaluatedJValue.JObject =>
+        o.members().map {
+          _
+            .getOrElse(field, ctx.error(loc.src, s"object does not have field $field"))
+            .evaluated
+        }
+      case j: EvaluatedJValue.JJob =>
+        Future {
+          field match
+          case "stdout" => EvaluatedJValue.JString(src, j.stdout)
+          case "stderr" => EvaluatedJValue.JString(src, j.stderr)
+          case "outputs" => EvaluatedJValue.JArray(src, j.outputs)
+          case "exitCode" => EvaluatedJValue.JNum(src, j.exitCode.toDouble)
+        }
+    }.toJValue
   case JValue.JIndex(src, loc, rawIndex) =>
     given ExecutionContext = ctx.executionContext
     ctx.expectType[EvaluatedJValue.JArray | EvaluatedJValue.JObject](evalUnsafe(ctx)(loc)).flatMap {
@@ -505,6 +525,8 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
 object Std:
   private val ctx = new EvaluationContext.Imp(
     Importer.std,
+    JobRunner(),
+    new java.io.File(".").toPath,
     SourceFile.std,
     Map.empty,
     List.empty,
@@ -723,13 +745,17 @@ object Std:
         rest
       }.toJValue
     },
+    "runJob" -> function1(Arg.desc) { (ctx, src, desc) =>
+      given concurrent.ExecutionContext = ctx.executionContext
+      ctx.decode[JobDescription](desc).flatMap(ctx.runJob(src, _)).toJValue
+    },
     "scala" -> makeObject(Map(
       "cs" -> function1(Arg.deps) { (ctx, src, deps) =>
         import coursier.{Dependency, Fetch, Module, ModuleName, Organization}
         import coursier.cache.FileCache
         import coursier.cache.loggers.RefreshLogger
         given concurrent.ExecutionContext = ctx.executionContext
-        JDecoder[Seq[CoursierDependency]].decode(ctx, deps).flatMap { deps =>
+        ctx.decode[Seq[CoursierDependency]](deps).flatMap { deps =>
           Fetch()
             .withDependencies(deps.map(_.toDependency))
             // .addDependencies(params.deps.map(_.toDependency)) // BUG

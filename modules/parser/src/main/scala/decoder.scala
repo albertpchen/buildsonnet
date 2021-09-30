@@ -34,6 +34,12 @@ object JDecoder:
       given ExecutionContext = ctx.executionContext
       ctx.expectBoolean(expr).map(_.value)
 
+  inline given [T <: EvaluatedJValue.JNow]: JDecoder[T] = identity[T]
+
+  inline def identity[T <: EvaluatedJValue.JNow]: JDecoder[T] = new JDecoder[T]:
+    def decode(ctx: EvaluationContext, expr: EvaluatedJValue): Future[T] =
+      ctx.expectType[T](expr)
+
   given [T: JDecoder]: JDecoder[Seq[T]] with
     def decode(ctx: EvaluationContext, expr: EvaluatedJValue): Future[Seq[T]] =
       given ExecutionContext = ctx.executionContext
@@ -41,6 +47,18 @@ object JDecoder:
         val elements: Seq[Future[T]] = arr.elements.map(summon[JDecoder[T]].decode(ctx, _))
         Future.sequence(elements)
       }
+
+  given [T: JDecoder]: JDecoder[Map[String, T]] with
+    def decode(ctx: EvaluationContext, expr: EvaluatedJValue): Future[Map[String, T]] =
+      given ExecutionContext = ctx.executionContext
+      val nested = for
+        obj <- ctx.expectObject(expr)
+        members <- obj.members()
+      yield
+        Future.sequence(members.map { (key, lazyValue) =>
+          summon[JDecoder[T]].decode(ctx, lazyValue.evaluated).map(key -> _)
+        }).map(_.toMap)
+      nested.flatten
   
   transparent inline def decodeProduct[T <: Product]: JObjectDecoder[T] =
     inline erasedValue[T] match
@@ -49,6 +67,19 @@ object JDecoder:
           def decode(ctx: EvaluationContext, obj: EvaluatedJValue.JObject) =
             given ExecutionContext = ctx.executionContext
             Future(EmptyTuple)
+        decoder.asInstanceOf[JObjectDecoder[T]]
+      case _: ((name, Option[head]) *: tail) =>
+        val decoder = new JObjectDecoder[(Option[head] *: tail)]:
+          def decode(ctx: EvaluationContext, obj: EvaluatedJValue.JObject) =
+            given ExecutionContext = ctx.executionContext
+            val head =
+              obj.imp.lookupOpt(obj.src, constValue[name].toString).flatMap { lvalueOpt =>
+                lvalueOpt.fold(Future(None)) { lvalue =>
+                  summonInline[JDecoder[head]].decode(ctx, lvalue.evaluated).map(Some(_))
+                }
+              }
+            val tail = decodeProduct[tail].decode(ctx, obj)
+            head.zip(tail).map(_ *: _)
         decoder.asInstanceOf[JObjectDecoder[T]]
       case _: ((name, head) *: tail) =>
         val decoder = new JObjectDecoder[(head *: tail)]:

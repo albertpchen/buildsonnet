@@ -65,7 +65,7 @@ local aaaaaa(arr) = arr[0:4:2];
   // fff: if 0 then 0 else 1,
   arr: [i for i in [0, 1, 2, 3, 4, 5, 6, 7,] if true],
   slice: aaaaaa(self.arr),
-  objComp:  {
+  objComp: {
     local a = 0,
     local b = c,
     local c = a + 3,
@@ -100,4 +100,9 @@ local aaaaaa(arr) = arr[0:4:2];
     std.trace("P2: 7", 0),
   ],
   //file: std.thisFile
+  jjjobb: std.runJob({
+    cmdline: ["env"],
+    inputFiles: [],
+    envVars: { "asdf": "DLKFJLKJ" },
+  }).stdout
 } + child

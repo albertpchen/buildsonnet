@@ -1,5 +1,7 @@
 package root
 
+import scala.concurrent.Future
+
 sealed trait Importer:
   def `import`(ctx: EvaluationContext, src: Source, fileName: String): EvaluatedJValue
   def importStr(ctx: EvaluationContext, src: Source, fileName: String): EvaluatedJValue.JString
@@ -157,6 +159,11 @@ sealed trait EvaluationContext:
   final def importStr(src: Source, fileName: String): EvaluatedJValue.JString =
     importer.importStr(this, src, fileName)
 
+  def workspaceDir: java.nio.file.Path
+  protected def jobRunner: JobRunner
+  final def runJob(src: Source, desc: JobDescription): Future[EvaluatedJValue.JJob] =
+    jobRunner.run(this, src, desc)
+
   def error(src: Source, message: String): Nothing
   def lookup(src: Source, id: String): LazyValue
   def objectCtx(obj: EvaluatedJValue.JObject): ObjectEvaluationContext
@@ -184,6 +191,8 @@ object EvaluationContext:
       case _: EvaluatedJValue.JNull => "null"
       case _: EvaluatedJValue.JString => "string"
       case _: EvaluatedJValue.JNum => "number"
+      case _: EvaluatedJValue.JJob => "job"
+      case _: EvaluatedJValue.JPath => "path"
       case _: EvaluatedJValue.JArray => "array"
       case _: EvaluatedJValue.JObject => "object"
       case _: EvaluatedJValue.JFunction => "function"
@@ -204,6 +213,8 @@ object EvaluationContext:
     case _: EvaluatedJValue.JNull => "null"
     case _: EvaluatedJValue.JString => "string"
     case _: EvaluatedJValue.JNum => "number"
+    case _: EvaluatedJValue.JJob => "job"
+    case _: EvaluatedJValue.JPath => "path"
     case _: EvaluatedJValue.JArray => "array"
     case _: EvaluatedJValue.JObject => "object"
     case _: EvaluatedJValue.JFunction => "function"
@@ -211,6 +222,7 @@ object EvaluationContext:
 
   import concurrent.Future
   extension (ctx: EvaluationContext)
+    def decode[T: JDecoder](expr: EvaluatedJValue): Future[T] = JDecoder[T].decode(ctx, expr)
     inline def expectBoolean(code: JValue): Future[EvaluatedJValue.JBoolean] = expectType[EvaluatedJValue.JBoolean](code)
     inline def expectBoolean(expr: EvaluatedJValue): Future[EvaluatedJValue.JBoolean] = expectType[EvaluatedJValue.JBoolean](expr)
     inline def expectNum(code: JValue): Future[EvaluatedJValue.JNum] = expectType[EvaluatedJValue.JNum](code)
@@ -251,6 +263,8 @@ object EvaluationContext:
 
   private[root] case class Imp(
     val importer: Importer,
+    val jobRunner: JobRunner,
+    val workspaceDir: java.nio.file.Path,
     file: SourceFile,
     scope: Map[String, LazyValue],
     stack: List[StackEntry],
@@ -299,7 +313,7 @@ object EvaluationContext:
     locals: Map[String, JValue | EvaluatedJValue | LazyValue],
     stack: List[StackEntry],
   ) extends ObjectEvaluationContext:
-    export topCtx.{importer, file, executionContext}
+    export topCtx.{importer, jobRunner, workspaceDir, file, executionContext}
 
     def self(src: Source) = selfObj
     def `super`(src: Source) = superChain.headOption.getOrElse(topCtx.`super`(src))
@@ -351,4 +365,5 @@ object EvaluationContext:
       this.copy(stack = entry +: stack)
 
   def apply(file: SourceFile)(implicit executionContext: concurrent.ExecutionContext): EvaluationContext =
-    Imp(Importer(), file, Map.empty, List.empty, executionContext)
+    val currFileParent = new java.io.File(file.path).getAbsoluteFile.toPath.getParent
+    Imp(Importer(), JobRunner(), currFileParent, file, Map.empty, List.empty, executionContext)
