@@ -78,16 +78,11 @@ sealed trait JobRunner:
 object JobRunner:
   import java.nio.file.attribute.FileTime
 
-  extension (path: java.nio.file.Path)
-    def exists: Boolean = java.nio.file.Files.exists(path)
-    def fileTime: FileTime =
-      java.nio.file.Files.readAttributes(path, "lastModifiedTime")
-        .get("lastModifiedTime")
-        .asInstanceOf[FileTime]
-
   private given fileTimeOrdering: math.Ordering[FileTime] = new math.Ordering[FileTime]:
     def compare(x: FileTime, y: FileTime): Int =
       x.compareTo(y)
+
+  import fileTimeOrdering.mkOrderingOps
 
   private val charset = "utf-8"
   private def stringsToByteArray(strings: Seq[String]): Array[Byte] =
@@ -112,6 +107,18 @@ object JobRunner:
         for i <- start until end do stringBytes(i - start) = bytes(i)
         strings += new String(stringBytes, charset)
     strings.toSeq
+
+  extension (ctx: EvaluationContext)
+    def resolvePath(path: String): java.nio.file.Path =
+      java.nio.file.Paths.get(path).normalize()
+
+    def exists(path: java.nio.file.Path): Boolean =
+      java.nio.file.Files.exists(ctx.workspaceDir.resolve(path))
+
+    def fileTime(path: java.nio.file.Path): FileTime =
+      java.nio.file.Files.readAttributes(ctx.workspaceDir.resolve(path), "lastModifiedTime")
+        .get("lastModifiedTime")
+        .asInstanceOf[FileTime]
 
   def apply()(using ExecutionContext): JobRunner = new JobRunner:
     private val databaseMap = collection.concurrent.TrieMap[String, Future[(api.TableQuery[JobTable], Database)]]()
@@ -142,28 +149,28 @@ object JobRunner:
         desc.outputFiles.foreach { output =>
           if output.startsWith("/") then ctx.error(src, s"job output file may not be an absolute path, got $output")
         }
+        desc.inputFiles.foreach { input =>
+          if !ctx.exists(input.path) then ctx.error(src, s"job input file does not exist, ${input.path.toString}")
+        }
 
-        val outputPaths = desc.outputFiles.getOrElse(Seq.empty).map { file =>
-          ctx.workspaceDir.resolve(file)
-        }.distinct
+        val outputPaths = desc.outputFiles.getOrElse(Seq.empty).map(ctx.resolvePath(_)).distinct
         val isOutputStale =
           if desc.outputFiles.isEmpty then
             false
           else
-            val inputTimesOpt = desc.inputFiles.foldLeft(Option(Seq.empty[FileTime])) {
-              case (Some(tail), path) =>  if path.path.exists then Some(path.path.fileTime +: tail) else None
-              case _ => None
-            }
             val outputTimesOpt = outputPaths.foldLeft(Option(Seq.empty[FileTime])) {
-              case (Some(tail), path) =>  if path.exists then Some(path.fileTime +: tail) else None
+              case (Some(tail), path) =>  if ctx.exists(path) then Some(ctx.fileTime(path) +: tail) else None
               case _ => None
             }
-            inputTimesOpt.zip(outputTimesOpt).fold(false) { (inputTimes, outputTimes) =>
-              import fileTimeOrdering.mkOrderingOps
-              outputTimes.min < inputTimes.max
+            outputTimesOpt.fold(true) { outputTimes =>
+              val inputTimes = desc.inputFiles.map(p => ctx.fileTime(p.path))
+              if outputTimes.isEmpty || inputTimes.isEmpty then
+                false
+              else
+                outputTimes.min < inputTimes.max
             }
 
-        val directory = desc.directory.fold(ctx.workspaceDir)(ctx.workspaceDir.resolve).normalize()
+        val directory = desc.directory.fold(ctx.workspaceDir)(ctx.resolvePath(_))
         builder.directory(directory.toFile)
 
         val cached =
@@ -189,18 +196,12 @@ object JobRunner:
           case _ =>
             val process = builder.start()
             val exitCode = process.waitFor()
+            val missingFiles = outputPaths.filterNot(ctx.exists)
+            if missingFiles.nonEmpty then
+              ctx.error(src, s"job did not produce expected output files: ${missingFiles.mkString(", ")}")
             val stdOut = process
             val stdout = scala.io.Source.fromInputStream(process.getInputStream).mkString
             val stderr = scala.io.Source.fromInputStream(process.getErrorStream).mkString
-            val missingFiles = collection.mutable.ArrayBuffer[String]()
-            val outputFiles = desc.outputFiles.getOrElse(Seq.empty).distinct.map { output =>
-              val path = ctx.workspaceDir.resolve(output).normalize
-              if java.nio.file.Files.exists(path) then
-                missingFiles += output
-              path
-            }
-            if missingFiles.nonEmpty then
-              s"job did not produce expected output files\n  ${missingFiles.mkString("\n  ")}"
             val outputs: Seq[EvaluatedJValue.JPath] = outputPaths.distinct.map(EvaluatedJValue.JPath(src, _))
             println(desc.cmdline.mkString(" "))
             print(stdout)

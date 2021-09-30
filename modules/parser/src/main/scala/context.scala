@@ -222,6 +222,9 @@ object EvaluationContext:
 
   import concurrent.Future
   extension (ctx: EvaluationContext)
+    def resolvePath(path: String): java.nio.file.Path =
+      ctx.workspaceDir.resolve(path).relativize(ctx.workspaceDir).normalize()
+
     def decode[T: JDecoder](expr: EvaluatedJValue): Future[T] = JDecoder[T].decode(ctx, expr)
     inline def expectBoolean(code: JValue): Future[EvaluatedJValue.JBoolean] = expectType[EvaluatedJValue.JBoolean](code)
     inline def expectBoolean(expr: EvaluatedJValue): Future[EvaluatedJValue.JBoolean] = expectType[EvaluatedJValue.JBoolean](expr)

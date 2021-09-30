@@ -323,43 +323,9 @@ object Json:
 
 @main
 def asdf(args: String*): Unit =
-  
-  
-  import slick.jdbc.JdbcBackend.Database
-  import slick.jdbc.SQLiteProfile.api._
   import scala.concurrent.{Await, ExecutionContext, Future}
   import scala.concurrent.duration.Duration
   import scala.util.{Failure, Success}
-  val database = Database.forURL(
-    s"jdbc:sqlite:${System.getProperty("user.dir")}/test.db",
-    driver = "org.sqlite.JDBC",
-  )
-
-  type Coffee = (String, Int, Double, Int, Int)
-  class Coffees(tag: Tag) extends Table[Coffee](tag, "COFFEES") {
-    def name = column[String]("COF_NAME", O.PrimaryKey)
-    def supID = column[Int]("SUP_ID")
-    def price = column[Double]("PRICE")
-    def sales = column[Int]("SALES", O.Default(0))
-    def total = column[Int]("TOTAL", O.Default(0))
-    def * = (name, supID, price, sales, total)
-  }
-  val coffees = new TableQuery(new Coffees(_))
-
-  given ExecutionContext = ExecutionContext.global
-  val q = coffees.filter(_.price > 8.0).map(_.name)
-  val result =
-    for
-      _ <- Future(println("START DB"))
-      _ <- database.run(coffees.schema.createIfNotExists)
-      _ <- database.run(coffees.insertOrUpdate("A", 1, 0.123, 2, 3))
-      coffee <- database.run(coffees.result)
-      _ <- Future(println("END DB"))
-    yield
-      coffee
-
-  println(Await.result(result, Duration.Inf))
-
   val filename = args(0)
   val source = scala.io.Source.fromFile(filename).getLines.mkString("\n")
   val sourceFile = SourceFile(filename, source)
@@ -371,6 +337,7 @@ def asdf(args: String*): Unit =
       println("FAIL: " + error.toString)
     },
     ast => {
+      given ExecutionContext = ExecutionContext.global
       println("END PARSE")
       val ctx = EvaluationContext(sourceFile).bindEvaluated("std", Std.obj)
       val manifested = manifest(ctx)(ast)
@@ -380,9 +347,3 @@ def asdf(args: String*): Unit =
       )
     }
   )
-
-
-  // if (!database.tableNames().contains("test_table")) {
-  //   database.run(sqlu"create table test_table(id varchar(18), value varchar(4196))")
-  // }
-  // database("insert or replace into test_table values ('lkj', 'asdf')")
