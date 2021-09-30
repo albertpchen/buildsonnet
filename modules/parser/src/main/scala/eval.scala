@@ -749,6 +749,14 @@ object Std:
       given concurrent.ExecutionContext = ctx.executionContext
       ctx.decode[JobDescription](desc).flatMap(ctx.runJob(src, _)).toJValue
     },
+    "source" -> function1(Arg.pathName) { (ctx, src, pathName) =>
+      given concurrent.ExecutionContext = ctx.executionContext
+      ctx.expectType[EvaluatedJValue.JString](pathName).map { pathName =>
+        import JobRunner.resolvePath
+        if pathName.str.startsWith("/") then ctx.error(src, s"cannot source an absolute path, got $pathName")
+        EvaluatedJValue.JPath(src, ctx.resolvePath(pathName.str))
+      }.toJValue
+    },
     "scala" -> makeObject(Map(
       "cs" -> function1(Arg.deps) { (ctx, src, deps) =>
         import coursier.{Dependency, Fetch, Module, ModuleName, Organization}
