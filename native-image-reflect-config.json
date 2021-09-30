@@ -180,5 +180,9 @@
          }
       ],
       "name": "root.CoursierParams$"
+   },
+   {
+      "allDeclaredMethods" : true,
+      "name": "root.JobTable"
    }
 ]

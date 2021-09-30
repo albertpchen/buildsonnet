@@ -36,4 +36,8 @@ local class(name, fields=null) =
   class('root.Std$$anon$1', '0bitmap$3'),
   class('root.CoursierDependency$', '0bitmap$2'),
   class('root.CoursierParams$', '0bitmap$1'),
+  class('root.JobDescription$', '0bitmap$1'),
+  class('root.JobTable') + {
+    "allDeclaredMethods" : true
+  }
 ]
