@@ -31,7 +31,6 @@ case class JobRow(
 
   stdout: String,
   stderr: String,
-  outputs: Array[Byte],
   exitCode: Int
 )
 
@@ -55,7 +54,6 @@ private class JobTable(tag: api.Tag) extends api.Table[mirror.MirroredElemTypes]
 
   def stdout = column[String]("stdout")
   def stderr = column[String]("stderr")
-  def outputs = column[Array[Byte]]("outputs")
   def exitCode = column[Int]("exitCode")
   def * = (
     cmdline,
@@ -66,7 +64,6 @@ private class JobTable(tag: api.Tag) extends api.Table[mirror.MirroredElemTypes]
 
     stdout,
     stderr,
-    outputs,
     exitCode
   )
 }
@@ -117,21 +114,24 @@ object JobRunner:
     strings.toSeq
 
   def apply()(using ExecutionContext): JobRunner = new JobRunner:
-    lazy val database: Future[(api.TableQuery[JobTable], Database)] = {
+    private val databaseMap = collection.concurrent.TrieMap[String, Future[(api.TableQuery[JobTable], Database)]]()
+    def database(ctx: EvaluationContext): Future[(api.TableQuery[JobTable], Database)] =
+      databaseMap.getOrElseUpdate(ctx.workspaceDir.toString, {
       val jobTable = new api.TableQuery(new JobTable(_))
       val database = Database.forURL(
-        s"jdbc:sqlite:${System.getProperty("user.dir")}/test.db",
+        s"jdbc:sqlite:${ctx.workspaceDir.toString}/buildsonnet.db",
         driver = "org.sqlite.JDBC",
       )
       database.run(jobTable.schema.createIfNotExists).map { _ => jobTable -> database }
-    }
+    })
+
     def run(
       ctx: EvaluationContext,
       src: Source,
       desc: JobDescription,
     ): Future[EvaluatedJValue.JJob] =
       given ExecutionContext = ctx.executionContext
-      database.flatMap { (jobTable, database) =>
+      database(ctx).flatMap { (jobTable, database) =>
         val builder = new java.lang.ProcessBuilder(desc.cmdline: _*)
         val env = builder.environment()
         env.clear()
@@ -181,8 +181,12 @@ object JobRunner:
                 .take(1)
                 .result
             ).map(_.headOption)
-        cached.map {
-          case None =>
+        cached.flatMap {
+          case Some(cached) if !isOutputStale =>
+            val jobRow = mirror.fromProduct(cached)
+            val outputs: Seq[EvaluatedJValue.JPath] = outputPaths.distinct.map(EvaluatedJValue.JPath(src, _))
+            Future(EvaluatedJValue.JJob(src, desc, jobRow.stdout, jobRow.stderr, outputs, jobRow.exitCode))
+          case _ =>
             val process = builder.start()
             val exitCode = process.waitFor()
             val stdOut = process
@@ -198,10 +202,20 @@ object JobRunner:
             if missingFiles.nonEmpty then
               s"job did not produce expected output files\n  ${missingFiles.mkString("\n  ")}"
             val outputs: Seq[EvaluatedJValue.JPath] = outputPaths.distinct.map(EvaluatedJValue.JPath(src, _))
-            EvaluatedJValue.JJob(src, desc, stdout, stderr, outputs, exitCode)
-          case Some(cached) =>
-            val jobRow = mirror.fromProduct(cached)
-            val outputs: Seq[EvaluatedJValue.JPath] = outputPaths.distinct.map(EvaluatedJValue.JPath(src, _))
-            EvaluatedJValue.JJob(src, desc, jobRow.stdout, jobRow.stderr, outputs, jobRow.exitCode)
+            println(desc.cmdline.mkString(" "))
+            print(stdout)
+            database.run(jobTable.insertOrUpdate((
+              stringsToByteArray(desc.cmdline),
+              stringsToByteArray(desc.envVars.getOrElse(Map.empty).toSeq.sorted.flatMap((a, b) => Seq(a, b))),
+              stringsToByteArray(desc.inputFiles.map(_.path.toString)),
+              desc.stdin.getOrElse(""),
+              directory.toString,
+
+              stdout,
+              stderr,
+              exitCode,
+            ))).map { _ =>
+              EvaluatedJValue.JJob(src, desc, stdout, stderr, outputs, exitCode)
+            }
         }
       }
