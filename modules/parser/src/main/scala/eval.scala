@@ -114,7 +114,7 @@ enum EvaluatedJValue extends HasSource:
   case JNull(src: Source)
   case JString(src: Source, str: String)
   case JNum(src: Source, double: Double)
-  case JPath(src: Source, name: String)
+  case JPath(src: Source, path: java.nio.file.Path)
   case JJob(src: Source, desc: JobDescription, stdout: String, stderr: String, outputs: Seq[JPath], exitCode: Int)
   case JArray(src: Source, elements: Seq[EvaluatedJValue])
   /** needs to handle:
@@ -525,7 +525,7 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
 object Std:
   private val ctx = new EvaluationContext.Imp(
     Importer.std,
-    JobRunner(),
+    JobRunner()(using concurrent.ExecutionContext.global),
     new java.io.File(".").toPath,
     SourceFile.std,
     Map.empty,

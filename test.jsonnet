@@ -100,9 +100,15 @@ local aaaaaa(arr) = arr[0:4:2];
     std.trace("P2: 7", 0),
   ],
   //file: std.thisFile
-  jjjobb: std.runJob({
-    cmdline: ["env"],
-    inputFiles: [],
-    envVars: { "asdf": "DLKFJLKJ" },
-  }).stdout
+  jjjobb:
+    local job = std.runJob({
+      cmdline: ["env"],
+      inputFiles: [],
+      envVars: { "asdf": "DLKFJLKJ" },
+    });
+    {
+      stdout: job.stdout,
+      stderr: job.stderr,
+    }
 } + child
+
