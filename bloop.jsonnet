@@ -7,7 +7,7 @@ local ScalaProject = {
   scalaVersion: "3.0.2",
 
   bloopVersion: "1.4.0", // OPTIONAL
-  workspaceDir: "/home/achen2012/projects/scala3/build", // OPTIONAL
+  workspaceDir: std.workspace(),
   local project = self,
   bloop: {
     out: ".bloop/" + project.name, // OPTIONAL
@@ -68,7 +68,7 @@ local bloopConfig(project) = {
 };
 
 local project = ScalaProject {
-  name: "my-parser",
+  name: "parser",
   directory: "modules/parser",
   dependencies: [],
   sources: [self.directory + "/src/main/scala"],
@@ -81,7 +81,7 @@ local project = ScalaProject {
     self.scalaDep("org.slf4j", "slf4j-nop", "1.6.4"),
   ],
   runtimeJavaOpts: [
-    "-agentpath:/home/achen2012/tools/async-profiler-2.0-linux-x64/build/libasyncProfiler.so=start,event=cpu,file=profile.html"
+    //"-agentpath:/home/achen2012/tools/async-profiler-2.0-linux-x64/build/libasyncProfiler.so=start,event=cpu,file=profile.html"
   ]
 };
 bloopConfig(project)/// + (import "test.jsonnet")

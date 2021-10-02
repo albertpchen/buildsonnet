@@ -573,6 +573,11 @@ object Std:
   extension [T](arg: Arg[T])
     def default: Option[EvaluatedJValue] = arg
 
+  private inline def function0(
+    fn: (EvaluationContext, Source) => EvaluatedJValue,
+  ): EvaluatedJValue.JFunction =
+    EvaluatedJValue.JFunction(Source.Generated, 0, (applyCtx, params) => fn(applyCtx, params.src))
+
   private inline def function1[Name1 <: String](
     arg1: Arg[Name1],
   )(
@@ -744,6 +749,9 @@ object Std:
         println(s"TRACE: ${file.path}$lineNum: ${str.str}")
         rest
       }.toJValue
+    },
+    "workspace" -> function0 { (ctx, src) =>
+      EvaluatedJValue.JString(src, ctx.workspaceDir.toString)
     },
     "runJob" -> function1(Arg.desc) { (ctx, src, desc) =>
       given concurrent.ExecutionContext = ctx.executionContext
