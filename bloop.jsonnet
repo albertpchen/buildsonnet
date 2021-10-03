@@ -74,8 +74,9 @@ local project = ScalaProject {
   sources: [$.directory + "/src/main/scala"],
   libraries: [
     $.scalaDep("org.typelevel", "shapeless3-deriving_3", "3.0.3"),
-    $.scalaDep("org.typelevel", "cats-parse_3", "0.3.4",),
+    $.scalaDep("org.typelevel", "cats-parse_3", "0.3.4"),
     $.scalaDep("io.get-coursier", "coursier_2.13", "2.0.16"),
+    $.scalaDep("io.get-coursier", "coursier-launcher_2.13", "2.0.16"),
     $.scalaDep("com.typesafe.slick", "slick_2.13", "3.3.3"),
     $.scalaDep("org.xerial", "sqlite-jdbc", "3.36.0.3"),
     $.scalaDep("org.slf4j", "slf4j-nop", "1.6.4"),

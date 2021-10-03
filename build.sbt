@@ -14,9 +14,12 @@ lazy val parser = project
       "org.typelevel" %% "cats-parse" % "0.3.4",
       "org.scalameta" %%% "munit" % "0.7.26" % Test,
       ("io.get-coursier" %% "coursier" % "2.0.16").cross(CrossVersion.for3Use2_13),
+      ("io.get-coursier" %% "coursier-launcher" % "2.0.16").cross(CrossVersion.for3Use2_13),
       ("com.typesafe.slick" %% "slick" % "3.3.3").cross(CrossVersion.for3Use2_13),
       "org.slf4j" % "slf4j-nop" % "1.6.4",
       "org.xerial" % "sqlite-jdbc" % "3.36.0.3",
+      "ch.epfl.scala" % "bsp4j" % "2.0.0",
+      ("ch.epfl.scala" %% "bloop-launcher-core" % "1.4.9-20-2c23b6ba-20211002-2109").cross(CrossVersion.for3Use2_13),
     ),
     nativeImageOptions ++= List(
       //"-H:TempDirectory=" + nativeImageOutput.value.getAbsolutePath,

@@ -1,5 +1,7 @@
 package root
 
+import scala.concurrent.{Await, ExecutionContext, Future}
+
 import cats.parse.{Parser0 => P0, Parser => P, Numbers}
 import cats.syntax.all._
 
@@ -319,17 +321,227 @@ object Json:
   }
   val parserFile = __ *> expr <* __
 
+  
+trait Cancelable {
+  def cancel(): Unit
+}
 
+object Cancelable {
+  def apply(fn: () => Unit): Cancelable =
+    new Cancelable {
+      override def cancel(): Unit = fn()
+    }
+  val empty: Cancelable = Cancelable(() => ())
+}
+  
+import scala.concurrent.{ExecutionContextExecutorService, Promise}
+case class SocketConnection(
+  serverName: String,
+  output: java.io.OutputStream,
+  input: java.io.InputStream,
+  cancelables: List[Cancelable],
+  finishedPromise: Promise[Unit]
+)
+
+import java.nio.channels.Channels
+import java.nio.channels.Pipe
+import bloop.launcher.LauncherMain
+def connectToLauncher(
+  name: String,
+  bloopVersion: String,
+  bloopPort: Option[Int] = Some(8212),
+)(using ec: ExecutionContextExecutorService): Future[SocketConnection] = {
+  val launcherInOutPipe = Pipe.open()
+  // val launcherIn = new QuietInputStream(
+  //   Channels.newInputStream(launcherInOutPipe.source()),
+  //   "Bloop InputStream"
+  // )
+  val launcherIn = Channels.newInputStream(launcherInOutPipe.source())
+  // val clientOut = new ClosableOutputStream(
+  //   Channels.newOutputStream(launcherInOutPipe.sink()),
+  //   "Bloop OutputStream"
+  // )
+  val clientOut = Channels.newOutputStream(launcherInOutPipe.sink())
+
+  val clientInOutPipe = Pipe.open()
+  val clientIn = Channels.newInputStream(clientInOutPipe.source())
+  val launcherOut = Channels.newOutputStream(clientInOutPipe.sink())
+
+  val serverStarted = Promise[Unit]()
+  val launcher =
+    new LauncherMain(
+      launcherIn,
+      launcherOut,
+      System.err,
+      java.nio.charset.StandardCharsets.UTF_8,
+      bloop.bloopgun.core.Shell.default,
+      userNailgunHost = None,
+      userNailgunPort = bloopPort,
+      serverStarted
+    )
+
+  val finished = Promise[Unit]()
+  val job = ec.submit(new Runnable {
+    override def run(): Unit = {
+      launcher.runLauncher(
+        bloopVersion,
+        skipBspConnection = false,
+        Nil
+      )
+      finished.success(())
+    }
+  })
+
+  serverStarted.future.map { _ =>
+    SocketConnection(
+      name,
+      clientOut,
+      clientIn,
+      List(
+        Cancelable { () =>
+          clientOut.flush()
+          clientOut.close()
+        },
+        Cancelable(() => job.cancel(true))
+      ),
+      finished
+    )
+  }
+}
+
+def bootstrap()(using ExecutionContext): Future[Unit] =
+  import coursier.{Dependency, Fetch, Module, ModuleName, Organization}
+  import coursier.cache.FileCache
+  import coursier.cache.loggers.RefreshLogger
+  Fetch()
+    .withDependencies(Seq(
+      CoursierDependency("ch.epfl.scala", "bloop-launcher_2.12", "1.4.9").toDependency
+    ))
+    .withCache(
+      FileCache().withLogger(RefreshLogger.create(System.out))
+    )
+    .futureResult()
+    .map { result =>
+      val (asFiles, asUrls) = result.artifacts.partition {
+        case (a, _) => a.url.startsWith("file:")
+      }
+      val urls0 = asUrls.map(_._1.url).map(coursier.launcher.ClassPathEntry.Url(_))
+      val files0 = asFiles.map(_._2).map { f =>
+        coursier.launcher.ClassPathEntry.Resource(
+          f.getName,
+          f.lastModified(),
+          java.nio.file.Files.readAllBytes(f.toPath)
+        )
+      }
+      val content = coursier.launcher.ClassLoaderContent(urls0 ++ files0)
+
+      val bootstrap = coursier.launcher.Parameters.Bootstrap(Seq(content), "bloop.launcher.LauncherMain")
+        .withJavaProperties(Seq.empty)
+        .withDeterministic(false)
+        .withPreambleOpt(Some(
+          coursier.launcher.Preamble()
+        ))
+        .withProguarded(true)
+        .withHybridAssembly(false)
+        .withDisableJarChecking(None)
+        .withPython(false)
+      coursier.launcher.Generator.generate(bootstrap, java.nio.file.Paths.get("buildsonnet-bootstrap"))
+    }
+
+import ch.epfl.scala.bsp4j.{
+  BuildClient,
+  BuildServer,
+  BuildClientCapabilities,
+  InitializeBuildParams,
+  ScalaBuildServer,
+  ShowMessageParams,
+  LogMessageParams,
+  TaskStartParams,
+  TaskProgressParams,
+  TaskFinishParams,
+  PublishDiagnosticsParams,
+  DidChangeBuildTarget,
+}
+trait BloopServer extends BuildServer with ScalaBuildServer
+
+def client(
+  workspace: java.nio.file.Path,
+  connection: SocketConnection
+)(using ec: ExecutionContextExecutorService): Future[Unit] = Future {
+  import java.util.concurrent.{Future => _, _}
+  import org.eclipse.lsp4j.jsonrpc.Launcher
+
+  val localClient = new BuildClient:
+    def afterBuildTaskFinish(bti: String) =
+      println(s"afterBuildTaskFinish: $bti")
+
+    override def onBuildShowMessage(params: ShowMessageParams): Unit =
+      println(s"onBuildShowMessage: $params")
+
+    override def onBuildLogMessage(params: LogMessageParams): Unit =
+      println(s"onBuildLogMessage: $params")
+
+    override def onBuildTaskStart(params: TaskStartParams): Unit =
+      println(s"onBuildTaskStart: $params")
+
+    override def onBuildTaskProgress(params: TaskProgressParams): Unit =
+      println(s"onBuildTaskProgress: $params")
+
+    override def onBuildTaskFinish(params: TaskFinishParams): Unit =
+      println(s"onBuildTaskFinish: params")
+
+    override def onBuildPublishDiagnostics(params: PublishDiagnosticsParams): Unit =
+      println(s"onBuildPublishDiagnostics: $params")
+
+    override def onBuildTargetDidChange(params: DidChangeBuildTarget): Unit =
+      println(s"onBuildTargetDidChange: $params")
+
+  val launcher = new Launcher.Builder[BloopServer]()
+    .setOutput(connection.output)
+    .setInput(connection.input)
+    .setLocalService(localClient)
+    .setExecutorService(ec)
+    .setRemoteInterface(classOf[BloopServer])
+    .create()
+  val server = launcher.getRemoteProxy
+  new Thread {
+    override def run() = launcher.startListening().get()
+  }
+  val initializeResult = server.buildInitialize(new InitializeBuildParams(
+    "buildsonnet", // name of this client
+    "0.0.1", // version of this client
+    "2.0.0", // BSP version
+    workspace.toUri().toString(),
+    new BuildClientCapabilities(java.util.Collections.singletonList("scala"))
+  ))
+  import scala.jdk.FutureConverters.given
+  initializeResult.asScala.map(_ => server.onBuildInitialized()).map(_ =>
+    server.buildShutdown().asScala.map(_ => server.onBuildExit())
+  )
+}
+       
 
 @main
 def asdf(args: String*): Unit =
-  import scala.concurrent.{Await, ExecutionContext, Future}
   import scala.concurrent.duration.Duration
   import scala.util.{Failure, Success}
   val filename = args(0)
   val source = scala.io.Source.fromFile(filename).getLines.mkString("\n")
   val sourceFile = SourceFile(filename, source)
   val parser = Json.parserFile
+
+
+  val exec = java.util.concurrent.Executors.newCachedThreadPool()
+  given ExecutionContextExecutorService = ExecutionContext.fromExecutorService(exec)
+  Await.result(bootstrap(), Duration.Inf)
+  println("launching bloop")
+  val socketConnection = Await.result(connectToLauncher("buildsonnet", "1.4.9"), Duration.Inf)
+  println("launched bloop")
+  println("closing bloop")
+  Await.result(client(java.nio.file.Paths.get(".").toAbsolutePath.normalize, socketConnection), Duration.Inf)
+  socketConnection.cancelables.foreach(_.cancel())
+  socketConnection.input.close()
+  println("closed bloop")
   println("START")
   parser.parseAll(source).fold(
     error => {
@@ -337,7 +549,6 @@ def asdf(args: String*): Unit =
       println("FAIL: " + error.toString)
     },
     ast => {
-      given ExecutionContext = ExecutionContext.global
       println("END PARSE")
       val ctx = EvaluationContext(sourceFile).bindEvaluated("std", Std.obj)
       val manifested = manifest(ctx)(ast)
