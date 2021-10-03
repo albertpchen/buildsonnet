@@ -349,7 +349,7 @@ import bloop.launcher.LauncherMain
 def connectToLauncher(
   name: String,
   bloopVersion: String,
-  bloopPort: Option[Int] = Some(8212),
+  bloopPort: Int,
 )(using ec: ExecutionContextExecutorService): Future[SocketConnection] = {
   val launcherInOutPipe = Pipe.open()
   // val launcherIn = new QuietInputStream(
@@ -367,6 +367,7 @@ def connectToLauncher(
   val clientIn = Channels.newInputStream(clientInOutPipe.source())
   val launcherOut = Channels.newOutputStream(clientInOutPipe.sink())
 
+  println("111")
   val serverStarted = Promise[Unit]()
   val launcher =
     new LauncherMain(
@@ -376,9 +377,10 @@ def connectToLauncher(
       java.nio.charset.StandardCharsets.UTF_8,
       bloop.bloopgun.core.Shell.default,
       userNailgunHost = None,
-      userNailgunPort = bloopPort,
+      userNailgunPort = Some(bloopPort),
       serverStarted
     )
+  println("222")
 
   val finished = Promise[Unit]()
   val job = ec.submit(new Runnable {
@@ -391,8 +393,10 @@ def connectToLauncher(
       finished.success(())
     }
   })
+  println("333")
 
   serverStarted.future.map { _ =>
+    println("444")
     SocketConnection(
       name,
       clientOut,
@@ -452,6 +456,8 @@ import ch.epfl.scala.bsp4j.{
   BuildClient,
   BuildServer,
   BuildClientCapabilities,
+  BuildTargetIdentifier,
+  CompileParams,
   InitializeBuildParams,
   ScalaBuildServer,
   ShowMessageParams,
@@ -466,11 +472,12 @@ trait BloopServer extends BuildServer with ScalaBuildServer
 
 def client(
   workspace: java.nio.file.Path,
-  connection: SocketConnection
-)(using ec: ExecutionContextExecutorService): Future[Unit] = Future {
+  connection: SocketConnection,
+)(using ec: ExecutionContextExecutorService): Future[Unit] =
   import java.util.concurrent.{Future => _, _}
   import org.eclipse.lsp4j.jsonrpc.Launcher
 
+  println("CONNECT: 111")
   val localClient = new BuildClient:
     def afterBuildTaskFinish(bti: String) =
       println(s"afterBuildTaskFinish: $bti")
@@ -495,6 +502,7 @@ def client(
 
     override def onBuildTargetDidChange(params: DidChangeBuildTarget): Unit =
       println(s"onBuildTargetDidChange: $params")
+  println("CONNECT: 222")
 
   val launcher = new Launcher.Builder[BloopServer]()
     .setOutput(connection.output)
@@ -503,22 +511,54 @@ def client(
     .setExecutorService(ec)
     .setRemoteInterface(classOf[BloopServer])
     .create()
+  println("CONNECT: 333")
   val server = launcher.getRemoteProxy
-  new Thread {
-    override def run() = launcher.startListening().get()
-  }
+  localClient.onConnectWithServer(server)
+  // val luancherListener = ec.submit(new Runnable {
+  //   override def run() = launcher.startListening().get()
+  // })
+  println("CONNECT: 444")
+  val listening = launcher.startListening()
+  println("CONNECT: 555")
+  import scala.jdk.FutureConverters.given
   val initializeResult = server.buildInitialize(new InitializeBuildParams(
     "buildsonnet", // name of this client
     "0.0.1", // version of this client
-    "2.0.0", // BSP version
+    "1.0.0", // BSP version
     workspace.toUri().toString(),
     new BuildClientCapabilities(java.util.Collections.singletonList("scala"))
   ))
-  import scala.jdk.FutureConverters.given
-  initializeResult.asScala.map(_ => server.onBuildInitialized()).map(_ =>
-    server.buildShutdown().asScala.map(_ => server.onBuildExit())
-  )
-}
+  println("CONNECT: 666")
+  import scala.jdk.CollectionConverters.given
+  Future(println("SLFJLDJF")).flatMap { _ =>
+  for
+    _ <- initializeResult.asScala
+    _ = println(s"INIT 222")
+    _ = server.onBuildInitialized()
+    _ = println(s"INIT 333")
+    compileResult <- server.buildTargetCompile(
+      new CompileParams(Seq(new BuildTargetIdentifier(s"file://$workspace/?id=parser")).asJava)
+    ).asScala
+    _ = println(s"INIT 444")
+    _ = println(s"SLDFJLDSKJF: $compileResult")
+    _ = println(s"INIT 555")
+    _ <- server.buildShutdown().asScala
+    _ = println(s"INIT 666")
+  yield
+    println(s"INIT 777")
+    server.onBuildExit()
+    println(s"INIT 888")
+    //listening.cancel(true)
+    connection.finishedPromise.success(())
+    println(s"INIT 999")
+  // initializeResult.asScala.map(_ => server.onBuildInitialized()).map(_ =>
+  //   server.buildShutdown().asScala.map {
+  //     _ =>
+  //       server.onBuildExit()
+  //       luancherListener.cancel(true)
+  //   }
+  // )
+  }
        
 
 @main
@@ -535,12 +575,13 @@ def asdf(args: String*): Unit =
   given ExecutionContextExecutorService = ExecutionContext.fromExecutorService(exec)
   Await.result(bootstrap(), Duration.Inf)
   println("launching bloop")
-  val socketConnection = Await.result(connectToLauncher("buildsonnet", "1.4.9"), Duration.Inf)
+  val bloopPort = 8218
+  val socketConnection = Await.result(connectToLauncher("buildsonnet", "1.4.9", bloopPort), Duration.Inf)
   println("launched bloop")
   println("closing bloop")
   Await.result(client(java.nio.file.Paths.get(".").toAbsolutePath.normalize, socketConnection), Duration.Inf)
-  socketConnection.cancelables.foreach(_.cancel())
-  socketConnection.input.close()
+  //socketConnection.cancelables.foreach(_.cancel())
+  //socketConnection.input.close()
   println("closed bloop")
   println("START")
   parser.parseAll(source).fold(
@@ -558,3 +599,4 @@ def asdf(args: String*): Unit =
       )
     }
   )
+  summon[ExecutionContextExecutorService].shutdownNow()

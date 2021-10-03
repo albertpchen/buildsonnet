@@ -81,6 +81,7 @@ local project = ScalaProject {
     $.scalaDep("org.xerial", "sqlite-jdbc", "3.36.0.3"),
     $.scalaDep("org.slf4j", "slf4j-nop", "1.6.4"),
     $.scalaDep("ch.epfl.scala", "bsp4j", "2.0.0"),
+    $.scalaDep("ch.epfl.scala", "bloop-launcher-core_2.13", "1.4.9-20-2c23b6ba-20211002-2109"),
   ],
   runtimeJavaOpts: [
     //"-agentpath:/home/achen2012/tools/async-profiler-2.0-linux-x64/build/libasyncProfiler.so=start,event=cpu,file=profile.html"
