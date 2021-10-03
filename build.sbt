@@ -22,6 +22,7 @@ lazy val parser = project
       //"-H:TempDirectory=" + nativeImageOutput.value.getAbsolutePath,
       "-H:ReflectionConfigurationFiles=" + (root / baseDirectory).value.getAbsolutePath + "/native-image-reflect-config.json",
       "--initialize-at-build-time",
+      "--enable-url-protocols=https",
     ),
     nativeImageVersion := "21.2.0",
     testFrameworks += new TestFramework("munit.Framework"),

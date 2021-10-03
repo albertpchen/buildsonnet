@@ -71,14 +71,15 @@ local project = ScalaProject {
   name: "parser",
   directory: "modules/parser",
   dependencies: [],
-  sources: [self.directory + "/src/main/scala"],
+  sources: [$.directory + "/src/main/scala"],
   libraries: [
-    self.scalaDep("org.typelevel", "shapeless3-deriving_3", "3.0.3"),
-    self.scalaDep("org.typelevel", "cats-parse_3", "0.3.4",),
-    self.scalaDep("io.get-coursier", "coursier_2.13", "2.0.16"),
-    self.scalaDep("com.typesafe.slick", "slick_2.13", "3.3.3"),
-    self.scalaDep("org.xerial", "sqlite-jdbc", "3.36.0.3"),
-    self.scalaDep("org.slf4j", "slf4j-nop", "1.6.4"),
+    $.scalaDep("org.typelevel", "shapeless3-deriving_3", "3.0.3"),
+    $.scalaDep("org.typelevel", "cats-parse_3", "0.3.4",),
+    $.scalaDep("io.get-coursier", "coursier_2.13", "2.0.16"),
+    $.scalaDep("com.typesafe.slick", "slick_2.13", "3.3.3"),
+    $.scalaDep("org.xerial", "sqlite-jdbc", "3.36.0.3"),
+    $.scalaDep("org.slf4j", "slf4j-nop", "1.6.4"),
+    $.scalaDep("ch.epfl.scala", "bsp4j", "2.0.0"),
   ],
   runtimeJavaOpts: [
     //"-agentpath:/home/achen2012/tools/async-profiler-2.0-linux-x64/build/libasyncProfiler.so=start,event=cpu,file=profile.html"
