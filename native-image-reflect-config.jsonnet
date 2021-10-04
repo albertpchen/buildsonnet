@@ -18,6 +18,16 @@ local class(name, fields=null) =
         [fields]
   };
 
+local all = {
+  "allDeclaredConstructors": true,
+  "allPublicConstructors": true,
+  "allDeclaredMethods": true,
+  "allPublicMethods": true,
+  "allDeclaredClasses": true,
+  "allPublicClasses": true,
+  "allDeclaredFields":true,
+};
+
 [
   class('sun.misc.Unsafe', field('theUnsafe', allowUnsafeAccess=true)),
   class('org.slf4j.helpers.NOPLoggerFactory'),
@@ -37,55 +47,32 @@ local class(name, fields=null) =
   class('root.CoursierDependency$', '0bitmap$2'),
   class('root.CoursierParams$', '0bitmap$1'),
   class('root.JobDescription$', '0bitmap$1'),
-  class('root.JobTable') {
-    "allDeclaredMethods" : true
+  class('root.JobTable') { "allDeclaredMethods" : true },
+  class('com.sun.org.apache.xerces.internal.jaxp.SAXParserFactoryImpl') + all,
+  class('org.eclipse.lsp4j.jsonrpc.RemoteEndpoint') + all,
+  class('org.eclipse.lsp4j.jsonrpc.Endpoint')  + all,
+  class('root.BloopServer') + all,
+  class('ch.epfl.scala.bsp4j.BuildServer') + all,
+  class('ch.epfl.scala.bsp4j.ScalaBuildServer') + all,
+  class('ch.epfl.scala.bsp4j.InitializeBuildResult') + all {
+    methods:[{name:"<init>",parameterTypes:[] }]
   },
-  class('com.sun.org.apache.xerces.internal.jaxp.SAXParserFactoryImpl') {
-    "allDeclaredConstructors": true,
-    "allPublicConstructors": true,
-    "allDeclaredMethods": true,
-    "allPublicMethods": true,
-    "allDeclaredClasses": true,
-    "allPublicClasses": true
+  class('ch.epfl.scala.bsp4j.InitializeBuildParams') + all {
+    methods:[{name:"<init>",parameterTypes:[] }]
   },
-  class('org.eclipse.lsp4j.jsonrpc.RemoteEndpoint') {
-    "allDeclaredConstructors": true,
-    "allPublicConstructors": true,
-    "allDeclaredMethods": true,
-    "allPublicMethods": true,
-    "allDeclaredClasses": true,
-    "allPublicClasses": true
+  class('org.eclipse.lsp4j.jsonrpc.json.adapters.JsonElementTypeAdapter$Factory') + all {
+    methods:[{name:"<init>",parameterTypes:[] }]
   },
-  class('org.eclipse.lsp4j.jsonrpc.Endpoint') {
-    "allDeclaredConstructors": true,
-    "allPublicConstructors": true,
-    "allDeclaredMethods": true,
-    "allPublicMethods": true,
-    "allDeclaredClasses": true,
-    "allPublicClasses": true
+  class('ch.epfl.scala.bsp4j.CompileProvider') + all {
+    methods:[{name:"<init>",parameterTypes:[] }]
   },
-  class('root.BloopServer') {
-    "allDeclaredConstructors": true,
-    "allPublicConstructors": true,
-    "allDeclaredMethods": true,
-    "allPublicMethods": true,
-    "allDeclaredClasses": true,
-    "allPublicClasses": true
+  class('ch.epfl.scala.bsp4j.CompileResult') + all {
+    methods:[{name:"<init>",parameterTypes:[] }]
   },
-  class('ch.epfl.scala.bsp4j.BuildServer') {
-    "allDeclaredConstructors": true,
-    "allPublicConstructors": true,
-    "allDeclaredMethods": true,
-    "allPublicMethods": true,
-    "allDeclaredClasses": true,
-    "allPublicClasses": true
+  class('ch.epfl.scala.bsp4j.RunProvider') + all {
+    methods:[{name:"<init>",parameterTypes:[] }]
   },
-  class('ch.epfl.scala.bsp4j.ScalaBuildServer') {
-    "allDeclaredConstructors": true,
-    "allPublicConstructors": true,
-    "allDeclaredMethods": true,
-    "allPublicMethods": true,
-    "allDeclaredClasses": true,
-    "allPublicClasses": true
-  }
+  class('ch.epfl.scala.bsp4j.TestProvider') + all {
+    methods:[{name:"<init>",parameterTypes:[] }]
+  },
 ]

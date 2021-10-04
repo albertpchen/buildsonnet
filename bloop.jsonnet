@@ -56,8 +56,10 @@ local bloopConfig(project) = {
       name: "jvm",
       runtimeConfig: {
         options: std.get(project, "runtimeJavaOpts", default=[]),
+        [if "runtimeJvmHome" in project then "home"]: project.runtimeJvmHome,
       },
       config: {
+        [if "jvmHome" in project then "home"]: project.jvmHome,
         options: [
           "-Duser.dir=" + project.workspaceDir
         ]
@@ -83,8 +85,10 @@ local project = ScalaProject {
     $.scalaDep("ch.epfl.scala", "bsp4j", "2.0.0"),
     $.scalaDep("ch.epfl.scala", "bloop-launcher-core_2.13", "1.4.9-20-2c23b6ba-20211002-2109"),
   ],
+  runtimeJvmHome: "/home/turtle/.cache/coursier/jvm/graalvm-java11@21.2.0/",
   runtimeJavaOpts: [
+    "-agentlib:native-image-agent=config-output-dir=" + std.workspace() + "/native-image-agent-config-output-dir"
     //"-agentpath:/home/achen2012/tools/async-profiler-2.0-linux-x64/build/libasyncProfiler.so=start,event=cpu,file=profile.html"
-  ]
+  ],
 };
 bloopConfig(project)/// + (import "test.jsonnet")

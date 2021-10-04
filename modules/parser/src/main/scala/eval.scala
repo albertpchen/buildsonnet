@@ -454,6 +454,12 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
             ctx.error(right.src, s"shift amount cannot be negative, got $rhs")
         EvaluatedJValue.JNum(src, (left.double.toLong << shamt).toDouble)
       }.toJValue
+    case JBinaryOperator.Op_in =>
+      ctx.expectString(left).zip(ctx.expectObject(right)).flatMap { (left, right) =>
+        right.members().map { members =>
+          EvaluatedJValue.JBoolean(src, members.contains(left.str))
+        }
+      }.toJValue
 
   case JValue.JUnaryOp(src, op, rawOperand) =>
     given concurrent.ExecutionContext = ctx.executionContext
