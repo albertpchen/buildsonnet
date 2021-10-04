@@ -1,0 +1,12 @@
+[
+  [
+    "root.BloopServer",
+    "ch.epfl.scala.bsp4j.BuildServer",
+    "ch.epfl.scala.bsp4j.ScalaBuildServer",
+    "org.eclipse.lsp4j.jsonrpc.Endpoint"
+  ],
+  [
+    "root.BloopServer",
+    "org.eclipse.lsp4j.jsonrpc.Endpoint"
+  ]
+]

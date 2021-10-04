@@ -37,7 +37,55 @@ local class(name, fields=null) =
   class('root.CoursierDependency$', '0bitmap$2'),
   class('root.CoursierParams$', '0bitmap$1'),
   class('root.JobDescription$', '0bitmap$1'),
-  class('root.JobTable') + {
+  class('root.JobTable') {
     "allDeclaredMethods" : true
+  },
+  class('com.sun.org.apache.xerces.internal.jaxp.SAXParserFactoryImpl') {
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true,
+    "allDeclaredMethods": true,
+    "allPublicMethods": true,
+    "allDeclaredClasses": true,
+    "allPublicClasses": true
+  },
+  class('org.eclipse.lsp4j.jsonrpc.RemoteEndpoint') {
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true,
+    "allDeclaredMethods": true,
+    "allPublicMethods": true,
+    "allDeclaredClasses": true,
+    "allPublicClasses": true
+  },
+  class('org.eclipse.lsp4j.jsonrpc.Endpoint') {
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true,
+    "allDeclaredMethods": true,
+    "allPublicMethods": true,
+    "allDeclaredClasses": true,
+    "allPublicClasses": true
+  },
+  class('root.BloopServer') {
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true,
+    "allDeclaredMethods": true,
+    "allPublicMethods": true,
+    "allDeclaredClasses": true,
+    "allPublicClasses": true
+  },
+  class('ch.epfl.scala.bsp4j.BuildServer') {
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true,
+    "allDeclaredMethods": true,
+    "allPublicMethods": true,
+    "allDeclaredClasses": true,
+    "allPublicClasses": true
+  },
+  class('ch.epfl.scala.bsp4j.ScalaBuildServer') {
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true,
+    "allDeclaredMethods": true,
+    "allPublicMethods": true,
+    "allDeclaredClasses": true,
+    "allPublicClasses": true
   }
 ]

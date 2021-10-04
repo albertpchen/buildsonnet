@@ -385,11 +385,13 @@ def connectToLauncher(
   val finished = Promise[Unit]()
   val job = ec.submit(new Runnable {
     override def run(): Unit = {
+        println("666")
       launcher.runLauncher(
         bloopVersion,
         skipBspConnection = false,
         Nil
       )
+      println("777")
       finished.success(())
     }
   })
@@ -403,6 +405,7 @@ def connectToLauncher(
       clientIn,
       List(
         Cancelable { () =>
+          println("555")
           clientOut.flush()
           clientOut.close()
         },
@@ -477,7 +480,6 @@ def client(
   import java.util.concurrent.{Future => _, _}
   import org.eclipse.lsp4j.jsonrpc.Launcher
 
-  println("CONNECT: 111")
   val localClient = new BuildClient:
     def afterBuildTaskFinish(bti: String) =
       println(s"afterBuildTaskFinish: $bti")
@@ -502,7 +504,6 @@ def client(
 
     override def onBuildTargetDidChange(params: DidChangeBuildTarget): Unit =
       println(s"onBuildTargetDidChange: $params")
-  println("CONNECT: 222")
 
   val launcher = new Launcher.Builder[BloopServer]()
     .setOutput(connection.output)
@@ -511,15 +512,16 @@ def client(
     .setExecutorService(ec)
     .setRemoteInterface(classOf[BloopServer])
     .create()
-  println("CONNECT: 333")
+  println("launch 111")
   val server = launcher.getRemoteProxy
+  println("launch 222")
   localClient.onConnectWithServer(server)
+  println("launch 333")
   // val luancherListener = ec.submit(new Runnable {
   //   override def run() = launcher.startListening().get()
   // })
-  println("CONNECT: 444")
   val listening = launcher.startListening()
-  println("CONNECT: 555")
+  println("launch 444")
   import scala.jdk.FutureConverters.given
   val initializeResult = server.buildInitialize(new InitializeBuildParams(
     "buildsonnet", // name of this client
@@ -528,37 +530,25 @@ def client(
     workspace.toUri().toString(),
     new BuildClientCapabilities(java.util.Collections.singletonList("scala"))
   ))
-  println("CONNECT: 666")
+  println("launch 555")
   import scala.jdk.CollectionConverters.given
-  Future(println("SLFJLDJF")).flatMap { _ =>
   for
     _ <- initializeResult.asScala
-    _ = println(s"INIT 222")
+    _ = println("init 111")
     _ = server.onBuildInitialized()
-    _ = println(s"INIT 333")
+    _ = println("init 222")
     compileResult <- server.buildTargetCompile(
       new CompileParams(Seq(new BuildTargetIdentifier(s"file://$workspace/?id=parser")).asJava)
     ).asScala
-    _ = println(s"INIT 444")
     _ = println(s"SLDFJLDSKJF: $compileResult")
-    _ = println(s"INIT 555")
+    _ = println("init 333")
     _ <- server.buildShutdown().asScala
-    _ = println(s"INIT 666")
+    _ = println("init 444")
   yield
-    println(s"INIT 777")
     server.onBuildExit()
-    println(s"INIT 888")
-    //listening.cancel(true)
+    println("init 555")
     connection.finishedPromise.success(())
-    println(s"INIT 999")
-  // initializeResult.asScala.map(_ => server.onBuildInitialized()).map(_ =>
-  //   server.buildShutdown().asScala.map {
-  //     _ =>
-  //       server.onBuildExit()
-  //       luancherListener.cancel(true)
-  //   }
-  // )
-  }
+    println("init 666")
        
 
 @main
@@ -573,7 +563,7 @@ def asdf(args: String*): Unit =
 
   val exec = java.util.concurrent.Executors.newCachedThreadPool()
   given ExecutionContextExecutorService = ExecutionContext.fromExecutorService(exec)
-  Await.result(bootstrap(), Duration.Inf)
+  //Await.result(bootstrap(), Duration.Inf)
   println("launching bloop")
   val bloopPort = 8218
   val socketConnection = Await.result(connectToLauncher("buildsonnet", "1.4.9", bloopPort), Duration.Inf)
@@ -600,3 +590,11 @@ def asdf(args: String*): Unit =
     }
   )
   summon[ExecutionContextExecutorService].shutdownNow()
+
+/*
+Warning: Dynamic proxy method java.lang.reflect.Proxy.newProxyInstance invoked at org.eclipse.lsp4j.jsonrpc.services.ServiceEndpoints.toServiceObject(ServiceEndpoints.java:41)
+Warning: Dynamic proxy method java.lang.reflect.Proxy.newProxyInstance invoked at com.sun.jna.Native.loadLibrary(Native.java:648)
+Warning: Dynamic proxy method java.lang.reflect.Proxy.newProxyInstance invoked at org.eclipse.lsp4j.jsonrpc.services.ServiceEndpoints.toServiceObject(ServiceEndpoints.java:54)
+Warning: Aborting stand-alone image build due to dynamic proxy use without configuration.
+Warning: Use -H:+ReportExceptionStackTraces to print stacktrace of underlying exception
+*/
