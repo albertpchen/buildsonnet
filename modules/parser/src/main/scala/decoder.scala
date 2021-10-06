@@ -107,9 +107,10 @@ object JDecoder:
           def decode(ctx: EvaluationContext, path: JDecoderPath, obj: EvaluatedJValue.JObject) =
             given ExecutionContext = ctx.executionContext
             val head =
-              obj.imp.lookupOpt(obj.src, constValue[name].toString).flatMap { lvalueOpt =>
+              val field = constValue[name].toString
+              obj.imp.lookupOpt(obj.src, field).flatMap { lvalueOpt =>
                 lvalueOpt.fold(Future(None)) { lvalue =>
-                  summonInline[JDecoder[head]].decode(ctx, path, lvalue.evaluated).map(Some(_))
+                  summonInline[JDecoder[head]].decode(ctx, path.withField(field), lvalue.evaluated).map(Some(_))
                 }
               }
             val tail = decodeProduct[tail].decode(ctx, path, obj)

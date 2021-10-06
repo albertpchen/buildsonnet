@@ -529,15 +529,19 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
       }.toJValue
 
 object Std:
-  private val ctx = new EvaluationContext.Imp(
-    Importer.std,
-    JobRunner()(using concurrent.ExecutionContext.global),
-    new java.io.File(".").toPath,
-    SourceFile.std,
-    Map.empty,
-    List.empty,
-    concurrent.ExecutionContext.global,
-  )
+/*
+  private val ctx = {
+    new EvaluationContext.Imp(
+      BloopServerConnection.empty,
+      Importer.std,
+      JobRunner()(using null), // TODO: use proper stub 
+      new java.io.File(".").toPath,
+      SourceFile.std,
+      Map.empty,
+      List.empty,
+      null,
+    )
+  }*/
 
   private def bindArgs(
     argNames: Seq[(String, Option[EvaluatedJValue])],
@@ -657,6 +661,7 @@ object Std:
     })
 
   private def makeObject(
+    ctx: EvaluationContext,
     staticMembers: Map[String, EvaluatedJValue],
   ): EvaluatedJValue.JObject =
     var objCtx: ObjectEvaluationContext = null
@@ -673,6 +678,7 @@ object Std:
         }
     )
     objCtx = EvaluationContext.ObjectImp(
+      BloopServerConnection.empty,
       obj,
       collection.immutable.Queue.empty,
       ctx,
@@ -692,7 +698,7 @@ object Std:
 
   private val jnull = EvaluatedJValue.JNull(Source.Generated)
   private val jtrue = EvaluatedJValue.JBoolean(Source.Generated, true)
-  val obj = makeObject(Map(
+  def obj(ctx: EvaluationContext) = makeObject(ctx, Map(
     "toString" -> function1(Arg.x)(toStringImp),
     "type" -> function1(Arg.x) { (ctx, src, x) =>
       EvaluatedJValue.JString(src, EvaluationContext.typeString(x))
@@ -771,7 +777,7 @@ object Std:
         EvaluatedJValue.JPath(src, ctx.resolvePath(pathName.str))
       }.toJValue
     },
-    "scala" -> makeObject(Map(
+    "scala" -> makeObject(ctx, Map(
       "cs" -> function1(Arg.deps) { (ctx, src, deps) =>
         import coursier.{Dependency, Fetch, Module, ModuleName, Organization}
         import coursier.cache.FileCache

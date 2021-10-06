@@ -32,9 +32,10 @@ object Importer:
         Json.parserFile.parseAll(source).fold(
           error => ctx.error(src, error.toString),
           ast => {
-            given concurrent.ExecutionContext = ctx.executionContext
+            given concurrent.ExecutionContextExecutorService = ctx.executionContext
             val sourceFile = SourceFile(normalized, source)
-            val newCtx = EvaluationContext(sourceFile).bindEvaluated("std", Std.obj)
+            val withOutStd = EvaluationContext(sourceFile)
+            val newCtx = withOutStd.bindEvaluated("std", Std.obj(withOutStd))
             evalUnsafe(newCtx)(ast)
           }
         )
@@ -150,8 +151,20 @@ object EvaluationError:
 
 
 sealed trait EvaluationContext:
-  def executionContext: concurrent.ExecutionContext
+  def withScope(scope: Map[String, LazyValue]): EvaluationContext
+  def executionContext: concurrent.ExecutionContextExecutorService
   def file: SourceFile
+
+  def bloopServer: BloopServerConnection
+  final def compile(src: Source, targetId: String): Future[EvaluatedJValue.JNum] =
+    given concurrent.ExecutionContext = executionContext
+    bloopServer.compile(targetId).map { res =>
+      val code = res.getStatusCode() match
+        case ch.epfl.scala.bsp4j.StatusCode.OK => 1
+        case ch.epfl.scala.bsp4j.StatusCode.ERROR => 2
+        case ch.epfl.scala.bsp4j.StatusCode.CANCELLED => 3
+      EvaluatedJValue.JNum(src, code)
+    }
 
   protected def importer: Importer
   final def `import`(src: Source, fileName: String): EvaluatedJValue =
@@ -254,23 +267,18 @@ object EvaluationContext:
     inline def expectType[T <: EvaluatedJValue.JNow](expr: EvaluatedJValue): Future[T] =
       expectType[T](expr, s"Unexpected type ${typeString(theExpr)}, expected ${typeString[T]}")
 
-    // inline def expectType[T <: EvaluatedJValue](expr: EvaluatedJValue): T =
-    //   if expr.isInstanceOf[T] then
-    //     expr.asInstanceOf[T]
-    //   else
-    //     ctx.error(expr.src, s"Unexpected type ${typeString(expr)}, expected ${typeString[T]}")
-
     inline def expectType[T <: EvaluatedJValue.JNow](code: JValue): Future[T] =
       expectType[T](evalUnsafe(ctx)(code))
 
   private[root] case class Imp(
+    val bloopServer: BloopServerConnection,
     val importer: Importer,
     val jobRunner: JobRunner,
     val workspaceDir: java.nio.file.Path,
     file: SourceFile,
     scope: Map[String, LazyValue],
     stack: List[StackEntry],
-    executionContext: concurrent.ExecutionContext,
+    executionContext: concurrent.ExecutionContextExecutorService,
   ) extends EvaluationContext:
     def error(src: Source, message: String): Nothing = throw new EvaluationError(file, src, message, stack)
 
@@ -281,12 +289,16 @@ object EvaluationContext:
 
     def objectCtx(obj: EvaluatedJValue.JObject): ObjectEvaluationContext =
       new ObjectImp(
+        bloopServer,
         obj,
         collection.immutable.Queue.empty,
         this,
         Map.empty,
         stack,
       ).bind("$", JValue.JSelf(Source.Generated))
+
+    def withScope(extraScope: Map[String, LazyValue]): EvaluationContext =
+      this.copy(scope = scope ++ extraScope)
 
     def functionCtx(fn: Source) =
       this.copy(stack = StackEntry.function(file, fn) +: stack)
@@ -309,9 +321,10 @@ object EvaluationContext:
     def withStackEntry(entry: StackEntry) = this.copy(stack = entry +: stack)
 
   private[root] case class ObjectImp(
+    bloopServer: BloopServerConnection,
     selfObj: EvaluatedJValue.JObject,
     superChain: collection.immutable.Queue[EvaluatedJValue.JObject],
-    topCtx: Imp,
+    topCtx: EvaluationContext,
     locals: Map[String, JValue | EvaluatedJValue | LazyValue],
     stack: List[StackEntry],
   ) extends ObjectEvaluationContext:
@@ -336,11 +349,15 @@ object EvaluationContext:
       else
         topCtx.lookup(src, id)
 
+    def withScope(extraScope: Map[String, LazyValue]): EvaluationContext =
+      this.copy(locals = locals ++ extraScope)
+
     def objectCtx(obj: EvaluatedJValue.JObject): ObjectEvaluationContext =
       new ObjectImp(
+        bloopServer,
         obj,
         collection.immutable.Queue.empty,
-        topCtx.copy(scope = topCtx.scope ++ scope),
+        topCtx.withScope(scope),
         Map.empty,
         stack,
       )
@@ -366,6 +383,20 @@ object EvaluationContext:
     def withStackEntry(entry: StackEntry) =
       this.copy(stack = entry +: stack)
 
-  def apply(file: SourceFile)(implicit executionContext: concurrent.ExecutionContext): EvaluationContext =
+  def apply(file: SourceFile)(using executionContext: concurrent.ExecutionContextExecutorService): EvaluationContext =
     val currFileParent = new java.io.File(file.path).getAbsoluteFile.toPath.getParent
-    Imp(Importer(), JobRunner(), currFileParent, file, Map.empty, List.empty, executionContext)
+    val bloopServer = BloopServerConnection.std(
+      currFileParent,
+      Logger.default("buildsonnet"),
+      8212,
+    )
+    Imp(
+      bloopServer,
+      Importer(),
+      JobRunner(),
+      currFileParent,
+      file,
+      Map.empty,
+      List.empty,
+      executionContext
+    )

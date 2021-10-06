@@ -336,10 +336,16 @@ def asdf(args: String*): Unit =
   //Await.result(bootstrap(), Duration.Inf)
   println("launching bloop")
   val bloopPort = 8218
-  val socketConnection = Await.result(connectToLauncher("buildsonnet", "1.4.9", bloopPort), Duration.Inf)
+  val bloopServer = BloopServerConnection.std(
+    java.nio.file.Paths.get(".").toAbsolutePath.normalize,
+    Logger.default("buildsonnet"),
+    bloopPort,
+  )
+
   println("launched bloop")
   println("closing bloop")
-  Await.result(client(java.nio.file.Paths.get(".").toAbsolutePath.normalize, socketConnection), Duration.Inf)
+  Await.result(bloopServer.compile("asdf"), Duration.Inf)
+  Await.result(bloopServer.shutdown(), Duration.Inf)
   //socketConnection.cancelables.foreach(_.cancel())
   //socketConnection.input.close()
   println("closed bloop")
@@ -351,7 +357,8 @@ def asdf(args: String*): Unit =
     },
     ast => {
       println("END PARSE")
-      val ctx = EvaluationContext(sourceFile).bindEvaluated("std", Std.obj)
+      val withoutStd = EvaluationContext(sourceFile)
+      val ctx = withoutStd.bindEvaluated("std", Std.obj(withoutStd))
       val manifested = manifest(ctx)(ast)
       manifested.fold(
         msg => println(s"FAIL: $msg"),
