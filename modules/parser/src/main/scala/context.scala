@@ -184,8 +184,10 @@ sealed trait ObjectEvaluationContext extends EvaluationContext:
   def withStackEntry(entry: StackEntry): ObjectEvaluationContext
   def superChain: collection.immutable.Queue[EvaluatedJValue.JObject]
 
+given theExpr(using expr: EvaluatedJValue): EvaluatedJValue = expr
+
 object EvaluationContext:
-  inline private def typeString[T]: String =
+  inline def typeString[T]: String =
     val types = macros.mapUnionType[T, String] {
       case _: EvaluatedJValue.JBoolean => "bool"
       case _: EvaluatedJValue.JNull => "null"
@@ -231,7 +233,7 @@ object EvaluationContext:
     inline def expectString(expr: EvaluatedJValue): Future[EvaluatedJValue.JString] = expectType[EvaluatedJValue.JString](expr)
     inline def expectFieldName(code: JValue): Future[EvaluatedJValue.JString | EvaluatedJValue.JNull] =
       val expr = evalUnsafe(ctx)(code)
-      expectType[EvaluatedJValue.JString | EvaluatedJValue.JNull](expr, s"Field name must be string or null, got ${typeString(expr)}")
+      expectType[EvaluatedJValue.JString | EvaluatedJValue.JNull](expr, s"Field name must be string or null, got ${typeString(theExpr)}")
     inline def expectArray(code: JValue): Future[EvaluatedJValue.JArray] = expectType[EvaluatedJValue.JArray](code)
     inline def expectArray(expr: EvaluatedJValue): Future[EvaluatedJValue.JArray] = expectType[EvaluatedJValue.JArray](expr)
     inline def expectObject(code: JValue): Future[EvaluatedJValue.JObject] = expectType[EvaluatedJValue.JObject](code)
@@ -239,18 +241,18 @@ object EvaluationContext:
     inline def expectFunction(code: JValue): Future[EvaluatedJValue.JFunction] = expectType[EvaluatedJValue.JFunction](code)
     inline def expectFunction(expr: EvaluatedJValue): Future[EvaluatedJValue.JFunction] = expectType[EvaluatedJValue.JFunction](expr)
 
-    inline def expectType[T <: EvaluatedJValue.JNow](expr: EvaluatedJValue, msg: String): Future[T] =
+    inline def expectType[T <: EvaluatedJValue.JNow](expr: EvaluatedJValue, msg: EvaluatedJValue ?=> String): Future[T] =
       implicit val ec = ctx.executionContext
       expr match
       case t: T => Future(t)
       case f: EvaluatedJValue.JFuture => f.future.map {
         case t: T => t
-        case _ => ctx.error(expr.src, msg)
+        case expr => ctx.error(expr.src, msg(using expr))
       }
-      case _ => ctx.error(expr.src, msg)
+      case _ => ctx.error(expr.src, msg(using expr))
 
     inline def expectType[T <: EvaluatedJValue.JNow](expr: EvaluatedJValue): Future[T] =
-      expectType[T](expr, s"Unexpected type ${typeString(expr)}, expected ${typeString[T]}")
+      expectType[T](expr, s"Unexpected type ${typeString(theExpr)}, expected ${typeString[T]}")
 
     // inline def expectType[T <: EvaluatedJValue](expr: EvaluatedJValue): T =
     //   if expr.isInstanceOf[T] then
