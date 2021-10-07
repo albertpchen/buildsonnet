@@ -32,6 +32,7 @@ def connectToLauncher(
   name: String,
   bloopVersion: String,
   bloopPort: Int,
+  logStream: java.io.PrintStream,
 )(using ec: ExecutionContextExecutorService): Future[SocketConnection] =
   val launcherInOutPipe = Pipe.open()
   val launcherIn = Channels.newInputStream(launcherInOutPipe.source())
@@ -42,17 +43,16 @@ def connectToLauncher(
   val launcherOut = Channels.newOutputStream(clientInOutPipe.sink())
 
   val serverStarted = Promise[Unit]()
-  val launcher =
-    new LauncherMain(
-      launcherIn,
-      launcherOut,
-      System.err,
-      java.nio.charset.StandardCharsets.UTF_8,
-      bloop.bloopgun.core.Shell.default,
-      userNailgunHost = None,
-      userNailgunPort = Some(bloopPort),
-      serverStarted
-    )
+  val launcher = new LauncherMain(
+    launcherIn,
+    launcherOut,
+    logStream,
+    java.nio.charset.StandardCharsets.UTF_8,
+    bloop.bloopgun.core.Shell.default,
+    userNailgunHost = None,
+    userNailgunPort = Some(bloopPort),
+    serverStarted
+  )
 
   val finished = Promise[Unit]()
   val job = ec.submit(new Runnable {
@@ -82,27 +82,9 @@ def connectToLauncher(
     )
   }
 
-import ch.epfl.scala.bsp4j.{
-  BuildClient,
-  BuildServer,
-  BuildClientCapabilities,
-  BuildTargetIdentifier,
-  CompileParams,
-  CompileResult,
-  DiagnosticSeverity,
-  InitializeBuildParams,
-  ScalaBuildServer,
-  ShowMessageParams,
-  LogMessageParams,
-  TaskDataKind,
-  TaskStartParams,
-  TaskProgressParams,
-  TaskFinishParams,
-  PublishDiagnosticsParams,
-  DidChangeBuildTarget,
-}
+import ch.epfl.scala.{bsp4j => bsp}
 
-trait BloopServer extends BuildServer with ScalaBuildServer
+trait BloopServer extends bsp.BuildServer with bsp.ScalaBuildServer
 
 extension[T](promise: Promise[T])
   def cancel(): Unit =
@@ -111,7 +93,7 @@ extension[T](promise: Promise[T])
 final class BuildsonnetBuildClient(
   workspace: java.nio.file.Path,
   logger: Logger
-) extends BuildClient:
+) extends bsp.BuildClient:
   val compilations = collection.concurrent.TrieMap.empty[String, Promise[Unit]]
   def cancel(): Unit =
     for {
@@ -121,15 +103,15 @@ final class BuildsonnetBuildClient(
       compilation.cancel()
     }
 
-  override def onBuildShowMessage(params: ShowMessageParams): Unit =
+  override def onBuildShowMessage(params: bsp.ShowMessageParams): Unit =
     logger.info(params.getMessage)
 
-  override def onBuildLogMessage(params: LogMessageParams): Unit =
+  override def onBuildLogMessage(params: bsp.LogMessageParams): Unit =
     logger.info(s"LOG: ${params.getMessage}")
 
-  override def onBuildTaskStart(params: TaskStartParams): Unit =
+  override def onBuildTaskStart(params: bsp.TaskStartParams): Unit =
     params.getDataKind match {
-      case TaskDataKind.COMPILE_TASK =>
+      case bsp.TaskDataKind.COMPILE_TASK =>
         val id =
           params
             .getData
@@ -143,13 +125,13 @@ final class BuildsonnetBuildClient(
     }
     logger.info(params.getMessage)
 
-  override def onBuildTaskProgress(params: TaskProgressParams): Unit =
+  override def onBuildTaskProgress(params: bsp.TaskProgressParams): Unit =
     if !(params.getMessage eq null) then
       logger.info(params.getMessage)
 
-  override def onBuildTaskFinish(params: TaskFinishParams): Unit =
+  override def onBuildTaskFinish(params: bsp.TaskFinishParams): Unit =
     params.getDataKind match {
-      case TaskDataKind.COMPILE_REPORT =>
+      case bsp.TaskDataKind.COMPILE_REPORT =>
         val id =
           params
             .getData
@@ -164,7 +146,7 @@ final class BuildsonnetBuildClient(
       logger.info(params.getMessage)
       //println(params.getData.asInstanceOf[com.google.gson.JsonObject].getAsJsonPrimitive("clientDir"))
 
-  override def onBuildPublishDiagnostics(params: PublishDiagnosticsParams): Unit =
+  override def onBuildPublishDiagnostics(params: bsp.PublishDiagnosticsParams): Unit =
     import scala.jdk.CollectionConverters.given
     import Logger.prefixLines
     val file = workspace.relativize(java.nio.file.Paths.get(new java.net.URI(params.getTextDocument.getUri)))
@@ -174,23 +156,23 @@ final class BuildsonnetBuildClient(
       val header = s"${Console.UNDERLINED}$file${Console.RESET}:$startLine:$startCol"
       val logFn =
         diagnostic.getSeverity match
-        case DiagnosticSeverity.ERROR => logger.error
-        case DiagnosticSeverity.WARNING => logger.warn
+        case bsp.DiagnosticSeverity.ERROR => logger.error
+        case bsp.DiagnosticSeverity.WARNING => logger.warn
         case _ => logger.info
       logFn(header)
       diagnostic.getMessage.prefixLines("  ").foreach(logFn)
       logFn("")
     }
 
-  override def onBuildTargetDidChange(params: DidChangeBuildTarget): Unit = ???
+  override def onBuildTargetDidChange(params: bsp.DidChangeBuildTarget): Unit = ???
 
 object BuildsonnetBuildClient:
-  def initializeBuildParams(workspaceURI: String): InitializeBuildParams = new InitializeBuildParams(
+  def initializeBuildParams(workspaceURI: String): bsp.InitializeBuildParams = new bsp.InitializeBuildParams(
     "buildsonnet", // name of this client
     "0.0.1", // version of this client
     "1.0.0", // BSP version
     workspaceURI,
-    new BuildClientCapabilities(java.util.Collections.singletonList("scala"))
+    new bsp.BuildClientCapabilities(java.util.Collections.singletonList("scala"))
   )
 
 import java.util.concurrent.CompletableFuture
@@ -204,24 +186,25 @@ import scala.jdk.FutureConverters.given
 
 sealed trait BloopServerConnection:
   def shutdown(): Future[Unit]
-  def compile(targetId: String): Future[CompileResult]
+  def compile(targetId: String): Future[bsp.CompileResult]
 
 object BloopServerConnection:
   def empty: BloopServerConnection = new BloopServerConnection:
     def shutdown(): Future[Unit] = ???
-    def compile(targetId: String): Future[CompileResult] = ???
+    def compile(targetId: String): Future[bsp.CompileResult] = ???
 
   def std(
     workspace: java.nio.file.Path,
     logger: Logger,
     bloopPort: Int,
+    logStream: java.io.PrintStream
   )(using ExecutionContextExecutorService): BloopServerConnection =
     new BloopServerConnection:
       private val launchedServer = new AtomicBoolean(false)
 
       lazy val pair = {
         val connection = Await.result(
-          connectToLauncher("buildsonnet", "1.4.9", bloopPort), Duration.Inf)
+          connectToLauncher("buildsonnet", "1.4.9", bloopPort, logStream), Duration.Inf)
         val (server, client, launcherListening) = Await.result(
           newServer(workspace, connection, logger), Duration.Inf)
         while !launchedServer.compareAndSet(false, true) do {}
@@ -236,35 +219,34 @@ object BloopServerConnection:
 
       def shutdown(): Future[Unit] = Future {
         if launchedServer.get() then
-          println("111")
-          try {
+          try
             if (isShuttingDown.compareAndSet(false, true)) {
+              // println("111")
               client.cancel() // cancel compilations
-              println("333")
+              // println("222")
               server.buildShutdown().get()
-              println("444")
+              // println("333")
               server.onBuildExit()
-              println("555")
+              // println("444")
               listening.cancel(false)
+              // println("555")
               connection.cancelables.foreach(_.cancel())
+              // println("666")
               connection.finishedPromise.success(())
+              // println("777")
               logger.info("Shut down connection with bloop server.")
-              println("666")
-              println("777")
-              println("888")
             }
-          } catch {
+          catch
             case _: TimeoutException =>
               logger.error(s"timeout: bloop server during shutdown")
             case e: Throwable =>
               logger.error(s"bloop server shutdown $e")
-          }
       }
 
-      def compile(targetId: String): Future[CompileResult] =
+      def compile(targetId: String): Future[bsp.CompileResult] =
         server.buildTargetCompile(
-          new CompileParams(
-            java.util.Collections.singletonList(new BuildTargetIdentifier(s"file://$workspace/?id=$targetId")))
+          new bsp.CompileParams(
+            java.util.Collections.singletonList(new bsp.BuildTargetIdentifier(s"file://$workspace/?id=$targetId")))
         ).asScala
 
 def newServer(

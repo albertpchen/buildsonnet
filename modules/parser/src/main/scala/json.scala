@@ -325,6 +325,7 @@ object Json:
 def asdf(args: String*): Unit =
   import scala.concurrent.duration.Duration
   import scala.util.{Failure, Success}
+
   val filename = args(0)
   val source = scala.io.Source.fromFile(filename).getLines.mkString("\n")
   val sourceFile = SourceFile(filename, source)
@@ -341,7 +342,11 @@ def asdf(args: String*): Unit =
     },
     ast => {
       println("END PARSE")
-      val withoutStd = EvaluationContext(sourceFile)
+      val withoutStd = EvaluationContext(
+        file = sourceFile,
+        bloopPort = 8212,
+        bloopLogStream = System.err,
+      )
       val ctx = withoutStd.bindEvaluated("std", Std.obj(withoutStd))
       val manifested = manifest(ctx)(ast)
       manifested.fold(

@@ -108,31 +108,14 @@ final class EvaluatedJFunctionParameters(
   val namedArgs: Seq[(String, JValue)],
 )
 
-opaque type JobId = Int
-enum EvaluatedJValue extends HasSource:
-  case JBoolean(src: Source, value: Boolean)
-  case JNull(src: Source)
-  case JString(src: Source, str: String)
-  case JNum(src: Source, double: Double)
-  case JPath(src: Source, path: java.nio.file.Path)
-  case JJob(src: Source, desc: JobDescription, stdout: String, stderr: String, outputs: Seq[JPath], exitCode: Int)
-  case JArray(src: Source, elements: Seq[EvaluatedJValue])
-  /** needs to handle:
-    *
-    * - simple lookup, defined in current object
-    * - super lookup (dynamic), not in current object, but in super object
-    * - self lookup (dynamic), lookup in current object, possibly in super
-    */
-  case JObject(src: Source, imp: EvaluatedJObject) extends EvaluatedJValue
-  case JFunction(src: Source, numParams: Int, fn: (EvaluationContext, EvaluatedJFunctionParameters) => EvaluatedJValue)
-  case JFuture(src: Source, future: Future[EvaluatedJValue.JNow])
-
+sealed trait EvaluatedJValue extends HasSource:
+  import EvaluatedJValue._
+  import concurrent.{Await, duration}
   def isNull: Boolean =
     this match
     case _: JNull => true
     case _ => false
 
-  import concurrent.{Await, duration}
   def manifestFuture(ctx: EvaluationContext): Future[ManifestedJValue] =
     given ExecutionContext = ctx.executionContext
     this match
@@ -158,6 +141,23 @@ enum EvaluatedJValue extends HasSource:
     concurrent.Await.result(manifestFuture(ctx), duration.Duration.Inf)
 
 object EvaluatedJValue:
+  case class JBoolean(src: Source, value: Boolean) extends EvaluatedJValue
+  case class JNull(src: Source) extends EvaluatedJValue
+  case class JString(src: Source, str: String) extends EvaluatedJValue
+  case class JNum(src: Source, double: Double) extends EvaluatedJValue
+  case class JPath(src: Source, path: java.nio.file.Path) extends EvaluatedJValue
+  case class JJob(src: Source, desc: JobDescription, stdout: String, stderr: String, outputs: Seq[JPath], exitCode: Int) extends EvaluatedJValue
+  case class JArray(src: Source, elements: Seq[EvaluatedJValue]) extends EvaluatedJValue
+  /** needs to handle:
+    *
+    * - simple lookup, defined in current object
+    * - super lookup (dynamic), not in current object, but in super object
+    * - self lookup (dynamic), lookup in current object, possibly in super
+    */
+  case class JObject(src: Source, imp: EvaluatedJObject) extends EvaluatedJValue
+  case class JFunction(src: Source, numParams: Int, fn: (EvaluationContext, EvaluatedJFunctionParameters) => EvaluatedJValue) extends EvaluatedJValue
+  case class JFuture(src: Source, future: Future[EvaluatedJValue.JNow]) extends EvaluatedJValue
+
   extension [T <: EvaluatedJValue](future: concurrent.Future[T])
     inline def toJValue(using ctx: concurrent.ExecutionContext): EvaluatedJValue =
       inline future match

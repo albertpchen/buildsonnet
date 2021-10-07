@@ -34,7 +34,7 @@ object Importer:
           ast => {
             given concurrent.ExecutionContextExecutorService = ctx.executionContext
             val sourceFile = SourceFile(normalized, source)
-            val withOutStd = EvaluationContext(sourceFile)
+            val withOutStd = EvaluationContext(sourceFile, ctx.workspaceDir, ctx.bloopServer)
             val newCtx = withOutStd.bindEvaluated("std", Std.obj(withOutStd))
             evalUnsafe(newCtx)(ast)
           }
@@ -383,20 +383,32 @@ object EvaluationContext:
     def withStackEntry(entry: StackEntry) =
       this.copy(stack = entry +: stack)
 
-  def apply(file: SourceFile)(using executionContext: concurrent.ExecutionContextExecutorService): EvaluationContext =
-    val currFileParent = new java.io.File(file.path).getAbsoluteFile.toPath.getParent
-    val bloopServer = BloopServerConnection.std(
-      currFileParent,
-      Logger.default("buildsonnet"),
-      8212,
-    )
+  def apply(
+    file: SourceFile,
+    workspace: java.nio.file.Path,
+    bloopServer: BloopServerConnection,
+  )(using executionContext: concurrent.ExecutionContextExecutorService): EvaluationContext =
     Imp(
       bloopServer,
       Importer(),
       JobRunner(),
-      currFileParent,
+      workspace,
       file,
       Map.empty,
       List.empty,
       executionContext
     )
+
+  def apply(
+    file: SourceFile,
+    bloopPort: Int,
+    bloopLogStream: java.io.PrintStream,
+  )(using executionContext: concurrent.ExecutionContextExecutorService): EvaluationContext =
+    val currFileParent = new java.io.File(file.path).getAbsoluteFile.toPath.getParent
+    val bloopServer = BloopServerConnection.std(
+      currFileParent,
+      Logger.default("buildsonnet"),
+      bloopPort,
+      bloopLogStream,
+    )
+    apply(file, currFileParent, bloopServer)
