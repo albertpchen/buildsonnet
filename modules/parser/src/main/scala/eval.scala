@@ -701,7 +701,14 @@ object Std:
   def obj(ctx: EvaluationContext) = makeObject(ctx, Map(
     "toString" -> function1(Arg.x)(toStringImp),
     "type" -> function1(Arg.x) { (ctx, src, x) =>
-      EvaluatedJValue.JString(src, EvaluationContext.typeString(x))
+      x match
+      case x: EvaluatedJValue.JFuture =>
+        given concurrent.ExecutionContext = ctx.executionContext
+        x.future.map { x =>
+          EvaluatedJValue.JString(src, EvaluationContext.typeString(x))
+        }.toJValue
+      case _ =>
+        EvaluatedJValue.JString(src, EvaluationContext.typeString(x))
     },
     "length" -> function1(Arg.x) { (ctx, src, x) =>
       given concurrent.ExecutionContext = ctx.executionContext
@@ -775,6 +782,22 @@ object Std:
         import JobRunner.resolvePath
         if pathName.str.startsWith("/") then ctx.error(src, s"cannot source an absolute path, got $pathName")
         EvaluatedJValue.JPath(src, ctx.resolvePath(pathName.str))
+      }.toJValue
+    },
+    "write" -> function2(Arg.pathName, Arg.contents) { (ctx, src, pathName, contents) =>
+      given concurrent.ExecutionContext = ctx.executionContext
+      ctx.expectType[EvaluatedJValue.JString | EvaluatedJValue.JPath](pathName).flatMap { pathName =>
+        ctx.expectString(contents).map { contents =>
+          val path = pathName match
+            case str: EvaluatedJValue.JString =>
+              if str.str.startsWith("/") then
+                java.nio.file.Paths.get(str.str)
+              else
+                ctx.workspaceDir.resolve(str.str)
+            case path: EvaluatedJValue.JPath => path.path
+          java.nio.file.Files.write(path, contents.str.getBytes())
+          EvaluatedJValue.JPath(src, path)
+        }
       }.toJValue
     },
     "scala" -> makeObject(ctx, Map(

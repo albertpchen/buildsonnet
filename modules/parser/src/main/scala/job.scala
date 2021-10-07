@@ -34,10 +34,12 @@ case class JobRow(
   exitCode: Int
 )
 
-private val mirror = summon[scala.deriving.Mirror.ProductOf[JobRow]]
-val unapply = (a: JobRow) => Some(Tuple.fromProductTyped[JobRow](a))
+object JobRow:
+  private val mirror = summon[scala.deriving.Mirror.ProductOf[JobRow]]
+  type TupleType = mirror.MirroredElemTypes
+  def fromTuple(tuple: TupleType): JobRow = mirror.fromProduct(tuple)
 
-private class JobTable(tag: api.Tag) extends api.Table[mirror.MirroredElemTypes](tag, "JOBS") {
+private class JobTable(tag: api.Tag) extends api.Table[JobRow.TupleType](tag, "JOBS") {
   def cmdline = column[Array[Byte]]("cmdline")
   def envVars = column[Array[Byte]]("envVars")
   def inputFiles = column[Array[Byte]]("inputFiles")
@@ -190,7 +192,7 @@ object JobRunner:
             ).map(_.headOption)
         cached.flatMap {
           case Some(cached) if !isOutputStale =>
-            val jobRow = mirror.fromProduct(cached)
+            val jobRow = JobRow.fromTuple(cached)
             val outputs: Seq[EvaluatedJValue.JPath] = outputPaths.distinct.map(EvaluatedJValue.JPath(src, _))
             Future(EvaluatedJValue.JJob(src, desc, jobRow.stdout, jobRow.stderr, outputs, jobRow.exitCode))
           case _ =>
