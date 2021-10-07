@@ -94,6 +94,7 @@ import ch.epfl.scala.bsp4j.{
   ScalaBuildServer,
   ShowMessageParams,
   LogMessageParams,
+  TaskDataKind,
   TaskStartParams,
   TaskProgressParams,
   TaskFinishParams,
@@ -103,10 +104,23 @@ import ch.epfl.scala.bsp4j.{
 
 trait BloopServer extends BuildServer with ScalaBuildServer
 
+extension[T](promise: Promise[T])
+  def cancel(): Unit =
+    promise.tryFailure(new java.util.concurrent.CancellationException())
+
 final class BuildsonnetBuildClient(
   workspace: java.nio.file.Path,
   logger: Logger
 ) extends BuildClient:
+  val compilations = collection.concurrent.TrieMap.empty[String, Promise[Unit]]
+  def cancel(): Unit =
+    for {
+      key <- compilations.keysIterator
+      compilation <- compilations.remove(key)
+    } {
+      compilation.cancel()
+    }
+
   override def onBuildShowMessage(params: ShowMessageParams): Unit =
     logger.info(params.getMessage)
 
@@ -114,6 +128,19 @@ final class BuildsonnetBuildClient(
     logger.info(s"LOG: ${params.getMessage}")
 
   override def onBuildTaskStart(params: TaskStartParams): Unit =
+    params.getDataKind match {
+      case TaskDataKind.COMPILE_TASK =>
+        val id =
+          params
+            .getData
+            .asInstanceOf[com.google.gson.JsonObject]
+            .getAsJsonObject("target")
+            .getAsJsonPrimitive("uri")
+            .getAsString
+        compilations.remove(id).foreach(_.cancel())
+        compilations(id) = Promise[Unit]()
+      case _ =>
+    }
     logger.info(params.getMessage)
 
   override def onBuildTaskProgress(params: TaskProgressParams): Unit =
@@ -121,6 +148,18 @@ final class BuildsonnetBuildClient(
       logger.info(params.getMessage)
 
   override def onBuildTaskFinish(params: TaskFinishParams): Unit =
+    params.getDataKind match {
+      case TaskDataKind.COMPILE_REPORT =>
+        val id =
+          params
+            .getData
+            .asInstanceOf[com.google.gson.JsonObject]
+            .getAsJsonObject("target")
+            .getAsJsonPrimitive("uri")
+            .getAsString
+        compilations.get(id).foreach(_.success(()))
+      case _ =>
+    }
     if !(params.getMessage eq null) then
       logger.info(params.getMessage)
       //println(params.getData.asInstanceOf[com.google.gson.JsonObject].getAsJsonPrimitive("clientDir"))
@@ -171,40 +210,55 @@ object BloopServerConnection:
   def empty: BloopServerConnection = new BloopServerConnection:
     def shutdown(): Future[Unit] = ???
     def compile(targetId: String): Future[CompileResult] = ???
+
   def std(
     workspace: java.nio.file.Path,
     logger: Logger,
     bloopPort: Int,
   )(using ExecutionContextExecutorService): BloopServerConnection =
     new BloopServerConnection:
+      private val launchedServer = new AtomicBoolean(false)
+
       lazy val pair = {
         val connection = Await.result(
           connectToLauncher("buildsonnet", "1.4.9", bloopPort), Duration.Inf)
-        val (server, client) = Await.result(
+        val (server, client, launcherListening) = Await.result(
           newServer(workspace, connection, logger), Duration.Inf)
-        (server, client, connection)
+        while !launchedServer.compareAndSet(false, true) do {}
+        (server, client, connection, launcherListening)
       }
+
       private def server = pair._1
       private def client = pair._2
       private def connection = pair._3
+      private def listening = pair._4
       private val isShuttingDown = new AtomicBoolean(false)
 
       def shutdown(): Future[Unit] = Future {
-        try {
-          if (isShuttingDown.compareAndSet(false, true)) {
-            server.buildShutdown().get(2, TimeUnit.SECONDS)
-            server.onBuildExit()
-            logger.info("Shut down connection with bloop server.")
-            connection.cancelables.foreach(_.cancel())
-            // Cancel pending compilations on our side, this is not needed for Bloop.
-            // cancel()
+        if launchedServer.get() then
+          println("111")
+          try {
+            if (isShuttingDown.compareAndSet(false, true)) {
+              client.cancel() // cancel compilations
+              println("333")
+              server.buildShutdown().get()
+              println("444")
+              server.onBuildExit()
+              println("555")
+              listening.cancel(false)
+              connection.cancelables.foreach(_.cancel())
+              connection.finishedPromise.success(())
+              logger.info("Shut down connection with bloop server.")
+              println("666")
+              println("777")
+              println("888")
+            }
+          } catch {
+            case _: TimeoutException =>
+              logger.error(s"timeout: bloop server during shutdown")
+            case e: Throwable =>
+              logger.error(s"bloop server shutdown $e")
           }
-        } catch {
-          case _: TimeoutException =>
-            logger.error(s"timeout: bloop server during shutdown")
-          case e: Throwable =>
-            logger.error(s"bloop server shutdown $e")
-        }
       }
 
       def compile(targetId: String): Future[CompileResult] =
@@ -213,12 +267,15 @@ object BloopServerConnection:
             java.util.Collections.singletonList(new BuildTargetIdentifier(s"file://$workspace/?id=$targetId")))
         ).asScala
 
-
 def newServer(
   workspace: java.nio.file.Path,
   connection: SocketConnection,
   logger: Logger,
-)(using ec: ExecutionContextExecutorService): Future[(BloopServer, BuildsonnetBuildClient)] =
+)(using ec: ExecutionContextExecutorService): Future[(
+  BloopServer,
+  BuildsonnetBuildClient,
+  java.util.concurrent.Future[Void],
+)] =
   import java.util.concurrent.{Future => _, _}
   import org.eclipse.lsp4j.jsonrpc.Launcher
 
@@ -243,4 +300,4 @@ def newServer(
     //workspaceBuildTargetsResult <- server.workspaceBuildTargets().asScala
   yield
     server.onBuildInitialized()
-    (server, localClient)
+    (server, localClient, listening)

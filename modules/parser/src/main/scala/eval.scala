@@ -796,5 +796,11 @@ object Std:
             }
         }.toJValue
       },
+      "compile" -> function1(Arg.targetId) { (ctx, src, targetId) =>
+        given concurrent.ExecutionContext = ctx.executionContext
+        ctx.expectString(targetId).flatMap { targetId =>
+          ctx.compile(src, targetId.str)
+        }.toJValue
+      },
     ))
   ))

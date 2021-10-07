@@ -330,25 +330,9 @@ def asdf(args: String*): Unit =
   val sourceFile = SourceFile(filename, source)
   val parser = Json.parserFile
 
-
   val exec = java.util.concurrent.Executors.newCachedThreadPool()
   given ExecutionContextExecutorService = ExecutionContext.fromExecutorService(exec)
-  //Await.result(bootstrap(), Duration.Inf)
-  println("launching bloop")
-  val bloopPort = 8218
-  val bloopServer = BloopServerConnection.std(
-    java.nio.file.Paths.get(".").toAbsolutePath.normalize,
-    Logger.default("buildsonnet"),
-    bloopPort,
-  )
 
-  println("launched bloop")
-  println("closing bloop")
-  Await.result(bloopServer.compile("asdf"), Duration.Inf)
-  Await.result(bloopServer.shutdown(), Duration.Inf)
-  //socketConnection.cancelables.foreach(_.cancel())
-  //socketConnection.input.close()
-  println("closed bloop")
   println("START")
   parser.parseAll(source).fold(
     error => {
@@ -364,14 +348,7 @@ def asdf(args: String*): Unit =
         msg => println(s"FAIL: $msg"),
         value => println(value),
       )
+      Await.result(ctx.bloopServer.shutdown(), Duration.Inf)
     }
   )
   summon[ExecutionContextExecutorService].shutdownNow()
-
-/*
-Warning: Dynamic proxy method java.lang.reflect.Proxy.newProxyInstance invoked at org.eclipse.lsp4j.jsonrpc.services.ServiceEndpoints.toServiceObject(ServiceEndpoints.java:41)
-Warning: Dynamic proxy method java.lang.reflect.Proxy.newProxyInstance invoked at com.sun.jna.Native.loadLibrary(Native.java:648)
-Warning: Dynamic proxy method java.lang.reflect.Proxy.newProxyInstance invoked at org.eclipse.lsp4j.jsonrpc.services.ServiceEndpoints.toServiceObject(ServiceEndpoints.java:54)
-Warning: Aborting stand-alone image build due to dynamic proxy use without configuration.
-Warning: Use -H:+ReportExceptionStackTraces to print stacktrace of underlying exception
-*/
