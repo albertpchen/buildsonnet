@@ -819,10 +819,12 @@ object Std:
             }
         }.toJValue
       },
-      "compile" -> function1(Arg.targetId) { (ctx, src, targetId) =>
+      "compile" -> function2(Arg.targetId, Arg.configPaths) { (ctx, src, targetId, configPaths) =>
         given concurrent.ExecutionContext = ctx.executionContext
         ctx.expectString(targetId).flatMap { targetId =>
-          ctx.compile(src, targetId.str)
+          ctx.decode[Seq[EvaluatedJValue.JPath]](configPaths).flatMap { _ =>
+            ctx.compile(src, targetId.str)
+          }
         }.toJValue
       },
     ))

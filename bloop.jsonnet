@@ -70,7 +70,7 @@ local bloopConfig(project) = {
 };
 
 local project = ScalaProject {
-  name: "parser",
+  name: "asdf",
   directory: "modules/parser",
   dependencies: [],
   sources: [$.directory + "/src/main/scala"],
@@ -91,4 +91,5 @@ local project = ScalaProject {
     //"-agentpath:/home/achen2012/tools/async-profiler-2.0-linux-x64/build/libasyncProfiler.so=start,event=cpu,file=profile.html"
   ],
 };
-bloopConfig(project)/// + (import "test.jsonnet")
+// bloopConfig(project)/// + (import "test.jsonnet")
+std.scala.compile("asdf", [std.write(std.workspace() + "/.bloop/asdf.json", std.toString(bloopConfig(project)))])
