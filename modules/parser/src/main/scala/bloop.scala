@@ -189,7 +189,7 @@ import scala.jdk.FutureConverters.given
 sealed trait BloopServerConnection:
   def shutdown(): Future[Unit]
   def compile(targetId: String): Future[bsp.CompileResult]
-  def jvmRunEnvironment(targetId: String): Future[bsp.JvmRunEnvironmentResult]
+  def jvmRunEnvironment(targetId: String): Future[Either[bsp.StatusCode.ERROR.type | bsp.StatusCode.CANCELLED.type, bsp.JvmRunEnvironmentResult]]
 
 object BloopServerConnection:
   def std(
@@ -247,11 +247,17 @@ object BloopServerConnection:
         )
         server.buildTargetCompile(params).asScala
 
-      def jvmRunEnvironment(targetId: String): Future[bsp.JvmRunEnvironmentResult] =
-        val params = new bsp.JvmRunEnvironmentParams(
-          java.util.Collections.singletonList(new bsp.BuildTargetIdentifier(s"file://$workspace/?id=$targetId"))
-        )
-        server.jvmRunEnvironment(params).asScala
+      def jvmRunEnvironment(targetId: String): Future[Either[bsp.StatusCode.ERROR.type | bsp.StatusCode.CANCELLED.type, bsp.JvmRunEnvironmentResult]] =
+        compile(targetId).flatMap { compileResult =>
+          compileResult.getStatusCode match
+          case bsp.StatusCode.OK =>
+            val params = new bsp.JvmRunEnvironmentParams(
+              java.util.Collections.singletonList(new bsp.BuildTargetIdentifier(s"file://$workspace/?id=$targetId"))
+            )
+            server.jvmRunEnvironment(params).asScala.map(Right(_))
+          case status @ (bsp.StatusCode.ERROR | bsp.StatusCode.CANCELLED) =>
+            Future(Left(status))
+        }
 
 def newServer(
   workspace: java.nio.file.Path,

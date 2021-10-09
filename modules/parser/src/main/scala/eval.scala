@@ -730,20 +730,20 @@ object Std:
         }
       }.toJValue
     },
-    // "objectFields" -> function1(Arg.o) { (ctx, src, o) =>
-    //   given concurrent.ExecutionContext = ctx.executionContext
-    //   ctx.expectObject(o).map { o =>
-    //     // EvaluatedJValue.JArray(src, o.members().keys.toSeq.sorted) // BUG
-    //     val keys =
-    //       o
-    //         .members().
-    //         .keys
-    //         .map(EvaluatedJValue.JString(src, _): EvaluatedJValue.JString)
-    //         .toSeq
-    //         .sortBy(_.str)
-    //     EvaluatedJValue.JArray(src, keys)
-    //   }.toJValue
-    // },
+    "objectFields" -> function1(Arg.o) { (ctx, src, o) =>
+      given concurrent.ExecutionContext = ctx.executionContext
+      ctx.expectObject(o).flatMap { o =>
+        // EvaluatedJValue.JArray(src, o.members().keys.toSeq.sorted) // BUG
+        o.members().map { members =>
+          val keys = members
+            .keys
+            .map(EvaluatedJValue.JString(src, _): EvaluatedJValue.JString)
+            .toSeq
+            .sortBy(_.str)
+          EvaluatedJValue.JArray(src, keys)
+        }
+      }.toJValue
+    },
     "trace" -> function2(Arg.str, Arg.rest) { (ctx, src, str, rest) =>
       given concurrent.ExecutionContext = ctx.executionContext
       ctx.expectString(str).map { str =>
@@ -816,14 +816,18 @@ object Std:
       "classpath" -> function2(Arg.targetId, Arg.configPaths) { (ctx, src, targetId, configPaths) =>
         given concurrent.ExecutionContext = ctx.executionContext
         import scala.jdk.CollectionConverters.given
+        import ch.epfl.scala.bsp4j.StatusCode
         ctx.expectString(targetId).flatMap { targetId =>
           ctx.decode[Seq[EvaluatedJValue.JPath]](configPaths).flatMap { paths =>
-            ctx.bloopServer.jvmRunEnvironment(targetId.str).map { env =>
-              val strings = env.getItems.get(0).getClasspath.asScala.map { item =>
-                val file = java.nio.file.Paths.get(new java.net.URI(item)).toString
-                EvaluatedJValue.JString(src, file)
-              }.toSeq
-              EvaluatedJValue.JArray(src, strings)
+            ctx.bloopServer.jvmRunEnvironment(targetId.str).map {
+              case Right(env) =>
+                val strings = env.getItems.get(0).getClasspath.asScala.map { item =>
+                  val file = java.nio.file.Paths.get(new java.net.URI(item)).toString
+                  EvaluatedJValue.JString(src, file)
+                }.toSeq
+                EvaluatedJValue.JArray(src, strings)
+              case Left(StatusCode.ERROR) => ctx.error(src, s"compilation for $targetId failed")
+              case Left(StatusCode.CANCELLED) => ctx.error(src, s"compilation for $targetId was cancelled")
             }
           }
         }.toJValue

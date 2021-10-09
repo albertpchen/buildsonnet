@@ -4,6 +4,10 @@ import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.concurrent.duration.Duration
 import scala.util.{Failure, Success}
 
+import slick.jdbc.JdbcBackend.Database
+import slick.jdbc.SQLiteProfile.api
+import slick.jdbc.SQLiteProfile.api.given
+
 case class JobDescription(
   cmdline: Seq[String],
   envVars: Option[Map[String, String]],
@@ -17,10 +21,6 @@ private[root] enum JobOutput:
   case OutputFileMissing(file: String)
   case AbsoluteOutputFile(file: String)
   case Success(file: String)
-
-import slick.jdbc.JdbcBackend.Database
-import slick.jdbc.SQLiteProfile.api
-import slick.jdbc.SQLiteProfile.api.given
 
 case class JobRow(
   cmdline: Array[Byte],
@@ -134,6 +134,24 @@ object JobRunner:
       database.run(jobTable.schema.createIfNotExists).map { _ => jobTable -> database }
     })
 
+    private def resolveCommand(
+      cmd: String,
+      path: Seq[String],
+      dir: java.nio.file.Path
+    ): Option[String] =
+      if cmd.startsWith("/") then
+        val path = java.nio.file.Paths.get(cmd)
+        return if java.nio.file.Files.exists(path) then Some(path.toString) else None
+      for p <- path do
+        val path =
+          if p.startsWith("/") then
+            java.nio.file.Paths.get(s"$p/$cmd")
+          else
+            dir.resolve(p).resolve(cmd)
+        if java.nio.file.Files.exists(path) then
+          return Some(path.normalize().toString)
+      return None
+
     def run(
       ctx: EvaluationContext,
       src: Source,
@@ -141,10 +159,6 @@ object JobRunner:
     ): Future[EvaluatedJValue.JJob] =
       given ExecutionContext = ctx.executionContext
       database(ctx).flatMap { (jobTable, database) =>
-        val builder = new java.lang.ProcessBuilder(desc.cmdline: _*)
-        val env = builder.environment()
-        env.clear()
-        desc.envVars.foreach(_.foreach(env.put(_, _)))
         desc.directory.foreach { directory =>
           if directory.startsWith("/") then ctx.error(src, s"job directory may not be an absolute path, got $directory")
         }
@@ -154,6 +168,8 @@ object JobRunner:
         desc.inputFiles.foreach { input =>
           if !ctx.exists(input.path) then ctx.error(src, s"job input file does not exist, ${input.path.toString}")
         }
+        if desc.cmdline.size <= 0 then
+          ctx.error(src, s"job cmdline must be a non-empty list")
 
         val outputPaths = desc.outputFiles.getOrElse(Seq.empty).map(ctx.resolvePath(_)).distinct
         val isOutputStale =
@@ -173,7 +189,11 @@ object JobRunner:
             }
 
         val directory = desc.directory.fold(ctx.workspaceDir)(ctx.resolvePath(_))
-        builder.directory(directory.toFile)
+        val cmd = resolveCommand(
+          desc.cmdline.head,
+          desc.envVars.fold(Seq.empty)(_.get("PATH").fold(Seq.empty)(_.split(":").toSeq)) :+ ".",
+          directory
+        ).getOrElse(ctx.error(src, s"could not resolve command \"${desc.cmdline.head}\""))
 
         val cached =
           if isOutputStale then
@@ -196,7 +216,12 @@ object JobRunner:
             val outputs: Seq[EvaluatedJValue.JPath] = outputPaths.distinct.map(EvaluatedJValue.JPath(src, _))
             Future(EvaluatedJValue.JJob(src, desc, jobRow.stdout, jobRow.stderr, outputs, jobRow.exitCode))
           case _ =>
-            val process = builder.start()
+            val process =
+              java.lang.Runtime.getRuntime().exec(
+                (cmd +: desc.cmdline.tail).toArray,
+                desc.envVars.fold(Seq.empty)(_.toSeq).map((k, v) => s"$k=$v").sorted.toArray,
+                directory.toFile
+              )
             val exitCode = process.waitFor()
             val missingFiles = outputPaths.filterNot(ctx.exists)
             if missingFiles.nonEmpty then
