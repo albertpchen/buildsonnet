@@ -71,9 +71,8 @@ local bloopConfig(project) = {
 
 local project = ScalaProject {
   name: "asdf",
-  directory: "modules/parser",
   dependencies: [],
-  sources: [$.directory + "/src/main/scala"],
+  sources: ["modules/parser/src/main/scala"],
   libraries: [
     $.scalaDep("org.typelevel", "shapeless3-deriving_3", "3.0.3"),
     $.scalaDep("org.typelevel", "cats-parse_3", "0.3.4"),
@@ -92,4 +91,4 @@ local project = ScalaProject {
   ],
 };
 // bloopConfig(project)/// + (import "test.jsonnet")
-std.scala.compile("asdf", [std.write(std.workspace() + "/.bloop/asdf.json", std.toString(bloopConfig(project)))])
+std.scala.classpath("asdf", [std.write(std.workspace() + "/.bloop/asdf.json", std.toString(bloopConfig(project)))])

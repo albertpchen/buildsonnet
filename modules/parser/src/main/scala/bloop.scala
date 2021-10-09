@@ -84,7 +84,9 @@ def connectToLauncher(
 
 import ch.epfl.scala.{bsp4j => bsp}
 
-trait BloopServer extends bsp.BuildServer with bsp.ScalaBuildServer
+trait BloopServer extends bsp.BuildServer
+  with bsp.ScalaBuildServer
+  with bsp.JvmBuildServer
 
 extension[T](promise: Promise[T])
   def cancel(): Unit =
@@ -187,12 +189,9 @@ import scala.jdk.FutureConverters.given
 sealed trait BloopServerConnection:
   def shutdown(): Future[Unit]
   def compile(targetId: String): Future[bsp.CompileResult]
+  def jvmRunEnvironment(targetId: String): Future[bsp.JvmRunEnvironmentResult]
 
 object BloopServerConnection:
-  def empty: BloopServerConnection = new BloopServerConnection:
-    def shutdown(): Future[Unit] = ???
-    def compile(targetId: String): Future[bsp.CompileResult] = ???
-
   def std(
     workspace: java.nio.file.Path,
     logger: Logger,
@@ -220,22 +219,21 @@ object BloopServerConnection:
       def shutdown(): Future[Unit] = Future {
         if launchedServer.get() then
           try
-            if (isShuttingDown.compareAndSet(false, true)) {
+            if (isShuttingDown.compareAndSet(false, true))
               // println("111")
-              client.cancel() // cancel compilations
               // println("222")
               server.buildShutdown().get()
               // println("333")
               server.onBuildExit()
               // println("444")
               listening.cancel(false)
+              client.cancel() // cancel compilations
               // println("555")
-              connection.cancelables.foreach(_.cancel())
-              // println("666")
               connection.finishedPromise.success(())
+              // println("666")
+              connection.cancelables.foreach(_.cancel())
               // println("777")
               logger.info("Shut down connection with bloop server.")
-            }
           catch
             case _: TimeoutException =>
               logger.error(s"timeout: bloop server during shutdown")
@@ -244,10 +242,16 @@ object BloopServerConnection:
       }
 
       def compile(targetId: String): Future[bsp.CompileResult] =
-        server.buildTargetCompile(
-          new bsp.CompileParams(
-            java.util.Collections.singletonList(new bsp.BuildTargetIdentifier(s"file://$workspace/?id=$targetId")))
-        ).asScala
+        val params = new bsp.CompileParams(
+          java.util.Collections.singletonList(new bsp.BuildTargetIdentifier(s"file://$workspace/?id=$targetId"))
+        )
+        server.buildTargetCompile(params).asScala
+
+      def jvmRunEnvironment(targetId: String): Future[bsp.JvmRunEnvironmentResult] =
+        val params = new bsp.JvmRunEnvironmentParams(
+          java.util.Collections.singletonList(new bsp.BuildTargetIdentifier(s"file://$workspace/?id=$targetId"))
+        )
+        server.jvmRunEnvironment(params).asScala
 
 def newServer(
   workspace: java.nio.file.Path,
@@ -270,16 +274,15 @@ def newServer(
     .setExecutorService(ec)
     .setRemoteInterface(classOf[BloopServer])
     .create()
+  val listening = launcher.startListening()
   val server = launcher.getRemoteProxy
   localClient.onConnectWithServer(server)
-  val listening = launcher.startListening()
+
   import scala.jdk.FutureConverters.given
-  val initializeResult = server.buildInitialize(
-    BuildsonnetBuildClient.initializeBuildParams(workspace.toUri().toString()))
-  import scala.jdk.CollectionConverters.given
-  for
-    _ <- initializeResult.asScala
-    //workspaceBuildTargetsResult <- server.workspaceBuildTargets().asScala
-  yield
-    server.onBuildInitialized()
-    (server, localClient, listening)
+  server
+    .buildInitialize(BuildsonnetBuildClient.initializeBuildParams(workspace.toUri().toString()))
+    .asScala
+    .map { _ =>
+      server.onBuildInitialized()
+      (server, localClient, listening)
+    }

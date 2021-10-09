@@ -334,18 +334,14 @@ def asdf(args: String*): Unit =
   val exec = java.util.concurrent.Executors.newCachedThreadPool()
   given ExecutionContextExecutorService = ExecutionContext.fromExecutorService(exec)
 
-  println("START")
   parser.parseAll(source).fold(
     error => {
-      println("END")
       println("FAIL: " + error.toString)
     },
     ast => {
-      println("END PARSE")
       val withoutStd = EvaluationContext(
         file = sourceFile,
         bloopPort = 8212,
-        bloopLogStream = System.err,
       )
       val ctx = withoutStd.bindEvaluated("std", Std.obj(withoutStd))
       val manifested = manifest(ctx)(ast)
@@ -356,4 +352,4 @@ def asdf(args: String*): Unit =
       Await.result(ctx.bloopServer.shutdown(), Duration.Inf)
     }
   )
-  summon[ExecutionContextExecutorService].shutdownNow()
+  summon[ExecutionContextExecutorService].shutdown()

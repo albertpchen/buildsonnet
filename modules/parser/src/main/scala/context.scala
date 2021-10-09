@@ -402,13 +402,14 @@ object EvaluationContext:
   def apply(
     file: SourceFile,
     bloopPort: Int,
-    bloopLogStream: java.io.PrintStream,
   )(using executionContext: concurrent.ExecutionContextExecutorService): EvaluationContext =
     val currFileParent = new java.io.File(file.path).getAbsoluteFile.toPath.getParent
+    val logStream = new java.io.PrintStream(new java.io.FileOutputStream(
+      currFileParent.resolve("bloopLog.txt").toFile, true))
     val bloopServer = BloopServerConnection.std(
       currFileParent,
       Logger.default("buildsonnet"),
       bloopPort,
-      bloopLogStream,
+      logStream,
     )
     apply(file, currFileParent, bloopServer)

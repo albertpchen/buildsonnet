@@ -529,20 +529,6 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
       }.toJValue
 
 object Std:
-/*
-  private val ctx = {
-    new EvaluationContext.Imp(
-      BloopServerConnection.empty,
-      Importer.std,
-      JobRunner()(using null), // TODO: use proper stub 
-      new java.io.File(".").toPath,
-      SourceFile.std,
-      Map.empty,
-      List.empty,
-      null,
-    )
-  }*/
-
   private def bindArgs(
     argNames: Seq[(String, Option[EvaluatedJValue])],
     ctx: EvaluationContext,
@@ -678,7 +664,7 @@ object Std:
         }
     )
     objCtx = EvaluationContext.ObjectImp(
-      BloopServerConnection.empty,
+      ctx.bloopServer,
       obj,
       collection.immutable.Queue.empty,
       ctx,
@@ -824,6 +810,21 @@ object Std:
         ctx.expectString(targetId).flatMap { targetId =>
           ctx.decode[Seq[EvaluatedJValue.JPath]](configPaths).flatMap { _ =>
             ctx.compile(src, targetId.str)
+          }
+        }.toJValue
+      },
+      "classpath" -> function2(Arg.targetId, Arg.configPaths) { (ctx, src, targetId, configPaths) =>
+        given concurrent.ExecutionContext = ctx.executionContext
+        import scala.jdk.CollectionConverters.given
+        ctx.expectString(targetId).flatMap { targetId =>
+          ctx.decode[Seq[EvaluatedJValue.JPath]](configPaths).flatMap { paths =>
+            ctx.bloopServer.jvmRunEnvironment(targetId.str).map { env =>
+              val strings = env.getItems.get(0).getClasspath.asScala.map { item =>
+                val file = java.nio.file.Paths.get(new java.net.URI(item)).toString
+                EvaluatedJValue.JString(src, file)
+              }.toSeq
+              EvaluatedJValue.JArray(src, strings)
+            }
           }
         }.toJValue
       },
