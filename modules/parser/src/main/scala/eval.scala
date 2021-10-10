@@ -116,6 +116,17 @@ sealed trait EvaluatedJValue extends HasSource:
     case _: JNull => true
     case _ => false
 
+  def await(ctx: EvaluationContext): Unit =
+    given ExecutionContext = ctx.executionContext
+    this match
+    case value: JFuture =>
+      Await.result(value.future, duration.Duration.Inf).await(ctx)
+    case value: JArray =>
+      value.elements.foreach(_.await(ctx))
+    case value: JObject =>
+      Await.result(value.members(), duration.Duration.Inf).values.foreach(_.evaluated.await(ctx))
+    case _ =>
+
   def manifestFuture(ctx: EvaluationContext): Future[ManifestedJValue] =
     given ExecutionContext = ctx.executionContext
     this match
