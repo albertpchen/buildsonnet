@@ -335,12 +335,18 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
   case JValue.JId(src, name) => ctx.lookup(src, name).evaluated
   case JValue.JGetField(src, loc, field) =>
     given ExecutionContext = ctx.executionContext
-    ctx.expectType[EvaluatedJValue.JObject | EvaluatedJValue.JJob](loc).flatMap {
+    ctx.expectType[EvaluatedJValue.JObject | EvaluatedJValue.JJob | EvaluatedJValue.JPath](loc).flatMap {
       case o: EvaluatedJValue.JObject =>
         o.members().map {
           _
             .getOrElse(field, ctx.error(loc.src, s"object does not have field $field"))
             .evaluated
+        }
+      case p: EvaluatedJValue.JPath =>
+        Future {
+          field match
+          case "name" => EvaluatedJValue.JString(src, p.path.toString)
+          case _ => ctx.error(loc.src, s"path does not have field $field")
         }
       case j: EvaluatedJValue.JJob =>
         Future {
@@ -349,6 +355,7 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
           case "stderr" => EvaluatedJValue.JString(src, j.stderr)
           case "outputs" => EvaluatedJValue.JArray(src, j.outputs)
           case "exitCode" => EvaluatedJValue.JNum(src, j.exitCode.toDouble)
+          case _ => ctx.error(loc.src, s"job does not have field $field")
         }
     }.toJValue
   case JValue.JIndex(src, loc, rawIndex) =>
@@ -815,7 +822,7 @@ object Std:
             )
             .future()
             .map { files =>
-              EvaluatedJValue.JArray(src, files.map(a => EvaluatedJValue.JString(src, a.toString)))
+              EvaluatedJValue.JArray(src, files.map(a => EvaluatedJValue.JPath(src, a.toPath)))
             }
         }.toJValue
       },

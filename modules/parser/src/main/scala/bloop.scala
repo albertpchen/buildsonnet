@@ -112,6 +112,7 @@ final class BuildsonnetBuildClient(
     logger.info(s"LOG: ${params.getMessage}")
 
   override def onBuildTaskStart(params: bsp.TaskStartParams): Unit =
+    val isNoOp = params.getMessage.startsWith("Start no-op compilation")
     params.getDataKind match {
       case bsp.TaskDataKind.COMPILE_TASK =>
         val id =
@@ -122,10 +123,12 @@ final class BuildsonnetBuildClient(
             .getAsJsonPrimitive("uri")
             .getAsString
         compilations.remove(id).foreach(_.cancel())
-        compilations(id) = Promise[Unit]()
+        if !isNoOp then
+          compilations(id) = Promise[Unit]()
       case _ =>
     }
-    logger.info(params.getMessage)
+    if !isNoOp then
+      logger.info(params.getMessage)
 
   override def onBuildTaskProgress(params: bsp.TaskProgressParams): Unit =
     if !(params.getMessage eq null) then
@@ -141,12 +144,13 @@ final class BuildsonnetBuildClient(
             .getAsJsonObject("target")
             .getAsJsonPrimitive("uri")
             .getAsString
-        compilations.get(id).foreach(_.success(()))
+        compilations.get(id).foreach { promise =>
+          if !(params.getMessage eq null) then logger.info(params.getMessage)
+          promise.success(())
+        }
       case _ =>
+        if !(params.getMessage eq null) then logger.info(params.getMessage)
     }
-    if !(params.getMessage eq null) then
-      logger.info(params.getMessage)
-      //println(params.getData.asInstanceOf[com.google.gson.JsonObject].getAsJsonPrimitive("clientDir"))
 
   override def onBuildPublishDiagnostics(params: bsp.PublishDiagnosticsParams): Unit =
     import scala.jdk.CollectionConverters.given
@@ -233,7 +237,7 @@ object BloopServerConnection:
               // println("666")
               connection.cancelables.foreach(_.cancel())
               // println("777")
-              logger.info("Shut down connection with bloop server.")
+              logStream.print("Shut down connection with bloop server.")
           catch
             case _: TimeoutException =>
               logger.error(s"timeout: bloop server during shutdown")

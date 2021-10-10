@@ -16,14 +16,15 @@ object Importer:
     private val strCache = new collection.concurrent.TrieMap[String, String]()
     def `import`(ctx: EvaluationContext, src: Source, fileName: String): EvaluatedJValue =
       val currFile = new java.io.File(ctx.file.path)
-      val currFileParent = 
-        currFile
-          .toPath
-          .getParent
-      val importFile =
-        (if currFileParent eq null then new java.io.File(fileName).toPath else currFileParent.resolve(fileName))
-          .normalize()
-          .toFile
+      val importFile = {
+        val currFileParent = currFile.toPath.getParent
+        val path =
+          if currFileParent eq null then
+            new java.io.File(fileName).toPath
+          else
+            currFileParent.resolve(fileName)
+        path.normalize().toFile
+      }
       if importFile == currFile then
         ctx.error(src, s"file $importFile imports itself")
       val normalized = importFile.toString
