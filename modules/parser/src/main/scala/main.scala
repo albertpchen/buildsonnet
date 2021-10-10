@@ -8,6 +8,13 @@ case class CmdlineArgs(
 )
 
 object Buildsonnet:
+  def commandToTokens(command: String): Either[String, Array[String]] =
+    val result = command.split('.')
+    if result.contains("") then
+      Left(s"command syntax error: empty field name")
+    else
+      Right(result)
+
   val usage =
     """usage: buildsonnet [<builsonnet-options>] <command> [<args>]
       |
@@ -68,8 +75,17 @@ object Buildsonnet:
       System.err.println("missing build command")
       println(usage)
       System.exit(1)
-    val buildCommand = args(i)
-    val buildArgs: Seq[String] = args.slice(i + 1, args.size)
+
+    val buildCommand = {
+      commandToTokens(args(i)) match
+      case Left(error) =>
+        System.err.println(error)
+        System.exit(1)
+        Array.empty[String]
+      case Right(tokens) => tokens
+    }
+
+    val buildArgs: Seq[String] = args.slice(i + 1, args.size).toSeq
 
     import scala.concurrent.{Await, ExecutionContext, ExecutionContextExecutorService}
     import scala.concurrent.duration.Duration
@@ -94,7 +110,7 @@ object Buildsonnet:
       case Left(error) =>
         System.err.println("syntax error at: " + error.toString)
         System.exit(1)
-      case Right(ast) =>
+      case Right(buildObject) =>
         val exec = java.util.concurrent.Executors.newCachedThreadPool()
         given ExecutionContextExecutorService = ExecutionContext.fromExecutorService(exec)
         val withoutStd = EvaluationContext(
@@ -104,8 +120,10 @@ object Buildsonnet:
         val ctx = withoutStd.bindEvaluated("std", Std.obj(withoutStd))
         val result: Either[EvaluationError, Unit] =
           try
-            val buildValue = evalUnsafe(ctx)(
-              JValue.JGetField(Source.Generated, ast, buildCommand))
+            val buildValue = {
+              val expr = buildCommand.foldLeft(buildObject)(JValue.JGetField(Source.Generated, _, _))
+              evalUnsafe(ctx)(expr)
+            }
             buildValue match
             case future: EvaluatedJValue.JFuture =>
               val applied = future.future.map {

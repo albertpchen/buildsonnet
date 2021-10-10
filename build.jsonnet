@@ -24,7 +24,7 @@ local bloopConfig(project) = {
     workspaceDir: project.workspaceDir,
     sources: project.sources,
     dependencies: std.get(project, "dependencies", default=[]),
-    classpath: std.scala.cs(project.libraries),
+    classpath: [path.name for path in std.scala.cs(project.libraries)],
     out: project.bloop.out,
     classesDir: project.bloop.classesDir,
     resources: std.get(project, "resources", default=[]),
@@ -33,7 +33,9 @@ local bloopConfig(project) = {
       name: "scala-compiler",
       version: "3.0.2",
       options: [ ],
-      jars: std.scala.cs([project.scalaDep("org.scala-lang", "scala3-compiler_3", "3.0.2")]),
+      jars:
+        local paths = std.scala.cs([project.scalaDep("org.scala-lang", "scala3-compiler_3", "3.0.2")]);
+        [path.name for path in paths],
       analysis: project.bloop.out + "/inc_compile_3.zip",
       setup: {
         "order": "mixed",
@@ -70,7 +72,7 @@ local bloopConfig(project) = {
 };
 
 local project = ScalaProject {
-  name: "asdf",
+  name: "parser",
   dependencies: [],
   sources: ["modules/parser/src/main/scala"],
   libraries: [
@@ -83,6 +85,8 @@ local project = ScalaProject {
     $.scalaDep("org.slf4j", "slf4j-nop", "1.6.4"),
     $.scalaDep("ch.epfl.scala", "bsp4j", "2.0.0"),
     $.scalaDep("ch.epfl.scala", "bloop-launcher-core_2.13", "1.4.9-20-2c23b6ba-20211002-2109"),
+    $.scalaDep("com.github.scopt", "scopt_3", "4.0.1"),
+    $.scalaDep("ch.epfl.scala", "bloop-config_2.13", "1.4.9"),
   ],
   runtimeJvmHome: "/home/turtle/.cache/coursier/jvm/graalvm-java11@21.2.0/",
   runtimeJavaOpts: [
@@ -90,5 +94,13 @@ local project = ScalaProject {
     //"-agentpath:/home/achen2012/tools/async-profiler-2.0-linux-x64/build/libasyncProfiler.so=start,event=cpu,file=profile.html"
   ],
 };
-// bloopConfig(project)/// + (import "test.jsonnet")
-std.scala.classpath("asdf", [std.write(std.workspace() + "/.bloop/asdf.json", std.toString(bloopConfig(project)))])
+
+{
+  a: {
+    java(args): std.print(std.runJob({cmdline: ["java", "--help"], envVars: { PATH: "/nix/store/c6svk6hihklhc3c3sy0fhfw877sj0866-openjdk-16+36/bin" }, inputFiles: []}).stdout, 0),
+  },
+  java(args): std.runJob({cmdline: ["java", "--help"], envVars: { PATH: "/nix/store/c6svk6hihklhc3c3sy0fhfw877sj0866-openjdk-16+36/bin" }, inputFiles: []}).stdout,
+  write(args): std.write("parser", args[0]),
+  // bloopConfig(project)/// + (import "test.jsonnet")
+  classpath(args): std.scala.classpath("parser", [std.write(std.workspace() + "/.bloop/asdf.json", std.toString(bloopConfig(project)))]),
+}

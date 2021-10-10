@@ -380,7 +380,7 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
         if idx >= arr.elements.size then
           ctx.error(src, s"index $idx out of bounds for length ${arr.elements.size}")
         arr.elements(idx)
-      }// TODO: check index out of bounds
+      }
     }.toJValue
   case JValue.JSlice(src, loc, rawIndex, rawEndIndex, rawStride) =>
     given concurrent.ExecutionContext = ctx.executionContext
@@ -776,6 +776,13 @@ object Std:
         rest
       }.toJValue
     },
+    "print" -> function2(Arg.str, Arg.rest(jnull)) { (ctx, src, str, rest) =>
+      given concurrent.ExecutionContext = ctx.executionContext
+      ctx.expectString(str).map { str =>
+        println(str.str)
+        rest
+      }.toJValue
+    },
     "workspace" -> function0 { (ctx, src) =>
       EvaluatedJValue.JString(src, ctx.workspaceDir.toString)
     },
@@ -844,7 +851,16 @@ object Std:
         given concurrent.ExecutionContext = ctx.executionContext
         ctx.expectString(targetId).flatMap { targetId =>
           ctx.decode[Seq[EvaluatedJValue.JPath]](configPaths).flatMap { _ =>
-            ctx.compile(src, targetId.str)
+            ctx.bloopServer.compile(targetId.str).map { res =>
+              val result = res.getStatusCode() match
+              case ch.epfl.scala.bsp4j.StatusCode.OK => "ok"
+              case ch.epfl.scala.bsp4j.StatusCode.ERROR => "error"
+              case ch.epfl.scala.bsp4j.StatusCode.CANCELLED => "cancelled"
+              EvaluatedJValue.JString(src, result)
+              // case ch.epfl.scala.bsp4j.StatusCode.OK => EvaluatedJValue.JNull(src)
+              // case ch.epfl.scala.bsp4j.StatusCode.ERROR => ctx.error(src, s"Failed to compile '$targetId'")
+              // case ch.epfl.scala.bsp4j.StatusCode.CANCELLED => ctx.error(src, s"Cancelled compile for '$targetId'")
+            }
           }
         }.toJValue
       },
