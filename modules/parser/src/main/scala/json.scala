@@ -149,8 +149,11 @@ object Parser:
     }
     val keyValue: P[JObjMember] = {
       P.oneOf(List(
-        (P.index.with1 ~ key, h.surroundedBy(__), expr).tupled.map { case ((start, key), (plus, isHidden), value) =>
-          JObjMember.JField(value.src.withStart(start), key, plus, isHidden, value)
+        (P.index.with1 ~ key, (__).with1 *> (params.?.with1 ~ h.surroundedBy(__)), expr).tupled.map { case ((start, key), (params, (plus, isHidden)), value) =>
+          val objValue = params.fold(value) { params =>
+            JValue.JFunction(value.src.withStart(start), params, value)
+          }
+          JObjMember.JField(value.src.withStart(start), key, plus, isHidden, objValue)
         },
         assert.map(JObjMember.JAssert(_, _, _)),
         (keyword("local") *> __ *> bind).map { (start, id, paramsOpt, expr) =>

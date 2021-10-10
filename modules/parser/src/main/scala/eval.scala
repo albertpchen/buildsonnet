@@ -375,7 +375,12 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
         obj.lookup(src, field.str)
       }
     case arr: EvaluatedJValue.JArray =>
-      ctx.expectNum(rawIndex).map(num => arr.elements(num.double.toInt)) // TODO: check index out of bounds
+      ctx.expectNum(rawIndex).map { num =>
+        val idx = num.double.toInt
+        if idx >= arr.elements.size then
+          ctx.error(src, s"index $idx out of bounds for length ${arr.elements.size}")
+        arr.elements(idx)
+      }// TODO: check index out of bounds
     }.toJValue
   case JValue.JSlice(src, loc, rawIndex, rawEndIndex, rawStride) =>
     given concurrent.ExecutionContext = ctx.executionContext
