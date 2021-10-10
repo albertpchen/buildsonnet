@@ -98,12 +98,11 @@ final class BuildsonnetBuildClient(
 ) extends bsp.BuildClient:
   val compilations = collection.concurrent.TrieMap.empty[String, Promise[Unit]]
   def cancel(): Unit =
-    for {
+    for
       key <- compilations.keysIterator
       compilation <- compilations.remove(key)
-    } {
+    do
       compilation.cancel()
-    }
 
   override def onBuildShowMessage(params: bsp.ShowMessageParams): Unit =
     logger.info(params.getMessage)

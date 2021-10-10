@@ -3,6 +3,7 @@
     "root.BloopServer",
     "ch.epfl.scala.bsp4j.BuildServer",
     "ch.epfl.scala.bsp4j.ScalaBuildServer",
+    "ch.epfl.scala.bsp4j.JvmBuildServer",
     "org.eclipse.lsp4j.jsonrpc.Endpoint"
   ],
   [

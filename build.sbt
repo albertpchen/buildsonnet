@@ -1,27 +1,92 @@
 val scala3Version = "3.0.2"
+val Scala213Version = "2.13.6"
+
+val Dependencies = new {
+  val coursierVersion = "2.0.16"
+  val coursier = "io.get-coursier" %% "coursier" % coursierVersion
+  val coursierCache = "io.get-coursier" %% "coursier-cache" % coursierVersion
+  val coursierLauncher = "io.get-coursier" %% "coursier-launcher" % coursierVersion
+
+  val snailgunVersion = "0.4.0"
+  val snailgun = ("me.vican.jorge" %% "snailgun-cli" % snailgunVersion)
+
+  val jsoniterVersion = "2.4.0"
+  val jsoniterCore =
+    "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-core" % jsoniterVersion
+  val jsoniterMacros =
+    "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-macros" % jsoniterVersion
+
+  val slf4jNop = "org.slf4j" % "slf4j-nop" % "1.7.2"
+
+  val ztExecVersion = "1.11"
+  val ztExec = "org.zeroturnaround" % "zt-exec" % ztExecVersion
+}
 
 lazy val root = project.in(file("."))
+
+lazy val bloopgun: Project = project
+  .in(file("bloop/bloopgun"))
+  .enablePlugins(BuildInfoPlugin)
+  .settings(
+    name := "bloopgun-core",
+    scalaVersion := Scala213Version,
+    buildInfoPackage := "bloopgun.internal.build",
+    buildInfoKeys := List(Keys.version),
+    buildInfoObject := "BloopgunInfo",
+    libraryDependencies ++= List(
+      //Dependencies.configDirectories,
+      Dependencies.snailgun,
+      // Use zt-exec instead of nuprocess because it doesn't require JNA (good for graalvm)
+      Dependencies.ztExec,
+      Dependencies.slf4jNop,
+      Dependencies.coursier,
+      Dependencies.coursierCache,
+      Dependencies.jsoniterCore,
+      Dependencies.jsoniterMacros % Provided,
+      // Necessary to compile to native (see https://github.com/coursier/coursier/blob/0bf1c4f364ceff76892751a51361a41dfc478b8d/build.sbt#L376)
+      "org.bouncycastle" % "bcprov-jdk15on" % "1.64",
+      "org.bouncycastle" % "bcpkix-jdk15on" % "1.64"
+    ),
+  )
+
+lazy val bloopLauncher: Project = project
+  .in(file("bloop/launcher"))
+  .disablePlugins(ScriptedPlugin)
+  .dependsOn(bloopgun)
+  .settings(
+    name := "bloop-launcher-core",
+    scalaVersion := Scala213Version,
+    crossVersion := CrossVersion.constant(scala3Version),
+    libraryDependencies ++= List(
+      "org.scala-sbt.ipcsocket" % "ipcsocket" % "1.4.0",
+      Dependencies.coursier,
+      Dependencies.coursierCache
+    )
+  )
 
 // project for JVM build (default)
 lazy val parser = project
   .in(file("modules/parser"))
   .enablePlugins(NativeImagePlugin)
+  .dependsOn(bloopLauncher)
   .settings(
+    run / fork := true,
     version := "0.1.0",
     scalaVersion := scala3Version,
     libraryDependencies ++= Seq(
       "org.typelevel" %% "shapeless3-deriving" % "3.0.3",
       "org.typelevel" %% "cats-parse" % "0.3.4",
       "org.scalameta" %%% "munit" % "0.7.26" % Test,
-      ("io.get-coursier" %% "coursier" % "2.0.16").cross(CrossVersion.for3Use2_13),
-      ("io.get-coursier" %% "coursier-launcher" % "2.0.16").cross(CrossVersion.for3Use2_13),
+      Dependencies.coursier.cross(CrossVersion.for3Use2_13),
+      Dependencies.coursierLauncher.cross(CrossVersion.for3Use2_13),
       ("com.typesafe.slick" %% "slick" % "3.3.3").cross(CrossVersion.for3Use2_13),
       "org.slf4j" % "slf4j-nop" % "1.6.4",
       "org.xerial" % "sqlite-jdbc" % "3.36.0.3",
       "ch.epfl.scala" % "bsp4j" % "2.0.0",
       ("ch.epfl.scala" %% "bsp4s" % "2.0.0").cross(CrossVersion.for3Use2_13),
       // ("ch.epfl.scala" %% "bloop-launcher-core" % "1.4.9-20-2c23b6ba-20211002-2109").cross(CrossVersion.for3Use2_13),
-      ("ch.epfl.scala" %% "bloop-launcher-core" % "1.4.9-20-2c23b6ba-20211003-1709").cross(CrossVersion.for3Use2_13),
+      //("ch.epfl.scala" %% "bloop-launcher-core" % "1.4.9-20-2c23b6ba-20211003-1709").cross(CrossVersion.for3Use2_13),
+      ("ch.epfl.scala" %% "bloop-config" % "1.4.9").cross(CrossVersion.for3Use2_13),
     ),
     nativeImageOptions ++= {
       val workspaceDir = (root / baseDirectory).value.getAbsolutePath
@@ -47,7 +112,7 @@ lazy val parser = project
 
         "-H:ReflectionConfigurationFiles=" + nativeImageConfigDir + "/reflect-config.json",
         "-H:ReflectionConfigurationFiles=" + workspaceDir + "/native-image-reflect-config.json",
-        "-H:DynamicProxyConfigurationFiles=" + nativeImageConfigDir + "/proxy-config.json",
+        "-H:DynamicProxyConfigurationFiles=" + workspaceDir + "/proxy-config.json",
         "-H:JNIConfigurationFiles=" + nativeImageConfigDir + "/jni-config.json",
         "-H:ResourceConfigurationFiles=" + nativeImageConfigDir + "/resource-config.json",
         "-H:ResourceConfigurationFiles=" + workspaceDir + "/native-image-resource-config.json",

@@ -877,8 +877,8 @@ object Std:
                   EvaluatedJValue.JPath(src, file)
                 }.toSeq
                 EvaluatedJValue.JArray(src, strings)
-              case Left(StatusCode.ERROR) => ctx.error(src, s"compilation for $targetId failed")
-              case Left(StatusCode.CANCELLED) => ctx.error(src, s"compilation for $targetId was cancelled")
+              case Left(StatusCode.ERROR) => ctx.error(src, s"compilation for '${targetId.str}' failed")
+              case Left(StatusCode.CANCELLED) => ctx.error(src, s"compilation for '${targetId.str}' was cancelled")
             }
           }
         }.toJValue

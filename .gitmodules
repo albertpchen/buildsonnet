@@ -1,0 +1,3 @@
+[submodule "bloop"]
+	path = bloop
+	url = https://github.com/scalacenter/bloop.git
