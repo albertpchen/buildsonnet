@@ -5,7 +5,7 @@ import scala.concurrent.{Await, ExecutionContext, ExecutionContextExecutorServic
 import cats.parse.{Parser0 => P0, Parser => P, Numbers}
 import cats.syntax.all._
 
-object Json:
+object Parser:
   val a = 0
   import cats.instances.all._
   import JValue._
@@ -321,35 +321,35 @@ object Json:
   }
   val parserFile = __ *> expr <* __
 
-@main
-def asdf(args: String*): Unit =
-  import scala.concurrent.duration.Duration
-  import scala.util.{Failure, Success}
+object asdf:
+  def main(args: Array[String]): Unit =
+    import scala.concurrent.duration.Duration
+    import scala.util.{Failure, Success}
 
-  val filename = args(0)
-  val source = scala.io.Source.fromFile(filename).getLines.mkString("\n")
-  val sourceFile = SourceFile(filename, source)
-  val parser = Json.parserFile
+    val filename = args(0)
+    val source = scala.io.Source.fromFile(filename).getLines.mkString("\n")
+    val sourceFile = SourceFile(filename, source)
+    val parser = Parser.parserFile
 
-  val exec = java.util.concurrent.Executors.newCachedThreadPool()
-  given ExecutionContextExecutorService = ExecutionContext.fromExecutorService(exec)
+    val exec = java.util.concurrent.Executors.newCachedThreadPool()
+    given ExecutionContextExecutorService = ExecutionContext.fromExecutorService(exec)
 
-  parser.parseAll(source).fold(
-    error => {
-      println("FAIL: " + error.toString)
-    },
-    ast => {
-      val withoutStd = EvaluationContext(
-        file = sourceFile,
-        bloopPort = 8212,
-      )
-      val ctx = withoutStd.bindEvaluated("std", Std.obj(withoutStd))
-      val manifested = manifest(ctx)(ast)
-      manifested.fold(
-        msg => println(s"FAIL: $msg"),
-        value => println(value),
-      )
-      Await.result(ctx.bloopServer.shutdown(), Duration.Inf)
-    }
-  )
-  summon[ExecutionContextExecutorService].shutdown()
+    parser.parseAll(source).fold(
+      error => {
+        println("FAIL: " + error.toString)
+      },
+      ast => {
+        val withoutStd = EvaluationContext(
+          file = sourceFile,
+          bloopPort = 8212,
+        )
+        val ctx = withoutStd.bindEvaluated("std", Std.obj(withoutStd))
+        val manifested = manifest(ctx)(ast)
+        manifested.fold(
+          msg => println(s"FAIL: $msg"),
+          value => println(value),
+        )
+        Await.result(ctx.bloopServer.shutdown(), Duration.Inf)
+      }
+    )
+    summon[ExecutionContextExecutorService].shutdown()

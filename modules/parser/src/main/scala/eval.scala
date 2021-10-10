@@ -132,10 +132,8 @@ sealed trait EvaluatedJValue extends HasSource:
         }
         Future.sequence(futures).map(members => ManifestedJValue.JObject(members.toMap))
       }
-    case path: JPath => ctx.error(path.src, "cannot manifest path")
-    case job: JJob => ctx.error(job.src, "cannot manifest job")
-    case fn: JFunction => ctx.error(fn.src, "cannot manifest function")
     case f: JFuture => f.future.map(_.manifest(ctx))
+    case expr => ctx.error(expr.src, s"cannot manifest ${EvaluationContext.typeString(expr)}")
 
   def manifest(ctx: EvaluationContext): ManifestedJValue =
     concurrent.Await.result(manifestFuture(ctx), duration.Duration.Inf)

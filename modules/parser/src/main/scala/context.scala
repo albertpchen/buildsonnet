@@ -30,7 +30,7 @@ object Importer:
       val normalized = importFile.toString
       cache.getOrElseUpdate(normalized, {
         val source = scala.io.Source.fromFile(normalized).getLines.mkString("\n")
-        Json.parserFile.parseAll(source).fold(
+        Parser.parserFile.parseAll(source).fold(
           error => ctx.error(src, error.toString),
           ast => {
             given concurrent.ExecutionContextExecutorService = ctx.executionContext
