@@ -774,16 +774,30 @@ object Std:
       given concurrent.ExecutionContext = ctx.executionContext
       ctx.expectType[EvaluatedJValue.JString | EvaluatedJValue.JPath](pathName).flatMap { pathName =>
         ctx.expectString(contents).map { contents =>
-          val path = pathName match
+          val path =
+            pathName match
             case str: EvaluatedJValue.JString =>
               if str.str.startsWith("/") then
                 java.nio.file.Paths.get(str.str)
               else
                 ctx.workspaceDir.resolve(str.str)
             case path: EvaluatedJValue.JPath => path.path
-          java.nio.file.Files.write(path, contents.str.getBytes())
-          EvaluatedJValue.JPath(src, path)
+          EvaluatedJValue.JPath(src, JobRunner.write(path, contents.str))
         }
+      }.toJValue
+    },
+    "getenv" -> function1(Arg.varName) { (ctx, src, varName) =>
+      given concurrent.ExecutionContext = ctx.executionContext
+      ctx.expectType[EvaluatedJValue.JString](varName).map { varNamex =>
+        val varName = varNamex.str
+        try
+          val value = System.getenv(varName)
+          if value eq null then
+            ctx.error(src, s"environment variable \"$varName\" not set")
+          else
+            EvaluatedJValue.JString(src, value)
+        catch
+          case e: java.lang.SecurityException => ctx.error(src, s"could not access environment variable \"$varName\": ${e.getMessage}")
       }.toJValue
     },
     "scala" -> makeObject(ctx, Map(
@@ -822,8 +836,8 @@ object Std:
             ctx.bloopServer.jvmRunEnvironment(targetId.str).map {
               case Right(env) =>
                 val strings = env.getItems.get(0).getClasspath.asScala.map { item =>
-                  val file = java.nio.file.Paths.get(new java.net.URI(item)).toString
-                  EvaluatedJValue.JString(src, file)
+                  val file = java.nio.file.Paths.get(new java.net.URI(item))
+                  EvaluatedJValue.JPath(src, file)
                 }.toSeq
                 EvaluatedJValue.JArray(src, strings)
               case Left(StatusCode.ERROR) => ctx.error(src, s"compilation for $targetId failed")

@@ -80,6 +80,26 @@ sealed trait JobRunner:
 object JobRunner:
   import java.nio.file.attribute.FileTime
 
+  def write(path: java.nio.file.Path, contents: String): java.nio.file.Path =
+    if !java.nio.file.Files.exists(path) || !JobRunner.fileMatchesContents(path.toFile, contents) then
+      java.nio.file.Files.write(path, contents.getBytes())
+    path
+
+  def fileMatchesContents(file: java.io.File, contents: String): Boolean =
+    val fileStream = new java.io.FileInputStream(file)
+    val contentsStream = new java.io.ByteArrayInputStream(contents.getBytes())
+    var cFile: Int = -1
+    var cContents: Int = -1
+    while
+      cFile = fileStream.read()
+      cContents = contentsStream.read()
+      (cFile == cContents) && (cFile != -1 || cContents != -1)
+    do ()
+    fileStream.close()
+    contentsStream.close()
+    cFile == cContents
+
+
   private given fileTimeOrdering: math.Ordering[FileTime] = new math.Ordering[FileTime]:
     def compare(x: FileTime, y: FileTime): Int =
       x.compareTo(y)
