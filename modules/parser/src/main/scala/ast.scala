@@ -9,6 +9,16 @@ enum JUnaryOperator:
   case Op_~
 
 object JUnaryOperator:
+  import scala.quoted.*
+
+  given ToExpr[JUnaryOperator] with
+    def apply(op: JUnaryOperator)(using Quotes): Expr[JUnaryOperator] =
+      op match
+      case Op_! => '{ Op_! }
+      case Op_+ => '{ Op_+ }
+      case Op_- => '{ Op_- }
+      case Op_~ => '{ Op_~ }
+
   def apply(op: Char): JUnaryOperator =
     (op: @switch) match
       case '!' => Op_!
@@ -41,6 +51,31 @@ enum JBinaryOperator(
   case Op_|| extends JBinaryOperator(4, true)
 
 object JBinaryOperator:
+  import scala.quoted.*
+
+  given ToExpr[JBinaryOperator] with
+    def apply(op: JBinaryOperator)(using Quotes): Expr[JBinaryOperator] =
+      op match
+      case Op_*  => '{ Op_*  }
+      case Op_/  => '{ Op_/  }
+      case Op_%  => '{ Op_%  }
+      case Op_+  => '{ Op_+  }
+      case Op_-  => '{ Op_-  }
+      case Op_<< => '{ Op_<< }
+      case Op_>> => '{ Op_>> }
+      case Op_<  => '{ Op_<  }
+      case Op_>  => '{ Op_>  }
+      case Op_<= => '{ Op_<= }
+      case Op_>= => '{ Op_>= }
+      case Op_in => '{ Op_in }
+      case Op_== => '{ Op_== }
+      case Op_!= => '{ Op_!= }
+      case Op_&  => '{ Op_&  }
+      case Op_^  => '{ Op_^  }
+      case Op_|  => '{ Op_|  }
+      case Op_&& => '{ Op_&& }
+      case Op_|| => '{ Op_|| }
+
   def apply(op: String): JBinaryOperator =
     (op(0): @switch) match
       case '*' => Op_*
@@ -188,6 +223,14 @@ enum Source:
     case _ => this
 
 object Source:
+  import scala.quoted.*
+
+  given ToExpr[Source] with
+    def apply(src: Source)(using Quotes): Expr[Source] =
+      src match
+      case Range(start, end) => '{ Range(${Expr(start)}, ${Expr(end)}) }
+      case Generated => '{ Generated }
+
   def apply(start: Int, end: Int): Source.Range =
     Source.Range(start, end)
 
@@ -195,6 +238,20 @@ enum JObjMember:
   case JLocal(src: Source, name: String, value: JValue)
   case JField(src: Source, key: JValue, plus: Boolean, isHidden: Boolean, value: JValue)
   case JAssert(src: Source, cond: JValue, msg: Option[JValue])
+
+object JObjMember:
+  import scala.quoted.*
+
+  given ToExpr[JLocal] with
+    def apply(local: JLocal)(using Quotes): Expr[JLocal] =
+       '{ JLocal(${Expr(local.src)}, ${Expr(local.name)}, ${Expr(local.value)}) }
+
+  given ToExpr[JObjMember] with
+    def apply(member: JObjMember)(using Quotes): Expr[JObjMember] =
+      member match
+      case JLocal(src, name, value) => '{ JLocal(${Expr(src)}, ${Expr(name)}, ${Expr(value)}) }
+      case JField(src, key, plus, isHidden, value) => '{ JField(${Expr(src)}, ${Expr(key)}, ${Expr(plus)}, ${Expr(isHidden)}, ${Expr(value)}) }
+      case JAssert(src, cond, msg) => '{ JAssert(${Expr(src)}, ${Expr(cond)}, ${Expr(msg)}) }
 
 trait HasSource:
   def src: Source
@@ -245,5 +302,77 @@ enum JValue extends HasSource:
   def isNull: Boolean = this match
     case _: JNull => true
     case _ => false
+
+object JValue:
+  import scala.quoted.*
+
+  given ToExpr[JValue] with
+    def apply(jvalue: JValue)(using Quotes): Expr[JValue] =
+      jvalue match
+      case JFalse(src) => '{ JFalse(${Expr(src)}) }
+      case JTrue(src) => '{ JTrue(${Expr(src)}) }
+      case JNull(src) => '{ JNull(${Expr(src)}) }
+      case JSelf(src) => '{ JSelf(${Expr(src)}) }
+      case JSuper(src) => '{ JSuper(${Expr(src)}) }
+      case JOuter(src) => '{ JOuter(${Expr(src)}) }
+      case JString(src, str) => '{ JString(${Expr(src)}, ${Expr(str)}) }
+      case JNum(src, str) => '{ JNum(${Expr(src)}, ${Expr(str)}) }
+      case JArray(src, elements) => '{ JArray(${Expr(src)}, ${Expr.ofSeq(elements.map(Expr(_)))}) }
+      case JObject(src, members) => '{ JObject(${Expr(src)}, ${Expr.ofSeq(members.map(Expr(_)))}) }
+      case JObjectComprehension(src, preLocals, key, value, postLocals, forVar, inExpr, cond) => '{
+        JObjectComprehension(
+          ${Expr(src)},
+          ${Expr.ofSeq(preLocals.map(Expr(_)))},
+          ${Expr(key)},
+          ${Expr(value)},
+          ${Expr.ofSeq(postLocals.map(Expr(_)))},
+          ${Expr(forVar)},
+          ${Expr(inExpr)},
+          ${Expr(cond)},
+        )
+      }
+      case JId(src, name) => '{ JId(${Expr(src)}, ${Expr(name)}) }
+      case JGetField(src, loc, field) => '{ JGetField(${Expr(src)}, ${Expr(loc)}, ${Expr(field)}) }
+      case JIndex(src, loc, index) => '{ JIndex(${Expr(src)}, ${Expr(loc)}, ${Expr(index)}) }
+      case JSlice(src, loc, index, endIndex, stride) => '{ JSlice(${Expr(src)}, ${Expr(loc)}, ${Expr(index)}, ${Expr(endIndex)}, ${Expr(stride)}) }
+      case JApply(src, loc, positionalArgs, namedArgs) => '{
+        JApply(
+          ${Expr(src)},
+          ${Expr(loc)},
+          ${Expr.ofSeq(positionalArgs.map(Expr(_)))},
+          ${Expr.ofSeq(namedArgs.map { (name, arg) =>
+            '{ ${Expr(name)} -> ${Expr(arg)} }
+          })}
+        )
+      }
+      case JBinaryOp(src, left, op, right) => '{ JBinaryOp(${Expr(src)}, ${Expr(left)}, ${Expr(op)}, ${Expr(right)}) }
+      case JUnaryOp(src, op, expr) => '{ JUnaryOp(${Expr(src)}, ${Expr(op)}, ${Expr(expr)}) }
+      case JLocal(src, name, value, result) => '{ JLocal(${Expr(src)}, ${Expr(name)}, ${Expr(value)}, ${Expr(result)}) }
+      case JFunction(src, params, body) => '{ JFunction(${Expr(src)}, ${Expr(params)}, ${Expr(body)}) }
+      case JIf(src, cond, trueValue, elseValue) => '{ JIf(${Expr(src)}, ${Expr(cond)}, ${Expr(trueValue)}, ${Expr(elseValue)}) }
+      case JError(src, expr) => '{ JError(${Expr(src)}, ${Expr(expr)}) }
+      case JAssert(src, cond, msg, expr) => '{ JAssert(${Expr(src)}, ${Expr(cond)}, ${Expr(msg)}, ${Expr(expr)}) }
+      case JImport(src, file) => '{ JImport(${Expr(src)}, ${Expr(file)}) }
+      case JImportStr(src, file) => '{ JImportStr(${Expr(src)}, ${Expr(file)}) }
+      case JArrayComprehension(src, forVar, forExpr, inExpr, cond) => '{
+        JArrayComprehension(
+          ${Expr(src)},
+          ${Expr(forVar)},
+          ${Expr(forExpr)},
+          ${Expr(inExpr)},
+          ${Expr(cond)},
+        )
+      }
+
+  inline def reify(source: SourceFile, inline string: String): JValue =
+    ${ reifyIml('source, 'string) }
+
+  def reifyIml(source: Expr[SourceFile], string: Expr[String])(using quotes: Quotes): Expr[JValue] =
+    import quotes.reflect.{report, Position}
+    val literal = string.value.getOrElse(report.throwError("input string must be a literal", Position.ofMacroExpansion))
+    Parser.parserFile.parseAll(literal).fold(
+      err => report.throwError(err.toString, Position.ofMacroExpansion),
+      jvalue => Expr(jvalue),
+    )
 
 type JParamList = Seq[(String, Option[JValue])]

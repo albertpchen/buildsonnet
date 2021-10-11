@@ -311,7 +311,7 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
           forCtx.expectFieldName(rawKey).zip(ctx.expectBoolean(cond)).map {
             case (_: EvaluatedJValue.JNull, _) => None
             case (key: EvaluatedJValue.JString, cond) => Option.when(cond.value) {
-              key.str -> evalUnsafe(forCtx)(inExpr)
+              key.str -> e
             }
           }
         }).map(_.flatten)
@@ -320,7 +320,7 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
           val forCtx = ctx.bindEvaluated(forVar, e)
           forCtx.expectFieldName(rawKey).map {
             case _: EvaluatedJValue.JNull => None
-            case key: EvaluatedJValue.JString => Some(key.str -> evalUnsafe(forCtx)(inExpr))
+            case key: EvaluatedJValue.JString => Some(key.str -> e)
           }
         }).map(_.flatten)
     }
