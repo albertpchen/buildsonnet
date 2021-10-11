@@ -45,15 +45,15 @@ object Config:
         else if str.str == ModuleKindJS.ESModule.id then ModuleKindJS.ESModule
         else path.error(ctx, expr.src, "not a valid moduleKind")
       }
-  implicit val a: JDecoder[SourcesGlobs] = JDecoder.derived[SourcesGlobs]
-  implicit val b: JDecoder[Scala] = JDecoder.derived[Scala]
-  implicit val c: JDecoder[Java] = JDecoder.derived[Java]
-  implicit val d: JDecoder[Sbt] = JDecoder.derived[Sbt]
-  implicit val e: JDecoder[Test] = JDecoder.derived[Test]
-  implicit val f: JDecoder[Platform.Js] = JDecoder.derived[Platform.Js]
-  implicit val g: JDecoder[Platform.Jvm] = JDecoder.derived[Platform.Jvm]
-  implicit val h: JDecoder[Platform.Native] = JDecoder.derived[Platform.Native]
-  implicit val i: JDecoder[Platform] = new JDecoder[Platform]:
+  given JDecoder[SourcesGlobs] = JDecoder.derived[SourcesGlobs]
+  given JDecoder[Scala] = JDecoder.derived[Scala]
+  given JDecoder[Java] = JDecoder.derived[Java]
+  given JDecoder[Sbt] = JDecoder.derived[Sbt]
+  given JDecoder[Test] = JDecoder.derived[Test]
+  given JDecoder[Platform.Js] = JDecoder.derived[Platform.Js]
+  given JDecoder[Platform.Jvm] = JDecoder.derived[Platform.Jvm]
+  given JDecoder[Platform.Native] = JDecoder.derived[Platform.Native]
+  given JDecoder[Platform] with
     def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): concurrent.Future[Platform] =
       given concurrent.ExecutionContext = ctx.executionContext
       path.expectType[EvaluatedJValue.JObject](ctx, expr).flatMap { obj =>
@@ -66,7 +66,7 @@ object Config:
             s"invalid platform name '${name.str}', expected ${Platform.Js.name}, ${Platform.Jvm.name}, or ${Platform.Native.name}")
         }
       }
-  implicit val j: JDecoder[Resolution] = JDecoder.derived[Resolution]
+  given JDecoder[Resolution] = JDecoder.derived[Resolution]
 
   case class RecursiveProject(
     name: String,
