@@ -364,10 +364,7 @@ object JValue:
         )
       }
 
-  inline def reifyFile(inline relativeFilename: String): JValue =
-    ${ reifyFileIml('relativeFilename) }
-
-  def reifyFileIml(relativeFilename: Expr[String])(using quotes: Quotes): Expr[JValue] =
+  private def readFileString(relativeFilename: Expr[String])(using quotes: Quotes): String =
     import quotes.reflect.{report, Position}
     import quotes.reflect.given
     val currPath = Position
@@ -387,17 +384,35 @@ object JValue:
     if !java.nio.file.Files.exists(file) then
       report.throwError(s"file $file does not exist", Position.ofMacroExpansion)
 
-    Parser.parserFile.parseAll(java.nio.file.Files.readString(file)).fold(
+    java.nio.file.Files.readString(file)
+
+  inline def readFile(inline relativeFilename: String): String =
+    ${ readFileImpl('relativeFilename) }
+
+  def readFileImpl(relativeFilename: Expr[String])(using quotes: Quotes): Expr[String] =
+    import quotes.reflect.{report, Position}
+    Expr(readFileString(relativeFilename))
+
+  inline def reifyFile(inline relativeFilename: String): JValue =
+    ${ reifyFileIml('relativeFilename) }
+
+  def reifyFileIml(relativeFilename: Expr[String])(using quotes: Quotes): Expr[JValue] =
+    import quotes.reflect.{report, Position}
+    import quotes.reflect.given
+    Parser.parserFile.parseAll(readFileString(relativeFilename)).fold(
       err => report.throwError(err.toString, Position.ofMacroExpansion),
       jvalue => Expr(jvalue),
     )
 
-  inline def reify(source: SourceFile, inline string: String): JValue =
-    ${ reifyIml('source, 'string) }
+  inline def reify(inline string: String): JValue =
+    ${ reifyIml('string) }
 
-  def reifyIml(source: Expr[SourceFile], string: Expr[String])(using quotes: Quotes): Expr[JValue] =
-    import quotes.reflect.{report, Position}
-    val literal = string.valueOrError
+  def reifyIml(string: Expr[String])(using quotes: Quotes): Expr[JValue] =
+    import quotes.reflect._
+    val literal =
+      string.asTerm match
+      case Literal(StringConstant(x)) => x
+      case _ => string.valueOrError
     Parser.parserFile.parseAll(literal).fold(
       err => report.throwError(err.toString, Position.ofMacroExpansion),
       jvalue => Expr(jvalue),

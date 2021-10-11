@@ -169,6 +169,7 @@ sealed trait EvaluationContext:
   def withScope(scope: Map[String, LazyValue]): EvaluationContext
   def executionContext: concurrent.ExecutionContextExecutorService
   def file: SourceFile
+  def withFile(file: SourceFile): EvaluationContext
 
   def bloopServer: BloopServerConnection
   final def compile(src: Source, targetId: String): Future[EvaluatedJValue.JNum] =
@@ -315,6 +316,9 @@ object EvaluationContext:
     def withScope(extraScope: Map[String, LazyValue]): EvaluationContext =
       this.copy(scope = scope ++ extraScope)
 
+    def withFile(newFile: SourceFile): EvaluationContext =
+      this.copy(file = newFile)
+
     def functionCtx(fn: Source) =
       this.copy(stack = StackEntry.function(file, fn) +: stack)
 
@@ -366,6 +370,9 @@ object EvaluationContext:
 
     def withScope(extraScope: Map[String, LazyValue]): EvaluationContext =
       this.copy(locals = locals ++ extraScope)
+
+    def withFile(newFile: SourceFile): EvaluationContext =
+      this.copy(topCtx = topCtx.withFile(newFile))
 
     def objectCtx(obj: EvaluatedJValue.JObject): ObjectEvaluationContext =
       new ObjectImp(

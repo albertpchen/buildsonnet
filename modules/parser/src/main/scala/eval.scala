@@ -202,6 +202,45 @@ object EvaluatedJValue:
           yield arr.elements(i)
           EvaluatedJValue.JArray(src, elements.toVector)
 
+  extension (value: EvaluatedJValue)
+    def structuralEquals(other: EvaluatedJValue)(using ExecutionContext): Future[Boolean] =
+      (value, other) match
+      case (op1: JBoolean, op2: JBoolean) => Future(op1.value == op2.value)
+      case (op1: JNull, op2: JNull) => Future(true)
+      case (op1: JString, op2: JString) => Future(op1.str == op2.str)
+      case (op1: JNum, op2: JNum) => Future(op1.double == op2.double)
+      case (op1: JPath, op2: JPath) => Future(op1.path == op2.path)
+      case (op1: JJob, op2: JJob) => Future(op1 eq op2)
+      case (op1: JArray, op2: JArray) =>
+        if op1.elements.size == op2.elements.size then
+          op1.elements.zip(op2.elements).foldLeft(Future(true)) {
+            case (result, (op1, op2)) => result.flatMap { res =>
+              if res then
+                op1.structuralEquals(op2)
+              else
+                result
+            }
+          }
+        else
+          Future(false)
+      case (op1: JFunction, op2: JFunction) => Future(op1 eq op2)
+      case (op1: JObject, op2: JObject) =>
+        val members1 = op1.members()
+        val members2 = op2.members()
+        if members1.keys == members2.keys then
+          members1.keys.foldLeft(Future(true)) {
+            case (result, key) => result.flatMap { res =>
+              if res then
+                members1(key).evaluated.structuralEquals(members2(key).evaluated)
+              else
+                result
+            }
+          }
+        else Future(false)
+      case (op1: JFuture, op2) => op1.future.flatMap(_.structuralEquals(op2))
+      case (op1, op2: JFuture) => op2.future.flatMap(op1.structuralEquals)
+      case (op1, op2) => Future(false)
+
 def manifest(ctx: EvaluationContext)(jvalue: JValue): Either[EvaluationError, ManifestedJValue] =
   try
     val evaluated = evalUnsafe(ctx)(jvalue)
@@ -474,6 +513,10 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
       ctx.expectString(left).zip(ctx.expectObject(right)).map { (left, right) =>
         EvaluatedJValue.JBoolean(src, right.members().contains(left.str))
       }.toJValue
+    case JBinaryOperator.Op_== =>
+      evalUnsafe(ctx)(left).structuralEquals(evalUnsafe(ctx)(right)).map(EvaluatedJValue.JBoolean(src, _)).toJValue
+    case JBinaryOperator.Op_!= =>
+      evalUnsafe(ctx)(left).structuralEquals(evalUnsafe(ctx)(right)).map(n => EvaluatedJValue.JBoolean(src, !n)).toJValue
 
   case JValue.JUnaryOp(src, op, rawOperand) =>
     given concurrent.ExecutionContext = ctx.executionContext

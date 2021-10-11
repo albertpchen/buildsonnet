@@ -276,7 +276,9 @@ object Std:
     },
     "scala" -> makeObject(ctx.bind("std", JValue.JSelf(Source.Generated)), ctx => Map(
       "Project" -> {
-        LazyValue(ctx, JValue.reifyFile("../resources/bloop.jsonnet"), true)
+        val contents = JValue.readFile("../resources/bloop.jsonnet")
+        val newCtx = ctx.withFile(SourceFile("std.scala.Project", contents))
+        LazyValue(newCtx, JValue.reifyFile("../resources/bloop.jsonnet"), true)
       },
       "cs" -> function1(Arg.deps) { (ctx, src, deps) =>
         import coursier.{Dependency, Fetch, Module, ModuleName, Organization}
@@ -309,22 +311,21 @@ object Std:
           }
         }.toJValue
       },
-      "classpath" -> function2(Arg.targetId, Arg.configPaths) { (ctx, src, targetId, configPaths) =>
+      "classpath" -> function1(Arg.project) { (ctx, src, project) =>
         given concurrent.ExecutionContext = ctx.executionContext
-        import scala.jdk.CollectionConverters.given
-        import ch.epfl.scala.bsp4j.StatusCode
-        ctx.expectString(targetId).flatMap { targetId =>
-          ctx.decode[Seq[EvaluatedJValue.JPath]](configPaths).flatMap { paths =>
-            ctx.bloopServer.jvmRunEnvironment(targetId.str).map {
-              case Right(env) =>
-                val strings = env.getItems.get(0).getClasspath.asScala.map { item =>
-                  val file = java.nio.file.Paths.get(new java.net.URI(item))
-                  EvaluatedJValue.JPath(src, file)
-                }.toSeq
-                EvaluatedJValue.JArray(src, strings)
-              case Left(StatusCode.ERROR) => ctx.error(src, s"compilation for '${targetId.str}' failed")
-              case Left(StatusCode.CANCELLED) => ctx.error(src, s"compilation for '${targetId.str}' was cancelled")
-            }
+        ctx.decode[Config.RecursiveProject](project).flatMap { project =>
+          import scala.jdk.CollectionConverters.given
+          import ch.epfl.scala.bsp4j.StatusCode
+          Config.write(ctx, project)
+          ctx.bloopServer.jvmRunEnvironment(project.name).map {
+            case Right(env) =>
+              val strings = env.getItems.get(0).getClasspath.asScala.map { item =>
+                val file = java.nio.file.Paths.get(new java.net.URI(item))
+                EvaluatedJValue.JPath(src, file)
+              }.toSeq
+              EvaluatedJValue.JArray(src, strings)
+            case Left(StatusCode.ERROR) => ctx.error(src, s"compilation for '${project.name}' failed")
+            case Left(StatusCode.CANCELLED) => ctx.error(src, s"compilation for '${project.name}' was cancelled")
           }
         }.toJValue
       },

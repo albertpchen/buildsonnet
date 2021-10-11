@@ -18,7 +18,7 @@ local scalaDep(org, name, version) = {
       else if std.startsWith(base.scalaVersion, '2.11.') then suffixMap['2.11.'](base.scalaVersion)
       else if std.startsWith(base.scalaVersion, '2.12.') then suffixMap['2.12.'](base.scalaVersion)
       else if std.startsWith(base.scalaVersion, '2.13.') then suffixMap['2.13.'](base.scalaVersion),
-    // assert scalacConfig != null: "scala version must start with one of" + std.objectFields(suffixMap),
+    assert scalacConfig != null: "scala version must start with one of" + std.objectFields(suffixMap),
     local bloopConfig = self,
     name: base.name,
     directory: ".",
@@ -67,5 +67,7 @@ local scalaDep(org, name, version) = {
       },
       [if 'mainClass' in base then 'mainClass']: base.mainClass
     },
-  }
+  },
+  compile:: std.scala.compile(self.bloopConfig),
+  classpath:: std.print(std.toString([path.name for path in std.scala.classpath(self.bloopConfig)])),
 }

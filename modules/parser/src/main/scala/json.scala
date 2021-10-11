@@ -107,7 +107,7 @@ object Parser:
   var expr: P[JValue] = null
   val exprDefer = P.defer(expr)
   val assert = {
-    ((keyword("assert") *> __ *> expr).withRange <* __) ~ (P.char(':') *> __ *> expr).?
+    ((keyword("assert") *> __ *> exprDefer).withRange <* __) ~ (P.char(':') *> __ *> exprDefer).?
   }.map {
     case ((src, cond), msg) => (src, cond, msg)
   }
