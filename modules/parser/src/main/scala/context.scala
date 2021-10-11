@@ -59,9 +59,13 @@ sealed trait LazyObjectValue extends LazyValue:
   def withHidden(hidden: Boolean): LazyObjectValue
 
 object LazyValue:
+  def apply(ctx: () => EvaluationContext, code: JValue): LazyValue =
+    new LazyValue:
+      lazy val evaluated: EvaluatedJValue = evalUnsafe(ctx())(code)
+      override def toString = code.toString
+
   def apply(ctx: EvaluationContext, code: JValue): LazyValue =
     new LazyValue:
-      @scala.annotation.threadUnsafe
       lazy val evaluated: EvaluatedJValue = evalUnsafe(ctx)(code)
       override def toString = code.toString
 
@@ -86,6 +90,16 @@ object LazyValue:
         override def toString = lazyVal.toString
     else
       lazyVal
+
+  def apply(ctx: () => EvaluationContext, code: JValue, hidden: Boolean): LazyObjectValue =
+    new LazyObjectValue:
+      self =>
+      val isHidden = hidden
+      @scala.annotation.threadUnsafe
+      lazy val evaluated: EvaluatedJValue = evalUnsafe(ctx())(code)
+
+      def withHidden(hidden: Boolean) = withHiddenImp(hidden, this)
+      override def toString = code.toString
 
   def apply(ctx: EvaluationContext, code: JValue, hidden: Boolean): LazyObjectValue =
     new LazyObjectValue:

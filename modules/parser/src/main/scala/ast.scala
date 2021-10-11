@@ -364,12 +364,40 @@ object JValue:
         )
       }
 
+  inline def reifyFile(inline relativeFilename: String): JValue =
+    ${ reifyFileIml('relativeFilename) }
+
+  def reifyFileIml(relativeFilename: Expr[String])(using quotes: Quotes): Expr[JValue] =
+    import quotes.reflect.{report, Position}
+    import quotes.reflect.given
+    val currPath = Position
+      .ofMacroExpansion
+      .sourceFile
+      .jpath
+
+    if currPath == null then
+      report.throwError("could not find file of macro expansion location", Position.ofMacroExpansion)
+
+    val file =
+      currPath
+      .toAbsolutePath
+      .getParent
+      .resolve(relativeFilename.valueOrError)
+
+    if !java.nio.file.Files.exists(file) then
+      report.throwError(s"file $file does not exist", Position.ofMacroExpansion)
+
+    Parser.parserFile.parseAll(java.nio.file.Files.readString(file)).fold(
+      err => report.throwError(err.toString, Position.ofMacroExpansion),
+      jvalue => Expr(jvalue),
+    )
+
   inline def reify(source: SourceFile, inline string: String): JValue =
     ${ reifyIml('source, 'string) }
 
   def reifyIml(source: Expr[SourceFile], string: Expr[String])(using quotes: Quotes): Expr[JValue] =
     import quotes.reflect.{report, Position}
-    val literal = string.value.getOrElse(report.throwError("input string must be a literal", Position.ofMacroExpansion))
+    val literal = string.valueOrError
     Parser.parserFile.parseAll(literal).fold(
       err => report.throwError(err.toString, Position.ofMacroExpansion),
       jvalue => Expr(jvalue),

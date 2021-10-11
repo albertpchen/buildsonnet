@@ -87,9 +87,8 @@ object JDecoder:
       given ExecutionContext = ctx.executionContext
       val nested = for
         obj <- path.expectType[EvaluatedJValue.JObject](ctx, expr)
-        members <- obj.members()
       yield
-        Future.sequence(members.map { (key, lazyValue) =>
+        Future.sequence(obj.members().map { (key, lazyValue) =>
           summon[JDecoder[T]].decode(ctx, path, lazyValue.evaluated).map(key -> _)
         }).map(_.toMap)
       nested.flatten
@@ -108,10 +107,8 @@ object JDecoder:
             given ExecutionContext = ctx.executionContext
             val head =
               val field = constValue[name].toString
-              obj.imp.lookupOpt(obj.src, field).flatMap { lvalueOpt =>
-                lvalueOpt.fold(Future(None)) { lvalue =>
-                  summonInline[JDecoder[head]].decode(ctx, path.withField(field), lvalue.evaluated).map(Some(_))
-                }
+              obj.imp.lookupOpt(obj.src, field).fold(Future(None)) { lvalue =>
+                summonInline[JDecoder[head]].decode(ctx, path.withField(field), lvalue.evaluated).map(Some(_))
               }
             val tail = decodeProduct[tail].decode(ctx, path, obj)
             head.zip(tail).map(_ *: _)

@@ -106,6 +106,7 @@ object Buildsonnet:
     val source = scala.io.Source.fromFile(buildFile.toFile).getLines.mkString("\n")
     val sourceFile = SourceFile(buildFile.toString, source)
     val parser = Parser.parserFile
+    val bloopStd = JValue.reifyFile("../resources/bloop.jsonnet")
     parser.parseAll(source) match
       case Left(error) =>
         System.err.println("syntax error at: " + error.toString)
