@@ -2,12 +2,12 @@ package root
 
 import scala.quoted.*
 
-object macros:
-  opaque type Case[V] = Unit
+opaque type Case[V] = Unit
+object Case:
+  def apply[T]: [V] => V => Case[V] =
+    [V] => (e: V) => ()
 
-  object Case:
-    def apply[T]: [V] => V => Case[V] =
-      [V] => (e: V) => ()
+object macros:
 
   def unfoldUnionType(
     quotes: Quotes,
@@ -43,6 +43,11 @@ object macros:
       }.getOrElse(report.throwError(s"invalid type ${tpe.show}, expected one of: ${typeMap.map(_._1.show).mkString(", ")}"))
     })
     applications
+
+  inline def typeString[T]: String = ${typeStringImp[T]}
+  def typeStringImp[T: Type](using quotes: Quotes): Expr[String] =
+    import quotes.reflect._
+    Expr(Type.show[T])
 
   inline def typeTree[T]: String = ${typeTreeImp[T]}
   def typeTreeImp[T: Type](using quotes: Quotes): Expr[String] =

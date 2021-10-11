@@ -9,16 +9,11 @@ sealed trait EvaluatedJObject:
   def withCtx(newCtx: () => ObjectEvaluationContext): EvaluatedJObject
 
   def lookup(src: Source, field: String): LazyValue =
-    given ExecutionContext = ctx.executionContext
     cache.getOrElse(field, ctx.error(src, s"object missing field $field"))
 
   def lookupOpt(src: Source, field: String): Option[LazyValue] =
-    given ExecutionContext = ctx.executionContext
     cache.get(field)
 
-  def debug(): Unit =
-    println(ctx.superChain)
-    println(members().keys)
   private lazy val _members: collection.Map[String, LazyObjectValue] =
     val members = new collection.mutable.HashMap[String, LazyObjectValue]()
     given ExecutionContext = ctx.executionContext
@@ -565,15 +560,18 @@ object Std:
     case EmptyTuple => EmptyTuple
     case (arg *: tail) => EvaluatedJValue *: ArgTuple[tail]
 
-  opaque type Arg[Name] = Option[EvaluatedJValue]
+  object temp:
+    opaque type Arg[Name] = Option[EvaluatedJValue]
 
-  import scala.language.dynamics
-  object Arg extends Dynamic:
-    def selectDynamic(name: String): Arg[name.type] = None
-    def applyDynamic(name: String)(default: EvaluatedJValue): Arg[name.type] = Some(default)
+    import scala.language.dynamics
+    object Arg extends Dynamic:
+      def selectDynamic(name: String): Arg[name.type] = None
+      def applyDynamic(name: String)(default: EvaluatedJValue): Arg[name.type] = Some(default)
+    extension [T](arg: Arg[T])
+      def default: Option[EvaluatedJValue] = arg
 
-  extension [T](arg: Arg[T])
-    def default: Option[EvaluatedJValue] = arg
+  val Arg = temp.Arg
+  type Arg[Name] = temp.Arg[Name]
 
   private inline def function0(
     fn: (EvaluationContext, Source) => EvaluatedJValue,
@@ -762,9 +760,7 @@ object Std:
         rest
       }.toJValue
     },
-    "workspace" -> function0 { (ctx, src) =>
-      EvaluatedJValue.JString(src, ctx.workspaceDir.toString)
-    },
+    "workspace" -> EvaluatedJValue.JPath(Source.Generated, ctx.workspaceDir),
     "runJob" -> function1(Arg.desc) { (ctx, src, desc) =>
       given concurrent.ExecutionContext = ctx.executionContext
       ctx.decode[JobDescription](desc).flatMap(ctx.runJob(src, _)).toJValue
@@ -826,17 +822,19 @@ object Std:
             }
         }.toJValue
       },
-      "compile" -> function2(Arg.targetId, Arg.configPaths) { (ctx, src, targetId, configPaths) =>
+      "compile" -> function1(Arg.project) { (ctx, src, project) =>
         given concurrent.ExecutionContext = ctx.executionContext
-        ctx.expectString(targetId).flatMap { targetId =>
-          ctx.decode[Seq[EvaluatedJValue.JPath]](configPaths).flatMap { _ =>
-            ctx.bloopServer.compile(targetId.str).map { res =>
-              val result = res.getStatusCode() match
-              case ch.epfl.scala.bsp4j.StatusCode.OK => "ok"
-              case ch.epfl.scala.bsp4j.StatusCode.ERROR => "error"
-              case ch.epfl.scala.bsp4j.StatusCode.CANCELLED => "cancelled"
-              EvaluatedJValue.JString(src, result)
-            }
+        println("111")
+        ctx.decode[Config.RecursiveProject](project).flatMap { project =>
+          println("222")
+          Config.write(ctx, project)
+          println("333")
+          ctx.bloopServer.compile(project.name).map { res =>
+            val result = res.getStatusCode() match
+            case ch.epfl.scala.bsp4j.StatusCode.OK => "ok"
+            case ch.epfl.scala.bsp4j.StatusCode.ERROR => "error"
+            case ch.epfl.scala.bsp4j.StatusCode.CANCELLED => "cancelled"
+            EvaluatedJValue.JString(src, result)
           }
         }.toJValue
       },
