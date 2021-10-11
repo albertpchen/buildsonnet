@@ -824,11 +824,8 @@ object Std:
       },
       "compile" -> function1(Arg.project) { (ctx, src, project) =>
         given concurrent.ExecutionContext = ctx.executionContext
-        println("111")
         ctx.decode[Config.RecursiveProject](project).flatMap { project =>
-          println("222")
           Config.write(ctx, project)
-          println("333")
           ctx.bloopServer.compile(project.name).map { res =>
             val result = res.getStatusCode() match
             case ch.epfl.scala.bsp4j.StatusCode.OK => "ok"

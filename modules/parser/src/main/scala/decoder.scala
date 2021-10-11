@@ -125,23 +125,19 @@ object JDecoder:
           def decode(ctx: EvaluationContext, path: JDecoderPath, obj: EvaluatedJValue.JObject) =
             given ExecutionContext = ctx.executionContext
             val field = constValue[name].toString
-            println(s"field $field ${macros.typeString[Option[head]]}")
             val head = obj.imp.lookupOpt(obj.src, field).fold(Future(None)) { lvalue =>
               summonInline[JDecoder[head]].decode(ctx, path.withField(field), lvalue.evaluated).map(Some(_))
             }
             val tail = decodeProduct[tail].decode(ctx, path, obj)
-            println(s"done field $field ${macros.typeString[Option[head]]}")
             head.zip(tail).map(_ *: _)
         decoder.asInstanceOf[JObjectDecoder[T]]
       case _: ((name, head) *: tail) =>
         val decoder = new JObjectDecoder[(head *: tail)]:
           def decode(ctx: EvaluationContext, path: JDecoderPath, obj: EvaluatedJValue.JObject) =
             val field = constValue[name].toString
-            println(s"field $field ${macros.typeString[head]}")
             val value = obj.lookup(obj.src, field)
             val head = summonInline[JDecoder[head]].decode(ctx, path.withField(field), value)
             val tail = decodeProduct[tail].decode(ctx, path, obj)
-            println(s"done field $field ${macros.typeString[head]}")
             given ExecutionContext = ctx.executionContext
             head.zip(tail).map(_ *: _)
         decoder.asInstanceOf[JObjectDecoder[T]]
@@ -152,7 +148,6 @@ object JDecoder:
     val objDecoder = decodeProduct[Tuple.Zip[m.MirroredElemLabels, m.MirroredElemTypes]]
     new JDecoder[T]:
       def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue) =
-        println(s"derived ${macros.typeString[T]}")
         given ExecutionContext = ctx.executionContext
         path.expectType[EvaluatedJValue.JObject](ctx, expr).flatMap(objDecoder.decode(ctx, path, _)).map {
           m.fromProduct
