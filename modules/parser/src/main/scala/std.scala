@@ -19,9 +19,9 @@ object Std:
       result(i) =
         if i < positionalArgs.size then
           if namedArgs.contains(argName) then ctx.error(positionalArgs(i).src, s"multiple values provided for argument $argName")
-          evalUnsafe(ctx)(positionalArgs(i))
+          positionalArgs(i)
         else if namedArgs.contains(argName) then
-          evalUnsafe(ctx)(namedArgs(argName))
+          namedArgs(argName)
         else if defaultOpt.isDefined then
           defaultOpt.get
         else
@@ -153,6 +153,7 @@ object Std:
 
   private val jnull = EvaluatedJValue.JNull(Source.Generated)
   private val jtrue = EvaluatedJValue.JBoolean(Source.Generated, true)
+  private val jidentity = function1(Arg.x) { (ctx, src, x) => x }
   def obj(ctx: EvaluationContext) = makeObject(ctx, ctx => Map(
     "toString" -> function1(Arg.x)(toStringImp),
     "type" -> function1(Arg.x) { (ctx, src, x) =>
@@ -207,6 +208,24 @@ object Std:
         EvaluatedJValue.JArray(src, keys)
       }.toJValue
     },
+    "flatMap" -> function2(Arg.func, Arg.arr) { (ctx, src, func, arr) =>
+      given concurrent.ExecutionContext = ctx.executionContext
+      ctx.expectFunction(func).zip(ctx.expectArray(arr)).flatMap { (func, arr) =>
+        arr.elements.foldLeft(Future(Seq.empty[Seq[EvaluatedJValue]])) { (acc, e) =>
+          val params = EvaluatedJFunctionParameters(src, Seq(e), Seq.empty)
+          acc.zip(ctx.expectArray(func.fn(ctx, params))).map((acc, e) => e.elements +: acc)
+        }.map(a => EvaluatedJValue.JArray(src, a.reverse.flatten))
+      }.toJValue
+    },
+    "uniq" -> function2(Arg.arr, Arg.keyF(jidentity)) { (ctx, src, arr, keyF) =>
+      given concurrent.ExecutionContext = ctx.executionContext
+      ctx.expectFunction(keyF).zip(ctx.expectArray(arr)).map { (keyF, arr) =>
+        val elements =
+          if keyF eq jidentity then arr.elements.distinct
+          else arr.elements.distinctBy(e => keyF.fn(ctx, EvaluatedJFunctionParameters(src, Seq(e), Seq.empty)))
+        EvaluatedJValue.JArray(src, elements)
+      }.toJValue
+    },
     "trace" -> function2(Arg.str, Arg.rest) { (ctx, src, str, rest) =>
       given concurrent.ExecutionContext = ctx.executionContext
       ctx.expectString(str).map { str =>
@@ -220,10 +239,9 @@ object Std:
     },
     "print" -> function2(Arg.str, Arg.rest(jnull)) { (ctx, src, str, rest) =>
       given concurrent.ExecutionContext = ctx.executionContext
-      ctx.expectString(str).map { str =>
-        println(str.str)
-        rest
-      }.toJValue
+      println(toStringImp(ctx, src, str).str)
+      if rest eq jnull then str
+      else rest
     },
     "workspace" -> EvaluatedJValue.JPath(Source.Generated, ctx.workspaceDir),
     "runJob" -> function1(Arg.desc) { (ctx, src, desc) =>

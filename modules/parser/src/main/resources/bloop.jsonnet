@@ -8,10 +8,24 @@ local scalaDep(org, name, version) = {
   local base = self,
   local suffixMap = {
     '3.': function(version) { suffix: '_3', compilerJars: std.scala.cs([scalaDep("org.scala-lang", "scala3-compiler_3", version)]) },
-    '2.11.': function(version) { suffix: '_2.11', compilerJars: std.scala.cs([scalaDep("org.scala-lang", "scala-compiler_2.11", version)]) },
-    '2.12.': function(version) { suffix: '_2.12', compilerJars: std.scala.cs([scalaDep("org.scala-lang", "scala-compiler_2.12", version)]) },
-    '2.13.': function(version) { suffix: '_2.13', compilerJars: std.scala.cs([scalaDep("org.scala-lang", "scala-compiler_2.13", version)]) },
+    '2.11.': function(version) { suffix: '_2.11', compilerJars: std.scala.cs([scalaDep("org.scala-lang", "scala-compiler", version)]) },
+    '2.12.': function(version) { suffix: '_2.12', compilerJars: std.scala.cs([scalaDep("org.scala-lang", "scala-compiler", version)]) },
+    '2.13.': function(version) { suffix: '_2.13', compilerJars: std.scala.cs([scalaDep("org.scala-lang", "scala-compiler", version)]) },
   },
+
+  local dependencies = std.get(self, 'dependencies', default=[]),
+  flattenedLibraries:
+    self.libraries +
+    std.flatMap(
+      function(p) p.flattenedLibraries,
+      dependencies,
+    ),
+  dependencyClasspath:
+    std.uniq([p.bloopConfig.classesDir for p in dependencies] +
+    std.flatMap(
+      function(p) p.dependencyClasspath,
+      dependencies
+    )),
   bloopConfig: {
     local scalacConfig =
       if std.startsWith(base.scalaVersion, '3.') then suffixMap['3.'](base.scalaVersion)
@@ -24,8 +38,8 @@ local scalaDep(org, name, version) = {
     directory: ".",
     workspaceDir: std.workspace,
     sources: base.sources,
-    dependencies: std.get(base, "dependencies", default=[]),
-    classpath: [path.name for path in std.scala.cs(base.libraries)],
+    dependencies: [p.bloopConfig for p in std.get(base, 'dependencies', default=[])],
+    classpath: base.dependencyClasspath + [path.name for path in std.scala.cs(base.flattenedLibraries)],
     out: ".bloop/" + bloopConfig.name,
     classesDir: bloopConfig.out + "/classes",
     resources: std.get(base, "resources", default=[]),
@@ -69,5 +83,5 @@ local scalaDep(org, name, version) = {
     },
   },
   compile:: std.scala.compile(self.bloopConfig),
-  classpath:: std.print(std.toString([path.name for path in std.scala.classpath(self.bloopConfig)])),
+  classpath:: std.print([path.name for path in std.scala.classpath(self.bloopConfig)]),
 }

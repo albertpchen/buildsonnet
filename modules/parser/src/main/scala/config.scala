@@ -127,6 +127,6 @@ object Config:
   def write(ctx: EvaluationContext, rproject: RecursiveProject): Seq[java.nio.file.Path] =
     val bloopVersion = "1.4.9"
     toBloopProjects(rproject).map { project =>
-      JobRunner.write(ctx.workspaceDir.resolve(project.name), bloop.config.write(
+      JobRunner.write(ctx.workspaceDir.resolve(s".bloop/${project.name}.json"), bloop.config.write(
         bloop.config.Config.File(bloopVersion, project)))
     }

@@ -86,8 +86,8 @@ object EvaluatedJObject:
 
 final class EvaluatedJFunctionParameters(
   val src: Source,
-  val positionalArgs: Seq[JValue],
-  val namedArgs: Seq[(String, JValue)],
+  val positionalArgs: Seq[EvaluatedJValue],
+  val namedArgs: Seq[(String, EvaluatedJValue)],
 )
 
 sealed trait EvaluatedJValue extends HasSource:
@@ -266,11 +266,11 @@ private def applyArgs(
       if positionalArgs.nonEmpty && isGivenNamedArg then
         applyCtx.error(params.src, s"both positional and named arg provided for argument $argName")
       else if positionalArgs.nonEmpty then
-        (positionalArgs.tail, ctx.bindWithCtx(argName, applyCtx, positionalArgs.head))
+        (positionalArgs.tail, ctx.bindEvaluated(argName, positionalArgs.head))
       else if isGivenNamedArg then
-        (positionalArgs, ctx.bindWithCtx(argName, applyCtx, argMap(argName)))
+        (positionalArgs, ctx.bindEvaluated(argName, argMap(argName)))
       else if default.isDefined then
-        (positionalArgs, ctx.bindWithCtx(argName, applyCtx, default.get))
+        (positionalArgs, ctx.bindWithCtx(argName, defCtx, default.get))
       else
         applyCtx.error(params.src, s"missing argument $argName")
   }
@@ -433,7 +433,11 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
   case JValue.JApply(src, loc, positionalArgs, namedArgs) =>
     given concurrent.ExecutionContext = ctx.executionContext
     ctx.expectFunction(loc).map { fn =>
-      val params = EvaluatedJFunctionParameters(src, positionalArgs, namedArgs)
+      val params = EvaluatedJFunctionParameters(
+        src,
+        positionalArgs.map(evalUnsafe(ctx)),
+        namedArgs.map((n, a) => n -> evalUnsafe(ctx)(a)),
+      )
       fn.fn(ctx, params)
     }.toJValue
   case JValue.JBinaryOp(src, left, op, right) =>

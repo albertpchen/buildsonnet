@@ -130,8 +130,9 @@ final class BuildsonnetBuildClient(
       logger.info(params.getMessage)
 
   override def onBuildTaskProgress(params: bsp.TaskProgressParams): Unit =
-    if !(params.getMessage eq null) then
-      logger.info(params.getMessage)
+    // if !(params.getMessage eq null) then
+    //   logger.info(params.getMessage)
+    ()
 
   override def onBuildTaskFinish(params: bsp.TaskFinishParams): Unit =
     params.getDataKind match {
