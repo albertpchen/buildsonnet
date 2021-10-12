@@ -128,13 +128,17 @@ object Buildsonnet:
             case future: EvaluatedJValue.JFuture =>
               val applied = future.future.map {
                 case fn: EvaluatedJValue.JFunction =>
-                  val params = EvaluatedJFunctionParameters(fn.src, Seq(JValue.JArray(Source.Generated, buildArgs.map(JValue.JString(Source.Generated, _)))), Seq.empty)
+                  val params = EvaluatedJFunctionParameters(fn.src, Seq(
+                    EvaluatedJValue.JArray(Source.Generated, buildArgs.map(EvaluatedJValue.JString(Source.Generated, _)))
+                  ), Seq.empty)
                   fn.fn(ctx, params)
                 case e => e
               }
               Right(Await.result(applied, Duration.Inf).await(ctx))
             case fn: EvaluatedJValue.JFunction =>
-              val params = EvaluatedJFunctionParameters(fn.src, Seq(JValue.JArray(Source.Generated, buildArgs.map(JValue.JString(Source.Generated, _)))), Seq.empty)
+              val params = EvaluatedJFunctionParameters(fn.src, Seq(
+                EvaluatedJValue.JArray(Source.Generated, buildArgs.map(EvaluatedJValue.JString(Source.Generated, _)))
+              ), Seq.empty)
               val applied = fn.fn(ctx, params)
               Right(applied.await(ctx))
             case e =>

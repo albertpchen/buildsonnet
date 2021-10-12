@@ -278,6 +278,19 @@ object Std:
         EvaluatedJValue.JBoolean(src, a.str.startsWith(b.str))
       }.toJValue
     },
+    "join" -> function2(Arg.sep, Arg.arr) { (ctx, src, sep, arr) =>
+      given concurrent.ExecutionContext = ctx.executionContext
+      ctx
+        .expectString(sep)
+        .zip(ctx.expectArray(arr)).map {
+          case (sep, arr) if arr.elements.isEmpty => EvaluatedJValue.JString(src, "")
+          case (sep, arr) if arr.elements.size == 1 => ctx.expectString(arr.elements.head).toJValue
+          case (sep, arr) =>
+            arr.elements.foldLeft(Future(Seq.empty[String])) {
+              case (acc, e) => acc.flatMap(acc => ctx.expectString(e).map(e => e.str +: acc))
+            }.map(r => EvaluatedJValue.JString(src, r.reverse.mkString(sep.str))).toJValue
+        }.toJValue
+    },
     "getenv" -> function1(Arg.varName) { (ctx, src, varName) =>
       given concurrent.ExecutionContext = ctx.executionContext
       ctx.expectType[EvaluatedJValue.JString](varName).map { varNamex =>

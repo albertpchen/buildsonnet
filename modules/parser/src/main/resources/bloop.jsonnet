@@ -83,5 +83,16 @@ local scalaDep(org, name, version) = {
     },
   },
   compile:: std.scala.compile(self.bloopConfig),
-  classpath:: std.print([path.name for path in std.scala.classpath(self.bloopConfig)]),
+  classpathString:: std.join(":", [path.name for path in std.scala.classpath(self.bloopConfig)]),
+  classpath:: std.print(self.classpathString),
+  run(args)::
+    local cmdline = ['java', '-cp', self.classpathString] + args;
+    std.runJob({
+      cmdline: cmdline,
+      envVars: {
+        PATH: std.getenv("JAVA_HOME") + "/bin",
+        JAVA_HOME: std.getenv("JAVA_HOME")
+      },
+      inputFiles: []
+    }),
 }

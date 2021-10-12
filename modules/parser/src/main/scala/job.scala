@@ -252,18 +252,22 @@ object JobRunner:
             val outputs: Seq[EvaluatedJValue.JPath] = outputPaths.distinct.map(EvaluatedJValue.JPath(src, _))
             println(desc.cmdline.mkString(" "))
             print(stdout)
-            database.run(jobTable.insertOrUpdate((
-              stringsToByteArray(desc.cmdline),
-              stringsToByteArray(desc.envVars.getOrElse(Map.empty).toSeq.sorted.flatMap((a, b) => Seq(a, b))),
-              stringsToByteArray(desc.inputFiles.map(_.path.toString)),
-              desc.stdin.getOrElse(""),
-              directory.toString,
+            if exitCode != 0 then
+              System.err.println(stderr)
+              ctx.error(src, s"nonzero exit code returned from job: $exitCode")
+            else
+              database.run(jobTable.insertOrUpdate((
+                stringsToByteArray(desc.cmdline),
+                stringsToByteArray(desc.envVars.getOrElse(Map.empty).toSeq.sorted.flatMap((a, b) => Seq(a, b))),
+                stringsToByteArray(desc.inputFiles.map(_.path.toString)),
+                desc.stdin.getOrElse(""),
+                directory.toString,
 
-              stdout,
-              stderr,
-              exitCode,
-            ))).map { _ =>
-              EvaluatedJValue.JJob(src, desc, stdout, stderr, outputs, exitCode)
-            }
+                stdout,
+                stderr,
+                exitCode,
+              ))).map { _ =>
+                EvaluatedJValue.JJob(src, desc, stdout, stderr, outputs, exitCode)
+              }
         }
       }
