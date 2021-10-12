@@ -243,6 +243,7 @@ object BloopServerConnection:
               logger.error(s"timeout: bloop server during shutdown")
             case e: Throwable =>
               logger.error(s"bloop server shutdown $e")
+        logStream.close()
       }
 
       def compile(targetId: String): Future[bsp.CompileResult] =
