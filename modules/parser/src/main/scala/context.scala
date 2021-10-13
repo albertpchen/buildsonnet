@@ -169,16 +169,7 @@ sealed trait EvaluationContext:
   def file: SourceFile
   def withFile(file: SourceFile): EvaluationContext
 
-  def bloopServer: BloopServerConnection
-  final def compile(src: Source, targetId: String): Future[EvaluatedJValue.JNum] =
-    given concurrent.ExecutionContext = executionContext
-    bloopServer.compile(targetId).map { res =>
-      val code = res.getStatusCode() match
-        case ch.epfl.scala.bsp4j.StatusCode.OK => 1
-        case ch.epfl.scala.bsp4j.StatusCode.ERROR => 2
-        case ch.epfl.scala.bsp4j.StatusCode.CANCELLED => 3
-      EvaluatedJValue.JNum(src, code)
-    }
+  def bloopServer: Bsp4sBloopServerConnection
 
   protected def importer: Importer
   final def `import`(src: Source, fileName: String): EvaluatedJValue =
@@ -285,7 +276,7 @@ object EvaluationContext:
       expectType[T](evalUnsafe(ctx)(code))
 
   private[root] case class Imp(
-    val bloopServer: BloopServerConnection,
+    val bloopServer: Bsp4sBloopServerConnection,
     val importer: Importer,
     val jobRunner: JobRunner,
     val workspaceDir: java.nio.file.Path,
@@ -338,7 +329,7 @@ object EvaluationContext:
     def withStackEntry(entry: StackEntry) = this.copy(stack = entry +: stack)
 
   private[root] case class ObjectImp(
-    bloopServer: BloopServerConnection,
+    bloopServer: Bsp4sBloopServerConnection,
     selfObj: EvaluatedJValue.JObject,
     superChain: collection.immutable.Queue[EvaluatedJValue.JObject],
     topCtx: EvaluationContext,
@@ -405,7 +396,7 @@ object EvaluationContext:
   def apply(
     file: SourceFile,
     workspace: java.nio.file.Path,
-    bloopServer: BloopServerConnection,
+    bloopServer: Bsp4sBloopServerConnection,
   )(using executionContext: concurrent.ExecutionContextExecutorService): EvaluationContext =
     Imp(
       bloopServer,
@@ -425,9 +416,9 @@ object EvaluationContext:
     val currFileParent = new java.io.File(file.path).getAbsoluteFile.toPath.getParent
     val logStream = new java.io.PrintStream(new java.io.FileOutputStream(
       currFileParent.resolve("bloopLog.txt").toFile, true))
-    val bloopServer = BloopServerConnection.std(
+    val bloopServer = Bsp4sBloopServerConnection.std(
       currFileParent,
-      Logger.default("buildsonnet"),
+      scribe.Logger("buildsonnet"),
       bloopPort,
       logStream,
     )

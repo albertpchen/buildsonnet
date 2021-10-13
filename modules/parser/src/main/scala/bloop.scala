@@ -308,7 +308,6 @@ def bsp4sBuildsonnetBuildClient(
   workspace: java.nio.file.Path,
   logger: scribe.Logger
 ): jsonrpc4s.Services =
-  import macros.given
   val compilations = collection.concurrent.TrieMap.empty[String, Promise[Unit]]
   def cancel(): Unit =
     for
@@ -370,20 +369,15 @@ def bsp4sService(
   workspace: java.nio.file.Path,
   connection: SocketConnection,
   logger: scribe.Logger,
-) = {
+  scheduler: Scheduler,
+): Task[jsonrpc4s.RpcClient] =
   val in = connection.input
   val out = connection.output
   implicit val client = jsonrpc4s.RpcClient.fromOutputStream(out, logger)
   val messages = jsonrpc4s.LowLevelMessage.fromInputStream(in, logger).map(jsonrpc4s.LowLevelMessage.toMsg)
   val services = bsp4sBuildsonnetBuildClient(workspace, logger)
-  val ioScheduler = Scheduler(
-    java.util.concurrent.Executors.newFixedThreadPool(4),
-    ExecutionModel.AlwaysAsyncExecution
-  )
-  val lsServer = jsonrpc4s.RpcServer(messages, client, services, ioScheduler, logger)
-
-  val runningClientServer = lsServer.startTask(Task.pure(())).runToFuture(using ioScheduler)
-
+  val lsServer = jsonrpc4s.RpcServer(messages, client, services, scheduler, logger)
+  val runningClientServer = lsServer.startTask(Task.pure(())).runToFuture(using scheduler)
   val initializeServer = endpoints.Build.initialize.request(
     bsp.InitializeBuildParams(
       displayName = "buildsonnet", // name of this client
@@ -396,17 +390,96 @@ def bsp4sService(
   )
   for {
     // Delay the task to let the bloop server go live
-    initializeResult <- initializeServer.delayExecution(FiniteDuration(1, "s"))
+    initializeResult <- initializeServer
     _ = endpoints.Build.initialized.notify(bsp.InitializedBuildParams())
   } yield {
-    initializeResult
+    // TODO: handle error initializeResult
+    client
   }
-  /* shutdown
-  for {
-    _ <- endpoints.Build.shutdown.request(bsp.Shutdown())
-    _ = endpoints.Build.exit.notify(bsp.Exit())
-  } yield {
-    socket.close()
-  }
-  */
-}
+
+
+sealed trait Bsp4sBloopServerConnection:
+  def shutdown(): Future[Unit]
+  def compile(targetId: String): Future[Either[String, bsp.CompileResult]]
+  def jvmRunEnvironment(targetId: String): Future[Either[String, bsp.JvmRunEnvironmentResult]]
+
+object Bsp4sBloopServerConnection:
+  def std(
+    workspace: java.nio.file.Path,
+    logger: scribe.Logger,
+    bloopPort: Int,
+    logStream: java.io.PrintStream,
+  )(using ExecutionContextExecutorService): Bsp4sBloopServerConnection =
+    new Bsp4sBloopServerConnection:
+      private val launchedServer = new AtomicBoolean(false)
+
+      private given scheduler: Scheduler = Scheduler(implicitly[java.util.concurrent.ExecutorService])
+
+      lazy val pair = {
+        val connection = Await.result(
+          connectToLauncher("buildsonnet", "1.4.9", bloopPort, logStream), Duration.Inf)
+        val client =  Await.result(
+          bsp4sService(workspace, connection, logger, scheduler).runToFuture, Duration.Inf)
+        (connection, client)
+      }
+      private def connection = pair._1
+      given jsonrpc4s.RpcClient = pair._2
+
+      private val isShuttingDown = new AtomicBoolean(false)
+
+      def shutdown(): Future[Unit] = Future {
+        if launchedServer.get() then
+          try
+            if (isShuttingDown.compareAndSet(false, true))
+              for
+                _ <- endpoints.Build.shutdown.request(bsp.Shutdown())
+                _ = endpoints.Build.exit.notify(bsp.Exit())
+              do
+                // client.cancel() // TODO: cancel compilations
+                connection.cancelables.foreach(_.cancel())
+                logStream.print("Shut down connection with bloop server.")
+          catch
+            case _: TimeoutException =>
+              logger.error(s"timeout: bloop server during shutdown")
+            case e: Throwable =>
+              logger.error(s"bloop server shutdown $e")
+        logStream.close()
+      }
+
+      def compile(targetId: String): Future[Either[String, bsp.CompileResult]] =
+        compileTask(targetId).runToFuture
+
+      def compileTask(targetId: String): Task[Either[String, bsp.CompileResult]] =
+        val params = bsp.CompileParams(
+          List(bsp.BuildTargetIdentifier(bsp.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
+            None,
+            None,
+        )
+        endpoints.BuildTarget.compile.request(params).map {
+          case jsonrpc4s.RpcSuccess(value, _) => Right(value)
+          case jsonrpc4s.RpcFailure(methodName, underlying) => Left(jsonrpc4s.RpcFailure.toMsg(methodName, underlying))
+        }
+
+      def jvmRunEnvironment(targetId: String): Future[Either[String, bsp.JvmRunEnvironmentResult]] =
+        jvmRunEnvironmentTask(targetId).runToFuture
+
+      def jvmRunEnvironmentTask(targetId: String): Task[Either[String, bsp.JvmRunEnvironmentResult]] =
+        compileTask(targetId).flatMap { compileResult =>
+          compileResult match
+          case Right(compileResult) =>
+            compileResult.statusCode match
+            case bsp.StatusCode.Ok =>
+              val params = bsp.JvmRunEnvironmentParams(
+                List(bsp.BuildTargetIdentifier(bsp.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
+                None
+              )
+              endpoints.BuildTarget.jvmRunEnvironment.request(params).map {
+                case jsonrpc4s.RpcSuccess(value, _) => Right(value)
+                case jsonrpc4s.RpcFailure(methodName, underlying) => Left(jsonrpc4s.RpcFailure.toMsg(methodName, underlying))
+              }
+            case bsp.StatusCode.Error =>
+              Task.pure(Left(s"compilation for '$targetId' was cancelled"))
+            case  bsp.StatusCode.Cancelled =>
+              Task.pure(Left(s"compilation for '$targetId' failed"))
+          case Left(msg) => Task.pure(Left(msg))
+        }

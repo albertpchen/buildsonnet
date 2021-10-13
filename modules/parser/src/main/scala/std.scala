@@ -153,6 +153,7 @@ object Std:
 
   private val jnull = EvaluatedJValue.JNull(Source.Generated)
   private val jtrue = EvaluatedJValue.JBoolean(Source.Generated, true)
+  private val jfalse = EvaluatedJValue.JBoolean(Source.Generated, false)
   private val jidentity = function1(Arg.x) { (ctx, src, x) => x }
   def obj(ctx: EvaluationContext) = makeObject(ctx, ctx => Map(
     "toString" -> function1(Arg.x)(toStringImp),
@@ -311,15 +312,18 @@ object Std:
         val newCtx = ctx.withFile(SourceFile("std.scala.Project", contents))
         LazyValue(newCtx, JValue.reifyFile("../resources/bloop.jsonnet"), true)
       },
-      "cs" -> function1(Arg.deps) { (ctx, src, deps) =>
-        import coursier.{Dependency, Fetch, Module, ModuleName, Organization}
+      "cs" -> function2(Arg.deps, Arg.withSources(jfalse)) { (ctx, src, deps, withSources) =>
+        import coursier.{Classifier, Dependency, Fetch, Module, ModuleName, Organization, Type}
         import coursier.cache.FileCache
         import coursier.cache.loggers.RefreshLogger
         given concurrent.ExecutionContext = ctx.executionContext
-        ctx.decode[Seq[CoursierDependency]](deps).flatMap { deps =>
-          Fetch()
+        ctx.decode[Seq[CoursierDependency]](deps).zip(ctx.expectBoolean(withSources)).flatMap { (deps, withSources) =>
+          (if withSources.value then Fetch().addClassifiers(Classifier.sources) else Fetch())
             .withDependencies(deps.map(_.toDependency))
             // .addDependencies(params.deps.map(_.toDependency)) // BUG
+            // .addClassifiers(Classifier.sources)
+            // .addArtifactTypes(Type.source)
+            .withClasspathOrder(true)
             .withCache(
               FileCache().withLogger(RefreshLogger.create(System.out))
             )
@@ -333,12 +337,9 @@ object Std:
         given concurrent.ExecutionContext = ctx.executionContext
         ctx.decode[Config.RecursiveProject](project).flatMap { project =>
           Config.write(ctx, project)
-          ctx.bloopServer.compile(project.name).map { res =>
-            val result = res.getStatusCode() match
-            case ch.epfl.scala.bsp4j.StatusCode.OK => "ok"
-            case ch.epfl.scala.bsp4j.StatusCode.ERROR => "error"
-            case ch.epfl.scala.bsp4j.StatusCode.CANCELLED => "cancelled"
-            EvaluatedJValue.JString(src, result)
+          ctx.bloopServer.compile(project.name).map {
+            case Right(_) => EvaluatedJValue.JNull(src)
+            case Left(msg) => ctx.error(src, msg)
           }
         }.toJValue
       },
@@ -350,13 +351,12 @@ object Std:
           Config.write(ctx, project)
           ctx.bloopServer.jvmRunEnvironment(project.name).map {
             case Right(env) =>
-              val strings = env.getItems.get(0).getClasspath.asScala.map { item =>
+              val strings = env.items.head.classpath.map { item =>
                 val file = java.nio.file.Paths.get(new java.net.URI(item))
                 EvaluatedJValue.JPath(src, file)
               }.toSeq
               EvaluatedJValue.JArray(src, strings)
-            case Left(StatusCode.ERROR) => ctx.error(src, s"compilation for '${project.name}' failed")
-            case Left(StatusCode.CANCELLED) => ctx.error(src, s"compilation for '${project.name}' was cancelled")
+            case Left(msg) => ctx.error(src, msg)
           }
         }.toJValue
       },

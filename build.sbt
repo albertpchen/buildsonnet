@@ -73,9 +73,13 @@ lazy val parser = project
     run / fork := true,
     version := "0.1.0",
     scalaVersion := scala3Version,
+    scalacOptions ++= List("-Xmax-inlines", "1000000000"),
+    javaOptions ++= Seq(
+      /// "-agentlib:native-image-agent=config-output-dir=" + (root / baseDirectory).value.getAbsolutePath + "/native-image-agent-config-output-dir"
+    ),
     libraryDependencies ++= Seq(
       "org.typelevel" %% "shapeless3-deriving" % "3.0.3",
-      "org.typelevel" %% "cats-parse" % "0.3.4",
+      ("org.typelevel" %% "cats-parse" % "0.3.4").cross(CrossVersion.for3Use2_13),
       "org.scalameta" %%% "munit" % "0.7.26" % Test,
       Dependencies.coursier.cross(CrossVersion.for3Use2_13),
       Dependencies.coursierLauncher.cross(CrossVersion.for3Use2_13),
@@ -87,6 +91,7 @@ lazy val parser = project
       // ("ch.epfl.scala" %% "bloop-launcher-core" % "1.4.9-20-2c23b6ba-20211002-2109").cross(CrossVersion.for3Use2_13),
       //("ch.epfl.scala" %% "bloop-launcher-core" % "1.4.9-20-2c23b6ba-20211003-1709").cross(CrossVersion.for3Use2_13),
       ("ch.epfl.scala" %% "bloop-config" % "1.4.9").cross(CrossVersion.for3Use2_13),
+      ("com.lihaoyi" %% "sourcecode" % "0.2.7"),
     ),
     nativeImageOptions ++= {
       val workspaceDir = (root / baseDirectory).value.getAbsolutePath
