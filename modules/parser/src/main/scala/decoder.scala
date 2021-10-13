@@ -1,6 +1,5 @@
 package root
 
-import shapeless3.deriving.*
 import scala.compiletime.{constValue, erasedValue, summonInline, summonFrom}
 import scala.deriving.Mirror
 import scala.concurrent.{ExecutionContext, Future}

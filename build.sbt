@@ -70,9 +70,6 @@ lazy val parser213 = project
     run / fork := true,
     version := "0.1.0",
     scalaVersion := scala213Version,
-    javaOptions ++= Seq(
-      /// "-agentlib:native-image-agent=config-output-dir=" + (root / baseDirectory).value.getAbsolutePath + "/native-image-agent-config-output-dir"
-    ),
     libraryDependencies ++= Seq(
       ("ch.epfl.scala" %% "bsp4s" % "2.0.0").cross(CrossVersion.for3Use2_13),
     ),
@@ -100,10 +97,7 @@ lazy val parser = project
       ("com.typesafe.slick" %% "slick" % "3.3.3").cross(CrossVersion.for3Use2_13),
       "org.slf4j" % "slf4j-nop" % "1.6.4",
       "org.xerial" % "sqlite-jdbc" % "3.36.0.3",
-      "ch.epfl.scala" % "bsp4j" % "2.0.0",
       ("ch.epfl.scala" %% "bsp4s" % "2.0.0").cross(CrossVersion.for3Use2_13),
-      // ("ch.epfl.scala" %% "bloop-launcher-core" % "1.4.9-20-2c23b6ba-20211002-2109").cross(CrossVersion.for3Use2_13),
-      //("ch.epfl.scala" %% "bloop-launcher-core" % "1.4.9-20-2c23b6ba-20211003-1709").cross(CrossVersion.for3Use2_13),
       ("ch.epfl.scala" %% "bloop-config" % "1.4.9").cross(CrossVersion.for3Use2_13),
       ("com.lihaoyi" %% "sourcecode" % "0.2.7"),
     ),
@@ -120,25 +114,14 @@ lazy val parser = project
         "--no-fallback",
         "--allow-incomplete-classpath",
         "-H:+ReportExceptionStackTraces",
-        "--initialize-at-build-time=scala.Symbol",
-        "--initialize-at-build-time=scala.Function1",
-        "--initialize-at-build-time=scala.Function2",
-        "--initialize-at-build-time=scala.runtime.StructuralCallSite",
-        "--initialize-at-build-time=scala.runtime.EmptyMethodCache",
         
         "-H:+PrintClassInitialization",
         "--report-unsupported-elements-at-runtime",
 
-        "-H:ReflectionConfigurationFiles=" + nativeImageConfigDir + "/reflect-config.json",
         "-H:ReflectionConfigurationFiles=" + workspaceDir + "/native-image-reflect-config.json",
-        "-H:DynamicProxyConfigurationFiles=" + workspaceDir + "/proxy-config.json",
-        "-H:JNIConfigurationFiles=" + nativeImageConfigDir + "/jni-config.json",
-        "-H:ResourceConfigurationFiles=" + nativeImageConfigDir + "/resource-config.json",
         "-H:ResourceConfigurationFiles=" + workspaceDir + "/native-image-resource-config.json",
-        "--initialize-at-build-time=ch.epfl.scala.bsp4j",
-        // "-H:Log=registerResource:",
-        // "--initialize-at-build-time=ch.epfl.scala.bsp4j",
-        // "--initialize-at-build-time",
+        "--initialize-at-run-time=scribe.LoggerId$",
+        "--initialize-at-run-time=scribe.LoggerId",
         // "--enable-url-protocols=https",
       )
     },

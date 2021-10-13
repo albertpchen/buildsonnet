@@ -7,15 +7,38 @@ local scalaDep(org, name, version) = {
 {
   local base = self,
   local suffixMap = {
-    '3.': function(version) { suffix: '_3', compilerJars: std.scala.cs([scalaDep("org.scala-lang", "scala3-compiler_3", version)]) },
-    '2.11.': function(version) { suffix: '_2.11', compilerJars: std.scala.cs([scalaDep("org.scala-lang", "scala-compiler", version)]) },
-    '2.12.': function(version) { suffix: '_2.12', compilerJars: std.scala.cs([scalaDep("org.scala-lang", "scala-compiler", version)]) },
-    '2.13.': function(version) { suffix: '_2.13', compilerJars: std.scala.cs([scalaDep("org.scala-lang", "scala-compiler", version)]) },
+    '3.': function(version) {
+      suffix: '_3',
+      compilerJars: std.scala.cs([scalaDep("org.scala-lang", "scala3-compiler_3", version)]),
+      libraryDeps: [scalaDep("org.scala-lang", "scala3-library_3", version)],
+    },
+    '2.11.': function(version) {
+      suffix: '_2.11',
+      compilerJars: std.scala.cs([scalaDep("org.scala-lang", "scala-compiler", version)]),
+      libraryDeps: [scalaDep("org.scala-lang", "scala-library", version)],
+    },
+    '2.12.': function(version) {
+      suffix: '_2.12',
+      compilerJars: std.scala.cs([scalaDep("org.scala-lang", "scala-compiler", version)]),
+      libraryDeps: [scalaDep("org.scala-lang", "scala-library", version)],
+    },
+    '2.13.': function(version) {
+      suffix: '_2.13',
+      compilerJars: std.scala.cs([scalaDep("org.scala-lang", "scala-compiler", version)]),
+      libraryDeps: [scalaDep("org.scala-lang", "scala-library", version)],
+    },
   },
 
+  local scalacConfig =
+    if std.startsWith(base.scalaVersion, '3.') then suffixMap['3.'](base.scalaVersion)
+    else if std.startsWith(base.scalaVersion, '2.11.') then suffixMap['2.11.'](base.scalaVersion)
+    else if std.startsWith(base.scalaVersion, '2.12.') then suffixMap['2.12.'](base.scalaVersion)
+    else if std.startsWith(base.scalaVersion, '2.13.') then suffixMap['2.13.'](base.scalaVersion),
   local dependencies = std.get(self, 'dependencies', default=[]),
+  local libraries = std.get(self, 'libraries', default=[]),
   flattenedLibraries:
-    self.libraries +
+    scalacConfig.libraryDeps +
+    libraries +
     std.flatMap(
       function(p) p.flattenedLibraries,
       dependencies,
@@ -27,11 +50,6 @@ local scalaDep(org, name, version) = {
       dependencies
     )),
   bloopConfig: {
-    local scalacConfig =
-      if std.startsWith(base.scalaVersion, '3.') then suffixMap['3.'](base.scalaVersion)
-      else if std.startsWith(base.scalaVersion, '2.11.') then suffixMap['2.11.'](base.scalaVersion)
-      else if std.startsWith(base.scalaVersion, '2.12.') then suffixMap['2.12.'](base.scalaVersion)
-      else if std.startsWith(base.scalaVersion, '2.13.') then suffixMap['2.13.'](base.scalaVersion),
     assert scalacConfig != null: "scala version must start with one of" + std.objectFields(suffixMap),
     local bloopConfig = self,
     name: base.name,

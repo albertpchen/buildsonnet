@@ -308,6 +308,7 @@ object Std:
     },
     "scala" -> makeObject(ctx.bind("std", JValue.JSelf(Source.Generated)), ctx => Map(
       "Project" -> {
+
         val contents = JValue.readFile("../resources/bloop.jsonnet")
         val newCtx = ctx.withFile(SourceFile("std.scala.Project", contents))
         LazyValue(newCtx, JValue.reifyFile("../resources/bloop.jsonnet"), true)
@@ -347,7 +348,6 @@ object Std:
         given concurrent.ExecutionContext = ctx.executionContext
         ctx.decode[Config.RecursiveProject](project).flatMap { project =>
           import scala.jdk.CollectionConverters.given
-          import ch.epfl.scala.bsp4j.StatusCode
           Config.write(ctx, project)
           ctx.bloopServer.jvmRunEnvironment(project.name).map {
             case Right(env) =>
