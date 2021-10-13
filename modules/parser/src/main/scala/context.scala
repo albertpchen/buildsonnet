@@ -418,6 +418,7 @@ object EvaluationContext:
       currFileParent.resolve("bloopLog.txt").toFile, true))
     val bloopServer = Bsp4sBloopServerConnection.std(
       currFileParent,
+      Logger.default("buildsonnet"),
       scribe.Logger("buildsonnet"),
       bloopPort,
       logStream,

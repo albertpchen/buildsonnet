@@ -306,7 +306,8 @@ import monix.eval.Task
 
 def bsp4sBuildsonnetBuildClient(
   workspace: java.nio.file.Path,
-  logger: scribe.Logger
+  scribeLogger: scribe.Logger,
+  logger: Logger,
 ): jsonrpc4s.Services =
   val compilations = collection.concurrent.TrieMap.empty[String, Promise[Unit]]
   def cancel(): Unit =
@@ -316,12 +317,12 @@ def bsp4sBuildsonnetBuildClient(
     do
       compilation.cancel()
 
-  jsonrpc4s.Services.empty(logger)
+  jsonrpc4s.Services.empty(scribeLogger)
     .notification(endpoints.Build.taskStart) { params =>
       params.dataKind match {
         case Some(bsp.TaskDataKind.CompileTask) =>
-          val report = jsonrpc4s.RawJson.parseJsonTo[bsp.CompileResult](params.data.get).toOption.get
-          val id = params.taskId.id
+          val report = jsonrpc4s.RawJson.parseJsonTo[CustomBuildEndpoints.CompileReport](params.data.get)
+          val id = report.toOption.get.target.uri.value
           compilations.remove(id).foreach(_.cancel())
           val isNoOp = params.message.getOrElse("").startsWith("Start no-op compilation")
           if !isNoOp then
@@ -335,8 +336,8 @@ def bsp4sBuildsonnetBuildClient(
     .notification(endpoints.Build.taskFinish) { params =>
       params.dataKind match {
         case Some(bsp.TaskDataKind.CompileReport) =>
-          val report = jsonrpc4s.RawJson.parseJsonTo[bsp.CompileReport](params.data.get).toOption.get
-          val id = params.taskId.id
+          val report = jsonrpc4s.RawJson.parseJsonTo[CustomBuildEndpoints.CompileReport](params.data.get)
+          val id = report.toOption.get.target.uri.value
           compilations.get(id).foreach { promise =>
             params.message.foreach(logger.info)
             promise.success(())
@@ -368,15 +369,16 @@ def bsp4sBuildsonnetBuildClient(
 def bsp4sService(
   workspace: java.nio.file.Path,
   connection: SocketConnection,
-  logger: scribe.Logger,
+  logger: Logger,
+  scribeLogger: scribe.Logger,
   scheduler: Scheduler,
 ): Task[jsonrpc4s.RpcClient] =
   val in = connection.input
   val out = connection.output
-  implicit val client = jsonrpc4s.RpcClient.fromOutputStream(out, logger)
-  val messages = jsonrpc4s.LowLevelMessage.fromInputStream(in, logger).map(jsonrpc4s.LowLevelMessage.toMsg)
-  val services = bsp4sBuildsonnetBuildClient(workspace, logger)
-  val lsServer = jsonrpc4s.RpcServer(messages, client, services, scheduler, logger)
+  implicit val client = jsonrpc4s.RpcClient.fromOutputStream(out, scribeLogger)
+  val messages = jsonrpc4s.LowLevelMessage.fromInputStream(in, scribeLogger).map(jsonrpc4s.LowLevelMessage.toMsg)
+  val services = bsp4sBuildsonnetBuildClient(workspace, scribeLogger, logger)
+  val lsServer = jsonrpc4s.RpcServer(messages, client, services, scheduler, scribeLogger)
   val runningClientServer = lsServer.startTask(Task.pure(())).runToFuture(using scheduler)
   val initializeServer = endpoints.Build.initialize.request(
     bsp.InitializeBuildParams(
@@ -406,7 +408,8 @@ sealed trait Bsp4sBloopServerConnection:
 object Bsp4sBloopServerConnection:
   def std(
     workspace: java.nio.file.Path,
-    logger: scribe.Logger,
+    logger: Logger,
+    scribeLogger: scribe.Logger,
     bloopPort: Int,
     logStream: java.io.PrintStream,
   )(using ExecutionContextExecutorService): Bsp4sBloopServerConnection =
@@ -419,7 +422,7 @@ object Bsp4sBloopServerConnection:
         val connection = Await.result(
           connectToLauncher("buildsonnet", "1.4.9", bloopPort, logStream), Duration.Inf)
         val client =  Await.result(
-          bsp4sService(workspace, connection, logger, scheduler).runToFuture, Duration.Inf)
+          bsp4sService(workspace, connection, logger, scribeLogger, scheduler).runToFuture, Duration.Inf)
         (connection, client)
       }
       private def connection = pair._1

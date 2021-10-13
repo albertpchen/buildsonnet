@@ -52,9 +52,17 @@ local scalaDep(org, name, version) = {
       scalaDep("org.scala-sbt.ipcsocket", "ipcsocket", "1.4.0",),
     ],
   },
+  parser213: std.scala.Project {
+    name: "parser213",
+    sources: ["modules/parser213/src/main/scala"],
+    scalaVersion: "2.13.6",
+    libraries: [
+      scalaDep("ch.epfl.scala", "bsp4s_2.13", "2.0.0"),
+    ],
+  },
   parser: std.scala.Project {
     name: "parser",
-    dependencies: [$.bloopLauncher],
+    dependencies: [$.bloopLauncher, $.parser213],
     sources: ["modules/parser/src/main/scala"],
     scalaVersion: "3.0.2",
     libraries: [
@@ -66,9 +74,11 @@ local scalaDep(org, name, version) = {
       scalaDep("org.xerial", "sqlite-jdbc", "3.36.0.3"),
       scalaDep("org.slf4j", "slf4j-nop", "1.6.4"),
       scalaDep("ch.epfl.scala", "bsp4j", "2.0.0"),
+      scalaDep("ch.epfl.scala", "bsp4s_2.13", "2.0.0"),
       // scalaDep("ch.epfl.scala", "bloop-launcher-core_2.13", "1.4.9-20-2c23b6ba-20211002-2109"),
       scalaDep("com.github.scopt", "scopt_3", "4.0.1"),
       scalaDep("ch.epfl.scala", "bloop-config_2.13", "1.4.9"),
+      scalaDep("com.lihaoyi", "sourcecode_3", "0.2.7"),
     ],
     runtimeJvmHome: "/home/turtle/.cache/coursier/jvm/graalvm-java11@21.2.0/",
     runtimeJavaOpts: [
@@ -77,7 +87,7 @@ local scalaDep(org, name, version) = {
     ],
   },
   a: {
-    java(args): std.print(std.runJob({cmdline: ["java", "--help"], envVars: { PATH: "/nix/store/c6svk6hihklhc3c3sy0fhfw877sj0866-openjdk-16+36/bin" }, inputFiles: []}).stdout, 0),
+    java(args): std.runJob({cmdline: ["java"] + args, envVars: { PATH: "/nix/store/c6svk6hihklhc3c3sy0fhfw877sj0866-openjdk-16+36/bin" }, inputFiles: []}),
   },
   bloop: std.write(std.workspace.name + "/.bloop/parser.json", std.toString($.parser.bloopConfig)),
   java(args): std.runJob({cmdline: ["java", "--help"], envVars: { PATH: "/nix/store/c6svk6hihklhc3c3sy0fhfw877sj0866-openjdk-16+36/bin" }, inputFiles: []}).stdout,

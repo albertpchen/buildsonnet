@@ -1,5 +1,5 @@
 val scala3Version = "3.0.2"
-val Scala213Version = "2.13.6"
+val scala213Version = "2.13.6"
 
 val Dependencies = new {
   val coursierVersion = "2.0.16"
@@ -29,7 +29,7 @@ lazy val bloopgun: Project = project
   .enablePlugins(BuildInfoPlugin)
   .settings(
     name := "bloopgun-core",
-    scalaVersion := Scala213Version,
+    scalaVersion := scala213Version,
     buildInfoPackage := "bloopgun.internal.build",
     buildInfoKeys := List(Keys.version),
     buildInfoObject := "BloopgunInfo",
@@ -55,7 +55,7 @@ lazy val bloopLauncher: Project = project
   .dependsOn(bloopgun)
   .settings(
     name := "bloop-launcher-core",
-    scalaVersion := Scala213Version,
+    scalaVersion := scala213Version,
     crossVersion := CrossVersion.constant(scala3Version),
     libraryDependencies ++= List(
       "org.scala-sbt.ipcsocket" % "ipcsocket" % "1.4.0",
@@ -64,11 +64,25 @@ lazy val bloopLauncher: Project = project
     )
   )
 
+lazy val parser213 = project
+  .in(file("modules/parser213"))
+  .settings(
+    run / fork := true,
+    version := "0.1.0",
+    scalaVersion := scala213Version,
+    javaOptions ++= Seq(
+      /// "-agentlib:native-image-agent=config-output-dir=" + (root / baseDirectory).value.getAbsolutePath + "/native-image-agent-config-output-dir"
+    ),
+    libraryDependencies ++= Seq(
+      ("ch.epfl.scala" %% "bsp4s" % "2.0.0").cross(CrossVersion.for3Use2_13),
+    ),
+  )
+
 // project for JVM build (default)
 lazy val parser = project
   .in(file("modules/parser"))
   .enablePlugins(NativeImagePlugin)
-  .dependsOn(bloopLauncher)
+  .dependsOn(bloopLauncher, parser213)
   .settings(
     run / fork := true,
     version := "0.1.0",
