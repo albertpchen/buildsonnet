@@ -82,11 +82,11 @@ def connectToLauncher(
     )
   }
 
-import ch.epfl.scala.{bsp4j => bsp}
+import ch.epfl.scala.bsp4j
 
-trait BloopServer extends bsp.BuildServer
-  with bsp.ScalaBuildServer
-  with bsp.JvmBuildServer
+trait BloopServer extends bsp4j.BuildServer
+  with bsp4j.ScalaBuildServer
+  with bsp4j.JvmBuildServer
 
 extension[T](promise: Promise[T])
   def cancel(): Unit =
@@ -95,7 +95,7 @@ extension[T](promise: Promise[T])
 final class BuildsonnetBuildClient(
   workspace: java.nio.file.Path,
   logger: Logger
-) extends bsp.BuildClient:
+) extends bsp4j.BuildClient:
   val compilations = collection.concurrent.TrieMap.empty[String, Promise[Unit]]
   def cancel(): Unit =
     for
@@ -104,16 +104,16 @@ final class BuildsonnetBuildClient(
     do
       compilation.cancel()
 
-  override def onBuildShowMessage(params: bsp.ShowMessageParams): Unit =
+  override def onBuildShowMessage(params: bsp4j.ShowMessageParams): Unit =
     logger.info(params.getMessage)
 
-  override def onBuildLogMessage(params: bsp.LogMessageParams): Unit =
+  override def onBuildLogMessage(params: bsp4j.LogMessageParams): Unit =
     logger.info(s"LOG: ${params.getMessage}")
 
-  override def onBuildTaskStart(params: bsp.TaskStartParams): Unit =
+  override def onBuildTaskStart(params: bsp4j.TaskStartParams): Unit =
     val isNoOp = params.getMessage.startsWith("Start no-op compilation")
     params.getDataKind match {
-      case bsp.TaskDataKind.COMPILE_TASK =>
+      case bsp4j.TaskDataKind.COMPILE_TASK =>
         val id =
           params
             .getData
@@ -129,14 +129,14 @@ final class BuildsonnetBuildClient(
     if !isNoOp then
       logger.info(params.getMessage)
 
-  override def onBuildTaskProgress(params: bsp.TaskProgressParams): Unit =
+  override def onBuildTaskProgress(params: bsp4j.TaskProgressParams): Unit =
     // if !(params.getMessage eq null) then
     //   logger.info(params.getMessage)
     ()
 
-  override def onBuildTaskFinish(params: bsp.TaskFinishParams): Unit =
+  override def onBuildTaskFinish(params: bsp4j.TaskFinishParams): Unit =
     params.getDataKind match {
-      case bsp.TaskDataKind.COMPILE_REPORT =>
+      case bsp4j.TaskDataKind.COMPILE_REPORT =>
         val id =
           params
             .getData
@@ -152,7 +152,7 @@ final class BuildsonnetBuildClient(
         if !(params.getMessage eq null) then logger.info(params.getMessage)
     }
 
-  override def onBuildPublishDiagnostics(params: bsp.PublishDiagnosticsParams): Unit =
+  override def onBuildPublishDiagnostics(params: bsp4j.PublishDiagnosticsParams): Unit =
     import scala.jdk.CollectionConverters.given
     import Logger.prefixLines
     val file = workspace.relativize(java.nio.file.Paths.get(new java.net.URI(params.getTextDocument.getUri)))
@@ -162,23 +162,23 @@ final class BuildsonnetBuildClient(
       val header = s"${Console.UNDERLINED}$file${Console.RESET}:$startLine:$startCol"
       val logFn =
         diagnostic.getSeverity match
-        case bsp.DiagnosticSeverity.ERROR => logger.error
-        case bsp.DiagnosticSeverity.WARNING => logger.warn
+        case bsp4j.DiagnosticSeverity.ERROR => logger.error
+        case bsp4j.DiagnosticSeverity.WARNING => logger.warn
         case _ => logger.info
       logFn(header)
       diagnostic.getMessage.prefixLines("  ").foreach(logFn)
       logFn("")
     }
 
-  override def onBuildTargetDidChange(params: bsp.DidChangeBuildTarget): Unit = ???
+  override def onBuildTargetDidChange(params: bsp4j.DidChangeBuildTarget): Unit = ???
 
 object BuildsonnetBuildClient:
-  def initializeBuildParams(workspaceURI: String): bsp.InitializeBuildParams = new bsp.InitializeBuildParams(
+  def initializeBuildParams(workspaceURI: String): bsp4j.InitializeBuildParams = new bsp4j.InitializeBuildParams(
     "buildsonnet", // name of this client
     "0.0.1", // version of this client
     "1.0.0", // BSP version
     workspaceURI,
-    new bsp.BuildClientCapabilities(java.util.Collections.singletonList("scala"))
+    new bsp4j.BuildClientCapabilities(java.util.Collections.singletonList("scala"))
   )
 
 import java.util.concurrent.CompletableFuture
@@ -192,8 +192,8 @@ import scala.jdk.FutureConverters.given
 
 sealed trait BloopServerConnection:
   def shutdown(): Future[Unit]
-  def compile(targetId: String): Future[bsp.CompileResult]
-  def jvmRunEnvironment(targetId: String): Future[Either[bsp.StatusCode.ERROR.type | bsp.StatusCode.CANCELLED.type, bsp.JvmRunEnvironmentResult]]
+  def compile(targetId: String): Future[bsp4j.CompileResult]
+  def jvmRunEnvironment(targetId: String): Future[Either[bsp4j.StatusCode.ERROR.type | bsp4j.StatusCode.CANCELLED.type, bsp4j.JvmRunEnvironmentResult]]
 
 object BloopServerConnection:
   def std(
@@ -246,21 +246,21 @@ object BloopServerConnection:
         logStream.close()
       }
 
-      def compile(targetId: String): Future[bsp.CompileResult] =
-        val params = new bsp.CompileParams(
-          java.util.Collections.singletonList(new bsp.BuildTargetIdentifier(s"file://$workspace/?id=$targetId"))
+      def compile(targetId: String): Future[bsp4j.CompileResult] =
+        val params = new bsp4j.CompileParams(
+          java.util.Collections.singletonList(new bsp4j.BuildTargetIdentifier(s"file://$workspace/?id=$targetId"))
         )
         server.buildTargetCompile(params).asScala
 
-      def jvmRunEnvironment(targetId: String): Future[Either[bsp.StatusCode.ERROR.type | bsp.StatusCode.CANCELLED.type, bsp.JvmRunEnvironmentResult]] =
+      def jvmRunEnvironment(targetId: String): Future[Either[bsp4j.StatusCode.ERROR.type | bsp4j.StatusCode.CANCELLED.type, bsp4j.JvmRunEnvironmentResult]] =
         compile(targetId).flatMap { compileResult =>
           compileResult.getStatusCode match
-          case bsp.StatusCode.OK =>
-            val params = new bsp.JvmRunEnvironmentParams(
-              java.util.Collections.singletonList(new bsp.BuildTargetIdentifier(s"file://$workspace/?id=$targetId"))
+          case bsp4j.StatusCode.OK =>
+            val params = new bsp4j.JvmRunEnvironmentParams(
+              java.util.Collections.singletonList(new bsp4j.BuildTargetIdentifier(s"file://$workspace/?id=$targetId"))
             )
             server.jvmRunEnvironment(params).asScala.map(Right(_))
-          case status @ (bsp.StatusCode.ERROR | bsp.StatusCode.CANCELLED) =>
+          case status @ (bsp4j.StatusCode.ERROR | bsp4j.StatusCode.CANCELLED) =>
             Future(Left(status))
         }
 
@@ -297,3 +297,116 @@ def newServer(
       server.onBuildInitialized()
       (server, localClient, listening)
     }
+
+import ch.epfl.scala.bsp
+import ch.epfl.scala.bsp.endpoints
+import monix.execution.{ExecutionModel, Scheduler}
+import scala.concurrent.duration.FiniteDuration
+import monix.eval.Task
+
+def bsp4sBuildsonnetBuildClient(
+  workspace: java.nio.file.Path,
+  logger: scribe.Logger
+): jsonrpc4s.Services =
+  import macros.given
+  val compilations = collection.concurrent.TrieMap.empty[String, Promise[Unit]]
+  def cancel(): Unit =
+    for
+      key <- compilations.keysIterator
+      compilation <- compilations.remove(key)
+    do
+      compilation.cancel()
+
+  jsonrpc4s.Services.empty(logger)
+    .notification(endpoints.Build.taskStart) { params =>
+      params.dataKind match {
+        case Some(bsp.TaskDataKind.CompileTask) =>
+          val report = jsonrpc4s.RawJson.parseJsonTo[bsp.CompileResult](params.data.get).toOption.get
+          val id = params.taskId.id
+          compilations.remove(id).foreach(_.cancel())
+          val isNoOp = params.message.getOrElse("").startsWith("Start no-op compilation")
+          if !isNoOp then
+            compilations(id) = Promise[Unit]()
+            params.message.foreach(logger.info)
+        case _ =>
+          params.message.foreach(logger.info)
+      }
+    }
+    .notification(endpoints.Build.taskProgress)(_ => {})
+    .notification(endpoints.Build.taskFinish) { params =>
+      params.dataKind match {
+        case Some(bsp.TaskDataKind.CompileReport) =>
+          val report = jsonrpc4s.RawJson.parseJsonTo[bsp.CompileReport](params.data.get).toOption.get
+          val id = params.taskId.id
+          compilations.get(id).foreach { promise =>
+            params.message.foreach(logger.info)
+            promise.success(())
+          }
+        case _ =>
+          params.message.foreach(logger.info)
+      }
+    }
+    .notification(endpoints.Build.showMessage)(params => logger.info(params.message))
+    .notification(endpoints.Build.logMessage)(params => logger.info(s"LOG: ${params.message}"))
+    .notification(endpoints.Build.publishDiagnostics) { params =>
+      val file = workspace.relativize(params.textDocument.uri.toPath)
+      params.diagnostics.foreach { diagnostic =>
+        val startLine = diagnostic.range.start.line + 1
+        val startCol = diagnostic.range.start.character + 1
+        val header = s"${Console.UNDERLINED}$file${Console.RESET}:$startLine:$startCol"
+        val logFn =
+          diagnostic.severity match
+          case Some(bsp.DiagnosticSeverity.Error) => logger.error(_: String)
+          case Some(bsp.DiagnosticSeverity.Warning) => logger.warn(_: String)
+          case _ => logger.info(_: String)
+        logFn(header)
+        import Logger.prefixLines
+        diagnostic.message.prefixLines("  ").foreach(logFn)
+        logFn("")
+      }
+    }
+
+def bsp4sService(
+  workspace: java.nio.file.Path,
+  connection: SocketConnection,
+  logger: scribe.Logger,
+) = {
+  val in = connection.input
+  val out = connection.output
+  implicit val client = jsonrpc4s.RpcClient.fromOutputStream(out, logger)
+  val messages = jsonrpc4s.LowLevelMessage.fromInputStream(in, logger).map(jsonrpc4s.LowLevelMessage.toMsg)
+  val services = bsp4sBuildsonnetBuildClient(workspace, logger)
+  val ioScheduler = Scheduler(
+    java.util.concurrent.Executors.newFixedThreadPool(4),
+    ExecutionModel.AlwaysAsyncExecution
+  )
+  val lsServer = jsonrpc4s.RpcServer(messages, client, services, ioScheduler, logger)
+
+  val runningClientServer = lsServer.startTask(Task.pure(())).runToFuture(using ioScheduler)
+
+  val initializeServer = endpoints.Build.initialize.request(
+    bsp.InitializeBuildParams(
+      displayName = "buildsonnet", // name of this client
+      version = "0.0.1", // version of this client
+      bspVersion = "2.0.0", // BSP version
+      rootUri = bsp.Uri(workspace.toUri),
+      capabilities = bsp.BuildClientCapabilities(List("scala")),
+      data = None
+    )
+  )
+  for {
+    // Delay the task to let the bloop server go live
+    initializeResult <- initializeServer.delayExecution(FiniteDuration(1, "s"))
+    _ = endpoints.Build.initialized.notify(bsp.InitializedBuildParams())
+  } yield {
+    initializeResult
+  }
+  /* shutdown
+  for {
+    _ <- endpoints.Build.shutdown.request(bsp.Shutdown())
+    _ = endpoints.Build.exit.notify(bsp.Exit())
+  } yield {
+    socket.close()
+  }
+  */
+}

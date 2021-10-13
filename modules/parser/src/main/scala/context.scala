@@ -95,7 +95,6 @@ object LazyValue:
     new LazyObjectValue:
       self =>
       val isHidden = hidden
-      @scala.annotation.threadUnsafe
       lazy val evaluated: EvaluatedJValue = evalUnsafe(ctx())(code)
 
       def withHidden(hidden: Boolean) = withHiddenImp(hidden, this)
@@ -105,7 +104,6 @@ object LazyValue:
     new LazyObjectValue:
       self =>
       val isHidden = hidden
-      @scala.annotation.threadUnsafe
       lazy val evaluated: EvaluatedJValue = evalUnsafe(ctx)(code)
 
       def withHidden(hidden: Boolean) = withHiddenImp(hidden, this)
@@ -355,7 +353,6 @@ object EvaluationContext:
 
     def error(src: Source, message: String): Nothing = throw new EvaluationError(file, src, message, stack)
 
-    @scala.annotation.threadUnsafe
     lazy val cache = collection.mutable.HashMap[String, EvaluatedJValue]()
     val scope = locals.map {
       case (id, value: JValue) => id -> LazyValue(this, value)

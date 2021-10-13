@@ -8,6 +8,57 @@ object Case:
     [V] => (e: V) => ()
 
 object macros:
+  inline given sourcecode.Pkg = ${ sourcecodePkgImpl }
+
+  def sourcecodePkgImpl(using Quotes): Expr[sourcecode.Pkg] =
+    '{ sourcecode.Pkg(${Expr("root")}) }
+
+  inline given sourcecode.File = ${ sourcecodeFileImpl }
+
+  def sourcecodeFileImpl(using Quotes): Expr[sourcecode.File] =
+    import quotes.reflect._
+    val file = quotes.reflect.Position.ofMacroExpansion.sourceFile.jpath.toAbsolutePath.toString
+    '{ sourcecode.File(${Expr(file)}) }
+
+  inline given sourcecode.FileName = ${ fileNameImpl }
+
+  def fileNameImpl(using Quotes): Expr[sourcecode.FileName] = {
+    val name = quotes.reflect.Position.ofMacroExpansion.sourceFile.jpath.getFileName.toString
+    '{sourcecode.FileName(${Expr(name)})}
+  }
+
+  def findOwner(using Quotes)(owner: quotes.reflect.Symbol, skipIf: quotes.reflect.Symbol => Boolean): quotes.reflect.Symbol = {
+    var owner0 = owner
+    while(skipIf(owner0)) owner0 = owner0.owner
+    owner0
+  }
+
+  def getName(using Quotes)(s: quotes.reflect.Symbol) =
+    s.name.trim.stripSuffix("$") // meh
+
+  def isSyntheticName(name: String) =
+    name == "<init>" || (name.startsWith("<local ") && name.endsWith(">")) || name == "$anonfun" || name == "macro"
+
+  def isSynthetic(using Quotes)(s: quotes.reflect.Symbol) = isSyntheticName(getName(s))
+
+  def actualOwner(using Quotes)(owner: quotes.reflect.Symbol): quotes.reflect.Symbol =
+    findOwner(owner, owner0 => isSynthetic(owner0) || getName(owner0) == "ev")
+
+  inline given sourcecode.Name = ${ nameImpl }
+
+  def nameImpl(using Quotes): Expr[sourcecode.Name] =
+    import quotes.reflect._
+    val owner = actualOwner(Symbol.spliceOwner)
+    val simpleName = getName(owner)
+    '{ sourcecode.Name(${Expr(simpleName)}) }
+
+  inline given sourcecode.Line = ${ lineImpl }
+
+  def lineImpl(using Quotes): Expr[sourcecode.Line] = {
+    val line = quotes.reflect.Position.ofMacroExpansion.startLine + 1
+    '{ sourcecode.Line(${Expr(line)}) }
+  }
+
 
   def unfoldUnionType(
     quotes: Quotes,
