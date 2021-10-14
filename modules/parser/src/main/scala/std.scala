@@ -307,8 +307,17 @@ object Std:
       }.toJValue
     },
     "scala" -> makeObject(ctx.bind("std", JValue.JSelf(Source.Generated)), ctx => Map(
+      "Dep" -> function3(Arg.org, Arg.name, Arg.version) { (ctx, src, org, name, version) =>
+        given concurrent.ExecutionContext = ctx.executionContext
+        ctx.expectString(org).zip(ctx.expectString(name)).zip(ctx.expectString(version)).map {
+          case ((org, name), version) => makeObject(ctx, ctx => Map(
+            "org" -> org,
+            "name" -> name,
+            "version" -> version,
+          ))
+        }.toJValue
+      },
       "Project" -> {
-
         val contents = JValue.readFile("../resources/bloop.jsonnet")
         val newCtx = ctx.withFile(SourceFile("std.scala.Project", contents))
         LazyValue(newCtx, JValue.reifyFile("../resources/bloop.jsonnet"), true)
