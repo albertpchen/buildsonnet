@@ -236,6 +236,7 @@ object JobRunner:
             val outputs: Seq[EvaluatedJValue.JPath] = outputPaths.distinct.map(EvaluatedJValue.JPath(src, _))
             Future(EvaluatedJValue.JJob(src, desc, jobRow.stdout, jobRow.stderr, outputs, jobRow.exitCode))
           case _ =>
+            println(desc.cmdline.mkString(" ")) // print cmdline feedback before running
             val process =
               java.lang.Runtime.getRuntime().exec(
                 (cmd +: desc.cmdline.tail).toArray,
@@ -250,7 +251,6 @@ object JobRunner:
             val stdout = scala.io.Source.fromInputStream(process.getInputStream).mkString
             val stderr = scala.io.Source.fromInputStream(process.getErrorStream).mkString
             val outputs: Seq[EvaluatedJValue.JPath] = outputPaths.distinct.map(EvaluatedJValue.JPath(src, _))
-            println(desc.cmdline.mkString(" "))
             print(stdout)
             if exitCode != 0 then
               System.err.println(stderr)
