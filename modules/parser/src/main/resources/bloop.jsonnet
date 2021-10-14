@@ -104,12 +104,18 @@ local scalaDep(org, name, version) = {
   classpathString:: std.join(":", [path.name for path in std.scala.classpath(self.bloopConfig)]),
   classpath:: std.print(self.classpathString),
   run(args)::
-    local cmdline = ['java', '-cp', self.classpathString] + args;
+    local extraArgs = std.get(base, "runtimeJavaOpts", default=[]);
+    local cmdline = ['java', '-cp', self.classpathString] + extraArgs + args;
+    local jvmHome =
+      if "runtimeJvmHome" in base then
+        base.runtimeJvmHome
+      else
+        std.getenv("JAVA_HOME");
     std.runJob({
       cmdline: cmdline,
       envVars: {
-        PATH: std.getenv("JAVA_HOME") + "/bin",
-        JAVA_HOME: std.getenv("JAVA_HOME")
+        PATH: jvmHome + "/bin",
+        JAVA_HOME: jvmHome,
       },
       inputFiles: []
     }),
