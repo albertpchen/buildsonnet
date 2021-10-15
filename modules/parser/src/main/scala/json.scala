@@ -5,15 +5,14 @@ import scala.concurrent.{Await, ExecutionContext, ExecutionContextExecutorServic
 import cats.parse.{Parser0 => P0, Parser => P, Numbers}
 import cats.syntax.all._
 
-object Parser:
-  val a = 0
+final class Parser(file: SourceFile):
   import cats.instances.all._
   import JValue._
 
   extension [T](p: P[T])
     def withRange: P[(Source, T)] =
       (P.index.with1 ~ p ~ P.index).map { case ((start, t), end) =>
-        (Source(start, end), t)
+        (Source.Range(file, start, end), t)
       }
 
   val whitespace: P[Unit] = P.oneOf(List(
@@ -91,10 +90,10 @@ object Parser:
   )).map(s => s.mkString).withContext("expected string literal")
 
   val num = (P.index.with1 ~ Numbers.jsonNumber ~ P.index).map {
-    case ((beginOff, num), endOff) => JNum(Source(beginOff, endOff), num)
+    case ((beginOff, num), endOff) => JNum(Source.Range(file, beginOff, endOff), num)
   }
   val listSep: P[Unit] = P.char(',').surroundedBy(__).void
-  val dollar = (P.index.with1 <* P.char('$')).map(offset => JOuter(Source(offset, offset + 1)))
+  val dollar = (P.index.with1 <* P.char('$')).map(offset => JOuter(Source.Range(file, offset, offset + 1)))
 
   def commaList[A](pa: P[A]): P0[List[A]] = (
     pa.<*(__) ~
@@ -286,7 +285,7 @@ object Parser:
               jv.src.withEnd(end),
               jv,
               JBinaryOperator.Op_+,
-              objInside(Source(start, end)),
+              objInside(Source.Range(file, start, end)),
             )
           }
         }
@@ -295,7 +294,7 @@ object Parser:
       val expr = fns.foldLeft(base) { (base, fn) => fn(base) }
       unaryOp match
         case None => expr
-        case Some(op) => JUnaryOp(Source.Generated, JUnaryOperator(op), expr)
+        case Some(op) => JUnaryOp(Source.Generated(file), JUnaryOperator(op), expr)
     }
   }
 
@@ -322,4 +321,7 @@ object Parser:
       climb(head, 0)
     }
   }
-  val parserFile = __ *> expr <* __
+  private val parserFile = __ *> expr <* __
+
+  def parseFile: Either[cats.parse.Parser.Error, JValue] =
+    parserFile.parseAll(file.contents)

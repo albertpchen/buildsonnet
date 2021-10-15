@@ -49,14 +49,14 @@ object Std:
   private inline def function0(
     fn: (EvaluationContext, Source) => EvaluatedJValue,
   ): EvaluatedJValue.JFunction =
-    EvaluatedJValue.JFunction(Source.Generated, 0, (applyCtx, params) => fn(applyCtx, params.src))
+    EvaluatedJValue.JFunction(stdSrc, 0, (applyCtx, params) => fn(applyCtx, params.src))
 
   private inline def function1[Name1 <: String](
     arg1: Arg[Name1],
   )(
     fn: (EvaluationContext, Source, EvaluatedJValue) => EvaluatedJValue,
   ): EvaluatedJValue.JFunction =
-    EvaluatedJValue.JFunction(Source.Generated, 1, (applyCtx, params) => {
+    EvaluatedJValue.JFunction(stdSrc, 1, (applyCtx, params) => {
       val Array(a1) = bindArgs(Seq(
         compiletime.constValue[Name1] -> arg1.default
       ), applyCtx, params)
@@ -72,7 +72,7 @@ object Std:
   )(
     fn: (EvaluationContext, Source, EvaluatedJValue, EvaluatedJValue) => EvaluatedJValue,
   ): EvaluatedJValue.JFunction =
-    EvaluatedJValue.JFunction(Source.Generated, 2, (applyCtx, params) => {
+    EvaluatedJValue.JFunction(stdSrc, 2, (applyCtx, params) => {
       val Array(a1, a2) = bindArgs(Seq(
         compiletime.constValue[Name1] -> arg1.default,
         compiletime.constValue[Name2] -> arg2.default,
@@ -91,7 +91,7 @@ object Std:
   )(
     fn: (EvaluationContext, Source, EvaluatedJValue, EvaluatedJValue, EvaluatedJValue) => EvaluatedJValue,
   ): EvaluatedJValue.JFunction =
-    EvaluatedJValue.JFunction( Source.Generated, 3, (applyCtx, params) => {
+    EvaluatedJValue.JFunction(stdSrc, 3, (applyCtx, params) => {
       val Array(a1, a2, a3) = bindArgs(Seq(
         compiletime.constValue[Name1] -> arg1.default,
         compiletime.constValue[Name2] -> arg2.default,
@@ -113,7 +113,7 @@ object Std:
   )(
     fn: (EvaluationContext, Source, EvaluatedJValue, EvaluatedJValue, EvaluatedJValue, EvaluatedJValue) => EvaluatedJValue,
   ): EvaluatedJValue.JFunction =
-    EvaluatedJValue.JFunction( Source.Generated, 4, (applyCtx, params) => {
+    EvaluatedJValue.JFunction(stdSrc, 4, (applyCtx, params) => {
       val Array(a1, a2, a3, a4) = bindArgs(Seq(
         compiletime.constValue[Name1] -> arg1.default,
         compiletime.constValue[Name2] -> arg2.default,
@@ -129,7 +129,7 @@ object Std:
   ): EvaluatedJValue.JObject =
     var objCtx: ObjectEvaluationContext = null
     val obj: EvaluatedJValue.JObject = EvaluatedJValue.JObject(
-      Source.Generated,
+      stdSrc,
       EvaluatedJObject.static(() => objCtx, staticMembers)
     )
     objCtx = EvaluationContext.ObjectImp(
@@ -151,9 +151,10 @@ object Std:
     EvaluatedJValue.JString(src, value)
   }
 
-  private val jnull = EvaluatedJValue.JNull(Source.Generated)
-  private val jtrue = EvaluatedJValue.JBoolean(Source.Generated, true)
-  private val jfalse = EvaluatedJValue.JBoolean(Source.Generated, false)
+  private val stdSrc = Source.Generated(SourceFile.std)
+  private val jnull = EvaluatedJValue.JNull(stdSrc)
+  private val jtrue = EvaluatedJValue.JBoolean(stdSrc, true)
+  private val jfalse = EvaluatedJValue.JBoolean(stdSrc, false)
   private val jidentity = function1(Arg.x) { (ctx, src, x) => x }
   def obj(ctx: EvaluationContext) = makeObject(ctx, ctx => Map(
     "toString" -> function1(Arg.x)(toStringImp),
@@ -232,7 +233,7 @@ object Std:
       ctx.expectString(str).map { str =>
         val file = ctx.file
         val lineNum = src match
-        case Source.Range(start, _) => ":" + file.getLineCol(start)._1
+        case r: Source.Range => ":" + file.getLineCol(r.start)._1
         case _ => ""
         println(s"TRACE: ${file.path}$lineNum: ${str.str}")
         rest
@@ -244,7 +245,7 @@ object Std:
       if rest eq jnull then str
       else rest
     },
-    "workspace" -> EvaluatedJValue.JPath(Source.Generated, ctx.workspaceDir),
+    "workspace" -> EvaluatedJValue.JPath(stdSrc, ctx.workspaceDir),
     "runJob" -> function1(Arg.desc) { (ctx, src, desc) =>
       given concurrent.ExecutionContext = ctx.executionContext
       ctx.decode[JobDescription](desc).flatMap(ctx.runJob(src, _)).toJValue
@@ -306,7 +307,7 @@ object Std:
           case e: java.lang.SecurityException => ctx.error(src, s"could not access environment variable \"$varName\": ${e.getMessage}")
       }.toJValue
     },
-    "scala" -> makeObject(ctx.bind("std", JValue.JSelf(Source.Generated)), ctx => Map(
+    "scala" -> makeObject(ctx.bind("std", JValue.JSelf(stdSrc)), ctx => Map(
       "Dep" -> function3(Arg.org, Arg.name, Arg.version) { (ctx, src, org, name, version) =>
         given concurrent.ExecutionContext = ctx.executionContext
         ctx.expectString(org).zip(ctx.expectString(name)).zip(ctx.expectString(version)).map {
@@ -320,7 +321,7 @@ object Std:
       "Project" -> {
         val contents = JValue.readFile("../resources/bloop.jsonnet")
         val newCtx = ctx.withFile(SourceFile("std.scala.Project", contents))
-        LazyValue(newCtx, JValue.reifyFile("../resources/bloop.jsonnet"), true)
+        LazyValue(newCtx, JValue.reifyFile("../resources/bloop.jsonnet", "std.scala.Project"), true)
       },
       "cs" -> function2(Arg.deps, Arg.withSources(jfalse)) { (ctx, src, deps, withSources) =>
         import coursier.{Classifier, Dependency, Fetch, Module, ModuleName, Organization, Type}

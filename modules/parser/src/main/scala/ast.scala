@@ -117,15 +117,24 @@ object JBinaryOperator:
 
 sealed trait SourceFile:
   def path: String
+  def contents: String
   def getLineCol(offset: Int): (Int, Int)
 
 object SourceFile:
+  import scala.quoted.*
+
+  given ToExpr[SourceFile] with
+    def apply(src: SourceFile)(using Quotes): Expr[SourceFile] =
+      '{ SourceFile(${Expr(src.path)}, ${Expr(src.contents)}) }
+
   val std: SourceFile = new SourceFile:
     val path = "<std>"
+    val contents = ""
     def getLineCol(offset: Int) = (0, offset)
 
   val empty: SourceFile = new SourceFile:
     val path = "<empty>"
+    val contents = ""
     def getLineCol(offset: Int) = (0, offset)
 
   private class BinTree(
@@ -181,45 +190,54 @@ object SourceFile:
         Some(right),
       )
 
-  def apply(file: String, contents: String): SourceFile =
+  def apply(file: String, contentsx: String): SourceFile =
     val indices = collection.mutable.ArrayBuffer[Int]()
     indices += -1
     for
-      i <- 0 until contents.size
+      i <- 0 until contentsx.size
     do
-      if contents(i) == '\n' then
+      if contentsx(i) == '\n' then
         indices += i
     if indices.size <= 1 then
       new SourceFile:
         val path = file
+        val contents = contentsx
         def getLineCol(offset: Int) = (0, offset)
     else
       val binTree = makeBinTree(indices, 0, indices.size)
       new SourceFile:
         val path = file
+        val contents = contentsx
         def getLineCol(offset: Int) =
           val closest = binTree.find(offset)
           val col = offset - closest.value
           (closest.index + 1, col)
 
+trait HasSourceFile:
+  def file: SourceFile
 
-enum Source:
-  case Range(start: Int, end: Int)
-  case Generated
+enum Source extends HasSourceFile:
+  case Range(file: SourceFile, start: Int, end: Int)
+  case Generated(file: SourceFile)
+
+  def setFile(file: SourceFile): Source =
+    this match
+    case r: Range => r.copy(file = file)
+    case g: Generated => g.copy(file = file)
 
   def withStart(newStart: Int): Source =
     this match
-    case Range(start, end) => Range(newStart, end)
-    case Generated => Generated
+    case r: Range => r.copy(start = newStart)
+    case g: Generated => g
 
   def withEnd(newEnd: Int): Source =
     this match
-    case Range(start, end) => Range(start, newEnd)
-    case Generated => Generated
+    case r: Range => r.copy(end = newEnd)
+    case g: Generated => g
 
   def merge(other: Source): Source =
     (this, other) match
-    case (Range(start, _), Range(_, end)) => Range(start, end)
+    case (r1: Range, r2: Range) => Range(r1.file, r1.start, r2.end)
     case _ => this
 
 object Source:
@@ -228,16 +246,24 @@ object Source:
   given ToExpr[Source] with
     def apply(src: Source)(using Quotes): Expr[Source] =
       src match
-      case Range(start, end) => '{ Range(${Expr(start)}, ${Expr(end)}) }
-      case Generated => '{ Generated }
+      case Range(file, start, end) => '{ Range(${Expr(file)}, ${Expr(start)}, ${Expr(end)}) }
+      case Generated(file) => '{ Generated(${Expr(file)}) }
+
+  val empty: Source = Generated(SourceFile.empty)
 
   def apply(start: Int, end: Int): Source.Range =
-    Source.Range(start, end)
+    Source.Range(SourceFile.empty, start, end)
 
 enum JObjMember:
   case JLocal(src: Source, name: String, value: JValue)
   case JField(src: Source, key: JValue, plus: Boolean, isHidden: Boolean, value: JValue)
   case JAssert(src: Source, cond: JValue, msg: Option[JValue])
+
+  def setFile(file: SourceFile): JObjMember =
+    this match
+    case v: JLocal => v.copy(src = v.src.setFile(file), value = v.value.setFile(file))
+    case v: JField => v.copy(src = v.src.setFile(file), key = v.key.setFile(file), value = v.value.setFile(file))
+    case v: JAssert => v.copy(src = v.src.setFile(file), cond = v.cond.setFile(file), msg = v.msg.map(_.setFile(file)))
 
 object JObjMember:
   import scala.quoted.*
@@ -252,6 +278,12 @@ object JObjMember:
       case JLocal(src, name, value) => '{ JLocal(${Expr(src)}, ${Expr(name)}, ${Expr(value)}) }
       case JField(src, key, plus, isHidden, value) => '{ JField(${Expr(src)}, ${Expr(key)}, ${Expr(plus)}, ${Expr(isHidden)}, ${Expr(value)}) }
       case JAssert(src, cond, msg) => '{ JAssert(${Expr(src)}, ${Expr(cond)}, ${Expr(msg)}) }
+
+  transparent inline def setFile[T <: JObjMember](member: T, file: SourceFile) =
+    inline member match
+    case v: JLocal => v.copy(src = v.src.setFile(file), value = v.value.setFile(file))
+    case v: JField => v.copy(src = v.src.setFile(file), key = v.key.setFile(file), value = v.value.setFile(file))
+    case v: JAssert => v.copy(src = v.src.setFile(file), cond = v.cond.setFile(file), msg = v.msg.map(_.setFile(file)))
 
 trait HasSource:
   def src: Source
@@ -302,6 +334,49 @@ enum JValue extends HasSource:
   def isNull: Boolean = this match
     case _: JNull => true
     case _ => false
+
+  def setFile(file: SourceFile): JValue =
+    this match
+    case v: JFalse => v.copy(src = v.src.setFile(file))
+    case v: JTrue => v.copy(src = v.src.setFile(file))
+    case v: JNull => v.copy(src = v.src.setFile(file))
+    case v: JSelf => v.copy(src = v.src.setFile(file))
+    case v: JSuper => v.copy(src = v.src.setFile(file))
+    case v: JOuter => v.copy(src = v.src.setFile(file))
+    case v: JString => v.copy(src = v.src.setFile(file))
+    case v: JNum => v.copy(src = v.src.setFile(file))
+    case v: JArray => v.copy(src = v.src.setFile(file), elements = v.elements.map(_.setFile(file)))
+    case v: JObject => v.copy(src = v.src.setFile(file), members = v.members.map(_.setFile(file)))
+    case v: JObjectComprehension => v.copy(
+      src = v.src.setFile(file),
+      preLocals = v.preLocals.map(JObjMember.setFile(_, file)),
+      key = v.key.setFile(file),
+      value = v.value.setFile(file),
+      postLocals = v.preLocals.map(JObjMember.setFile(_, file)),
+      inExpr = v.inExpr.setFile(file),
+      cond = v.cond.map(_.setFile(file)),
+    )
+    case v: JId => v.copy(src = v.src.setFile(file))
+    case v: JGetField => v.copy(src = v.src.setFile(file), loc = v.loc.setFile(file))
+    case v: JIndex => v.copy(src = v.src.setFile(file), loc = v.loc.setFile(file), index = v.index.setFile(file))
+    case v: JSlice => v.copy(
+      src = v.src.setFile(file),
+      loc = v.loc.setFile(file),
+      index = v.index.setFile(file),
+      endIndex = v.endIndex.map(_.setFile(file)),
+      stride = v.stride.map(_.setFile(file)),
+    )
+    case v: JApply => v.copy(src = v.src.setFile(file))
+    case v: JBinaryOp => v.copy(src = v.src.setFile(file))
+    case v: JUnaryOp => v.copy(src = v.src.setFile(file))
+    case v: JLocal => v.copy(src = v.src.setFile(file))
+    case v: JFunction => v.copy(src = v.src.setFile(file))
+    case v: JIf => v.copy(src = v.src.setFile(file))
+    case v: JError => v.copy(src = v.src.setFile(file))
+    case v: JAssert => v.copy(src = v.src.setFile(file))
+    case v: JImport => v.copy(src = v.src.setFile(file))
+    case v: JImportStr => v.copy(src = v.src.setFile(file))
+    case v: JArrayComprehension => v.copy(src = v.src.setFile(file))
 
 object JValue:
   import scala.quoted.*
@@ -393,27 +468,17 @@ object JValue:
     import quotes.reflect.{report, Position}
     Expr(readFileString(relativeFilename))
 
-  inline def reifyFile(inline relativeFilename: String): JValue =
-    ${ reifyFileIml('relativeFilename) }
+  inline def reifyFile(inline relativeFilename: String, inline srcFilename: String): JValue =
+    ${ reifyFileIml('relativeFilename, 'srcFilename) }
 
-  def reifyFileIml(relativeFilename: Expr[String])(using quotes: Quotes): Expr[JValue] =
+  def reifyFileIml(
+    relativeFilename: Expr[String],
+    srcFilename: Expr[String],
+  )(using quotes: Quotes): Expr[JValue] =
     import quotes.reflect.{report, Position}
     import quotes.reflect.given
-    Parser.parserFile.parseAll(readFileString(relativeFilename)).fold(
-      err => report.throwError(err.toString, Position.ofMacroExpansion),
-      jvalue => Expr(jvalue),
-    )
-
-  inline def reify(inline string: String): JValue =
-    ${ reifyIml('string) }
-
-  def reifyIml(string: Expr[String])(using quotes: Quotes): Expr[JValue] =
-    import quotes.reflect._
-    val literal =
-      string.asTerm match
-      case Literal(StringConstant(x)) => x
-      case _ => string.valueOrError
-    Parser.parserFile.parseAll(literal).fold(
+    val file = SourceFile(srcFilename.valueOrError, readFileString(relativeFilename))
+    Parser(file).parseFile.fold(
       err => report.throwError(err.toString, Position.ofMacroExpansion),
       jvalue => Expr(jvalue),
     )

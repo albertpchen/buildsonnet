@@ -30,7 +30,8 @@ object Importer:
       val normalized = importFile.toString
       cache.getOrElseUpdate(normalized, {
         val source = scala.io.Source.fromFile(normalized).getLines.mkString("\n")
-        Parser.parserFile.parseAll(source).fold(
+        val srcFile = SourceFile(normalized, source)
+        Parser(srcFile).parseFile.fold(
           error => ctx.error(src, error.toString),
           ast => {
             given concurrent.ExecutionContextExecutorService = ctx.executionContext
@@ -119,31 +120,30 @@ enum ExprMapper[T <: EvaluatedJValue.JNow]:
     case Now(expr) => Now(fn(expr))
 
 final class StackEntry(
-  val file: SourceFile,
   val src: Source,
   val message: String,
 ):
   override def toString: String =
     val srcString = src match
-    case Source.Generated => file.path
+    case g: Source.Generated => g.file.path
     case src: Source.Range =>
-      val (startLine, startCol) = file.getLineCol(src.start)
-      val (endLine, endCol) = file.getLineCol(src.end)
+      val (startLine, startCol) = src.file.getLineCol(src.start)
+      val (endLine, endCol) = src.file.getLineCol(src.end)
       if startLine == endLine then
-        s"${file.path}:$startLine:$startCol-$endCol"
+        s"${src.file.path}:$startLine:$startCol-$endCol"
       else
-        s"${file.path}:($startLine:$startCol)-($endLine:$endCol)"
+        s"${src.file.path}:($startLine:$startCol)-($endLine:$endCol)"
     if message.isEmpty then srcString else s"$srcString $message"
 
 object StackEntry:
-  def function(file: SourceFile, src: Source): StackEntry =
-    new StackEntry(file, src, "function")
+  def function(src: Source): StackEntry =
+    new StackEntry(src, "function")
 
-  def apply(file: SourceFile, src: Source): StackEntry =
-    new StackEntry(file, src, "")
+  def apply(src: Source): StackEntry =
+    new StackEntry(src, "")
 
-  def objectField(file: SourceFile, src: Source): StackEntry =
-    new StackEntry(file, src, "object")
+  def objectField(src: Source): StackEntry =
+    new StackEntry(src, "object")
 
 final class EvaluationError(
   file: SourceFile,
@@ -159,7 +159,7 @@ object EvaluationError:
     message: String,
     stack: List[StackEntry],
   ): String =
-    val stackSuffix = (StackEntry(file, src) +: stack).mkString("\n  ", "\n  ", "")
+    val stackSuffix = (StackEntry(src) +: stack).mkString("\n  ", "\n  ", "")
     s"$message$stackSuffix"
 
 
@@ -300,7 +300,7 @@ object EvaluationContext:
         this,
         Map.empty,
         stack,
-      ).bind("$", JValue.JSelf(Source.Generated))
+      ).bind("$", JValue.JSelf(Source.Generated(file)))
 
     def withScope(extraScope: Map[String, LazyValue]): EvaluationContext =
       this.copy(scope = scope ++ extraScope)
@@ -309,7 +309,7 @@ object EvaluationContext:
       this.copy(file = newFile)
 
     def functionCtx(fn: Source) =
-      this.copy(stack = StackEntry.function(file, fn) +: stack)
+      this.copy(stack = StackEntry.function(fn) +: stack)
 
     def bind(id: String, value: JValue) =
       val newScope = scope + (id -> LazyValue(this, value))
@@ -373,7 +373,7 @@ object EvaluationContext:
       )
 
     def functionCtx(fn: Source) =
-      this.copy(stack = StackEntry.function(file, fn) +: stack)
+      this.copy(stack = StackEntry.function(fn) +: stack)
 
     def withSelf(newSelf: EvaluatedJValue.JObject) =
       if `self` == newSelf then this else this.copy(selfObj = newSelf)

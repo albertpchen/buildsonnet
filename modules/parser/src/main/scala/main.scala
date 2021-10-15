@@ -105,8 +105,7 @@ object Buildsonnet:
 
     val source = scala.io.Source.fromFile(buildFile.toFile).getLines.mkString("\n")
     val sourceFile = SourceFile(buildFile.toString, source)
-    val parser = Parser.parserFile
-    parser.parseAll(source) match
+    Parser(sourceFile).parseFile match
       case Left(error) =>
         System.err.println("syntax error at: " + error.toString)
         System.exit(1)
@@ -121,7 +120,7 @@ object Buildsonnet:
         val result: Either[EvaluationError, Unit] =
           try
             val buildValue = {
-              val expr = buildCommand.foldLeft(buildObject)(JValue.JGetField(Source.Generated, _, _))
+              val expr = buildCommand.foldLeft(buildObject)(JValue.JGetField(Source.empty, _, _))
               evalUnsafe(ctx)(expr)
             }
             buildValue match
@@ -129,7 +128,7 @@ object Buildsonnet:
               val applied = future.future.map {
                 case fn: EvaluatedJValue.JFunction =>
                   val params = EvaluatedJFunctionParameters(fn.src, Seq(
-                    EvaluatedJValue.JArray(Source.Generated, buildArgs.map(EvaluatedJValue.JString(Source.Generated, _)))
+                    EvaluatedJValue.JArray(Source.empty, buildArgs.map(EvaluatedJValue.JString(Source.empty, _)))
                   ), Seq.empty)
                   fn.fn(ctx, params)
                 case e => e
@@ -137,7 +136,7 @@ object Buildsonnet:
               Right(Await.result(applied, Duration.Inf).await(ctx))
             case fn: EvaluatedJValue.JFunction =>
               val params = EvaluatedJFunctionParameters(fn.src, Seq(
-                EvaluatedJValue.JArray(Source.Generated, buildArgs.map(EvaluatedJValue.JString(Source.Generated, _)))
+                EvaluatedJValue.JArray(Source.empty, buildArgs.map(EvaluatedJValue.JString(Source.empty, _)))
               ), Seq.empty)
               val applied = fn.fn(ctx, params)
               Right(applied.await(ctx))

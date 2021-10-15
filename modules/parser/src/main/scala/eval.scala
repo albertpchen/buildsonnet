@@ -55,7 +55,7 @@ object EvaluatedJObject:
     lazy val cache = {
       given ExecutionContext = ctx.executionContext
       arrayElementsFuture.map { (key, e) =>
-        val valueCtx = ctx.bindEvaluated(forVar, e).withStackEntry(StackEntry.objectField(ctx.file, value.src))
+        val valueCtx = ctx.bindEvaluated(forVar, e).withStackEntry(StackEntry.objectField(value.src))
         key -> LazyValue(valueCtx, value, false)
       }.toMap
     }
@@ -151,10 +151,10 @@ object EvaluatedJValue:
   extension [T <: EvaluatedJValue](future: concurrent.Future[T])
     inline def toJValue(using ctx: concurrent.ExecutionContext): EvaluatedJValue =
       inline future match
-      case future: concurrent.Future[EvaluatedJValue.JNow] => EvaluatedJValue.JFuture(Source.Generated, future)
-      case future: concurrent.Future[EvaluatedJValue.JFuture] => EvaluatedJValue.JFuture(Source.Generated, future.flatMap(_.future))
+      case future: concurrent.Future[EvaluatedJValue.JNow] => EvaluatedJValue.JFuture(Source.empty, future)
+      case future: concurrent.Future[EvaluatedJValue.JFuture] => EvaluatedJValue.JFuture(Source.empty, future.flatMap(_.future))
       case future: concurrent.Future[EvaluatedJValue] =>
-        EvaluatedJValue.JFuture(Source.Generated, future.flatMap {
+        EvaluatedJValue.JFuture(Source.empty, future.flatMap {
           case now: EvaluatedJValue.JNow => concurrent.Future(now)
           case future: EvaluatedJValue.JFuture => future.future
         })
@@ -297,7 +297,7 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
         case _: EvaluatedJValue.JNull => None
         case expr: EvaluatedJValue.JString =>
           val key = expr.str
-          val valueCtx = () => objCtx.withStackEntry(StackEntry.objectField(objCtx.file, value.src))
+          val valueCtx = () => objCtx.withStackEntry(StackEntry.objectField(value.src))
           val newValue =
             if plus then
               JValue.JBinaryOp(
