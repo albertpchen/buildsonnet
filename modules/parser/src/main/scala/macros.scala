@@ -21,6 +21,37 @@ object macros:
     case other => list += other
     list
 
+  transparent inline def typedUnionApply[T, V](scrutinee: Any, inline fn: Any => Any): V = ${ typedUnionApplyImpl[T, V]('scrutinee, 'fn) }
+  def typedUnionApplyImpl[T: Type, V: Type](scrutinee: Expr[Any], casesExpr: Expr[Any => Any])(using quotes: Quotes): Expr[V] =
+    import quotes.reflect._
+    val cases = casesExpr.asTerm match
+      case Inlined(_, _, NamedArg(_, Block(Seq(DefDef(_, _, _, Some(Match(_, cases)))), _))) => cases
+      case Inlined(_, _, Block(Seq(DefDef(_, _, _, Some(Match(_, cases)))), _)) => cases
+      case a =>
+        report.throwError(s"extra cases must be a lambda with a top-level match statement\n${a}")
+    var fallback: Option[CaseDef] = None
+    val typeMapping = collection.mutable.ArrayBuffer[(TypeRepr, CaseDef)]()
+    cases.foreach {
+      // case caseDef @ CaseDef(Typed(_: Ident, typeTree), None, rhs) => typeMapping += (typeTree.tpe -> caseDef)
+      case caseDef @ CaseDef(Ident("_"), None, _) => fallback = Some(caseDef)
+      case caseDef @ CaseDef(Typed(id: Ident, typeTree), None, rhs) =>
+        typeTree.tpe match
+        case Applied(_, List(tpe1: TypeTree, tpe2: TypeTree)) =>
+          typeMapping += (tpe1.tpe -> CaseDef(Typed(id, tpe2), None, rhs))
+        case _ => 
+          report.throwError(s"cases must be type of the form 'case _: (Type1, Type2) => expr'")
+      case c =>
+        report.throwError(s"cases must be type of the form 'case _: Type => expr'")
+    }
+    val typeMap = typeMapping.toMap
+    val matchedCases = types.map { tpe =>
+      typeMap.collectFirst {
+        case (matchType, caseDef) if tpe <:< matchType => caseDef
+      }.getOrElse(report.throwError(s"invalid type ${tpe.show}, expected one of: ${typeMap.map(_._1.show).mkString(", ")}"))
+    }.toList
+    val types = unfoldUnionType(quotes)(TypeRepr.of[T].dealias).toSeq
+    Match(scrutinee.asTerm, fallback.fold(matchedCases)(matchedCases :+ _)).asExprOf[V]
+
   inline def mapUnionType[T, V](inline fn: Any => V): Seq[V] = ${ mapUnionTypeImp[T, V]('fn) }
   def mapUnionTypeImp[T: Type, V: Type](casesExpr: Expr[Any => V])(using quotes: Quotes): Expr[Seq[V]] =
     import quotes.reflect._

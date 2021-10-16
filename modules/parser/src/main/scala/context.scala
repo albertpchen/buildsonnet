@@ -1,6 +1,9 @@
 package root
 
-import scala.concurrent.Future
+import monix.eval.Task
+
+import scala.concurrent.{ExecutionContext, Future}
+import cats.data.Nested
 
 sealed trait Importer:
   def `import`(ctx: EvaluationContext, src: Source, fileName: String): EvaluatedJValue
@@ -14,7 +17,7 @@ object Importer:
   def apply(): Importer = new Importer:
     private val cache = new collection.concurrent.TrieMap[String, EvaluatedJValue]()
     private val strCache = new collection.concurrent.TrieMap[String, String]()
-    def `import`(ctx: EvaluationContext, src: Source, fileName: String): EvaluatedJValue =
+    def `import`(ctx: EvaluationContext, src: Source, fileName: String): Task[EvaluatedJValue] =
       val currFile = new java.io.File(ctx.file.path)
       val importFile = {
         val currFileParent = currFile.toPath.getParent
@@ -28,20 +31,28 @@ object Importer:
       if importFile == currFile then
         ctx.error(src, s"file $importFile imports itself")
       val normalized = importFile.toString
-      cache.getOrElseUpdate(normalized, {
+      // TODO: add semaphore in case of concurrent imports of same file
+      cache.get(normalized).fold {
         val source = scala.io.Source.fromFile(normalized).getLines.mkString("\n")
         val srcFile = SourceFile(normalized, source)
         Parser(srcFile).parseFile.fold(
-          error => ctx.error(src, error.toString),
+          error => {
+            val result = ctx.error(src, error.toString)
+            cache(normalized) = result
+            Task.pure(result)
+          },
           ast => {
             given concurrent.ExecutionContextExecutorService = ctx.executionContext
             val sourceFile = SourceFile(normalized, source)
             val withOutStd = EvaluationContext(sourceFile, ctx.workspaceDir, ctx.bloopServer)
             val newCtx = withOutStd.bindEvaluated("std", Std.obj(withOutStd))
-            evalUnsafe(newCtx)(ast)
+            val evaluated = evalUnsafe(newCtx)(ast)
+            evaluated.map(cache(normalized) = _)
+            evaluated
           }
         )
-      })
+      } { a => Task.pure(a)
+      }
 
     def importStr(ctx: EvaluationContext, src: Source, fileName: String): EvaluatedJValue.JString =
       val currFile = new java.io.File(ctx.file.path)
@@ -53,7 +64,7 @@ object Importer:
       EvaluatedJValue.JString(src, contents)
 
 sealed trait LazyValue:
-  def evaluated: EvaluatedJValue
+  def evaluated: Task[EvaluatedJValue]
 
 sealed trait LazyObjectValue extends LazyValue:
   val isHidden: Boolean
@@ -62,24 +73,24 @@ sealed trait LazyObjectValue extends LazyValue:
 object LazyValue:
   def apply(ctx: () => EvaluationContext, code: JValue): LazyValue =
     new LazyValue:
-      lazy val evaluated: EvaluatedJValue = evalUnsafe(ctx())(code)
+      val evaluated = evalUnsafe(ctx())(code).memoize
       override def toString = code.toString
 
   def apply(ctx: EvaluationContext, code: JValue): LazyValue =
     new LazyValue:
-      lazy val evaluated: EvaluatedJValue = evalUnsafe(ctx)(code)
+      val evaluated = evalUnsafe(ctx)(code).memoize
       override def toString = code.toString
 
   def strict(value: EvaluatedJValue): LazyValue =
     new LazyValue:
-      val evaluated: EvaluatedJValue = value
+      val evaluated = Task.pure(value)
       override def toString = value.toString
 
   def strictObject(value: EvaluatedJValue, hidden: Boolean): LazyObjectValue =
     new LazyObjectValue:
       val isHidden = hidden
       def withHidden(isHidden: Boolean) = strictObject(value, isHidden)
-      val evaluated: EvaluatedJValue = value
+      val evaluated = Task.pure(value)
       override def toString = value.toString
 
   private def withHiddenImp(newIsHidden: Boolean, lazyVal: LazyObjectValue): LazyObjectValue =
@@ -96,7 +107,7 @@ object LazyValue:
     new LazyObjectValue:
       self =>
       val isHidden = hidden
-      lazy val evaluated: EvaluatedJValue = evalUnsafe(ctx())(code)
+      val evaluated = evalUnsafe(ctx())(code).memoize
 
       def withHidden(hidden: Boolean) = withHiddenImp(hidden, this)
       override def toString = code.toString
@@ -105,19 +116,11 @@ object LazyValue:
     new LazyObjectValue:
       self =>
       val isHidden = hidden
-      lazy val evaluated: EvaluatedJValue = evalUnsafe(ctx)(code)
+      val evaluated = evalUnsafe(ctx)(code).memoize
 
       def withHidden(hidden: Boolean) = withHiddenImp(hidden, this)
       override def toString = code.toString
 
-enum ExprMapper[T <: EvaluatedJValue.JNow]:
-  case Future(ctx: concurrent.ExecutionContext, future: concurrent.Future[T])
-  case Now(expr: T)
-
-  def map[A <: EvaluatedJValue.JNow](fn: T => A): ExprMapper[A] =
-    this match
-    case Future(ctx @ given concurrent.ExecutionContext, future) => Future(ctx, future.map(fn))
-    case Now(expr) => Now(fn(expr))
 
 final class StackEntry(
   val src: Source,
@@ -145,23 +148,6 @@ object StackEntry:
   def objectField(src: Source): StackEntry =
     new StackEntry(src, "object")
 
-final class EvaluationError(
-  file: SourceFile,
-  src: Source,
-  message: String,
-  stack: List[StackEntry],
-) extends Exception(EvaluationError.toString(file, src, message, stack))
-
-object EvaluationError:
-  def toString(
-    file: SourceFile,
-    src: Source,
-    message: String,
-    stack: List[StackEntry],
-  ): String =
-    val stackSuffix = (StackEntry(src) +: stack).mkString("\n  ", "\n  ", "")
-    s"$message$stackSuffix"
-
 
 sealed trait EvaluationContext:
   def withScope(scope: Map[String, LazyValue]): EvaluationContext
@@ -182,7 +168,7 @@ sealed trait EvaluationContext:
   final def runJob(src: Source, desc: JobDescription): Future[EvaluatedJValue.JJob] =
     jobRunner.run(this, src, desc)
 
-  def error(src: Source, message: String): Nothing
+  def error(src: Source, message: String): EvaluatedJValue.JError
   def lookup(src: Source, id: String): LazyValue
   def objectCtx(obj: EvaluatedJValue.JObject): ObjectEvaluationContext
   def functionCtx(fn: Source): EvaluationContext
@@ -205,9 +191,10 @@ sealed trait ObjectEvaluationContext extends EvaluationContext:
 given theExpr(using expr: EvaluatedJValue): EvaluatedJValue = expr
 
 object EvaluationContext:
+
   inline def typeString[T]: String =
     val types = macros.mapUnionType[T, String] {
-      case _: EvaluatedJValue.JBoolean => "bool"
+      case _: EvaluatedJValue.JBoolean => "boolean"
       case _: EvaluatedJValue.JNull => "null"
       case _: EvaluatedJValue.JString => "string"
       case _: EvaluatedJValue.JNum => "number"
@@ -216,7 +203,6 @@ object EvaluationContext:
       case _: EvaluatedJValue.JArray => "array"
       case _: EvaluatedJValue.JObject => "object"
       case _: EvaluatedJValue.JFunction => "function"
-      case _: EvaluatedJValue.JFuture => "future"
     }
     if types.size == 1 then
       types.head
@@ -238,42 +224,50 @@ object EvaluationContext:
     case _: EvaluatedJValue.JArray => "array"
     case _: EvaluatedJValue.JObject => "object"
     case _: EvaluatedJValue.JFunction => "function"
-    case _: EvaluatedJValue.JFuture => "future"
 
-  import concurrent.Future
   extension (ctx: EvaluationContext)
-    def decode[T: JDecoder](expr: EvaluatedJValue): Future[T] = JDecoder[T].decode(ctx, expr)
-    inline def expectBoolean(code: JValue): Future[EvaluatedJValue.JBoolean] = expectType[EvaluatedJValue.JBoolean](code)
-    inline def expectBoolean(expr: EvaluatedJValue): Future[EvaluatedJValue.JBoolean] = expectType[EvaluatedJValue.JBoolean](expr)
-    inline def expectNum(code: JValue): Future[EvaluatedJValue.JNum] = expectType[EvaluatedJValue.JNum](code)
-    inline def expectNum(expr: EvaluatedJValue): Future[EvaluatedJValue.JNum] = expectType[EvaluatedJValue.JNum](expr)
-    inline def expectString(code: JValue): Future[EvaluatedJValue.JString] = expectType[EvaluatedJValue.JString](code)
-    inline def expectString(expr: EvaluatedJValue): Future[EvaluatedJValue.JString] = expectType[EvaluatedJValue.JString](expr)
-    inline def expectFieldName(code: JValue): Future[EvaluatedJValue.JString | EvaluatedJValue.JNull] =
-      val expr = evalUnsafe(ctx)(code)
-      expectType[EvaluatedJValue.JString | EvaluatedJValue.JNull](expr, s"Field name must be string or null, got ${typeString(theExpr)}")
-    inline def expectArray(code: JValue): Future[EvaluatedJValue.JArray] = expectType[EvaluatedJValue.JArray](code)
-    inline def expectArray(expr: EvaluatedJValue): Future[EvaluatedJValue.JArray] = expectType[EvaluatedJValue.JArray](expr)
-    inline def expectObject(code: JValue): Future[EvaluatedJValue.JObject] = expectType[EvaluatedJValue.JObject](code)
-    inline def expectObject(expr: EvaluatedJValue): Future[EvaluatedJValue.JObject] = expectType[EvaluatedJValue.JObject](expr)
-    inline def expectFunction(code: JValue): Future[EvaluatedJValue.JFunction] = expectType[EvaluatedJValue.JFunction](code)
-    inline def expectFunction(expr: EvaluatedJValue): Future[EvaluatedJValue.JFunction] = expectType[EvaluatedJValue.JFunction](expr)
+    def decode[T: JDecoder](expr: EvaluatedJValue): TypedJValueTask[T] = JDecoder[T].decode(ctx, expr)
 
-    inline def expectType[T <: EvaluatedJValue.JNow](expr: EvaluatedJValue, msg: EvaluatedJValue ?=> String): Future[T] =
-      implicit val ec = ctx.executionContext
-      expr match
-      case t: T => Future(t)
-      case f: EvaluatedJValue.JFuture => f.future.map {
-        case t: T => t
-        case expr => ctx.error(expr.src, msg(using expr))
-      }
-      case _ => ctx.error(expr.src, msg(using expr))
+    inline def expectBoolean(code: JValue): Nested[Task, TypedJValue, Boolean] = expectType[Boolean](code)
+    inline def expectBoolean(expr: EvaluatedJValue): TypedJValue[Boolean] = expectType[Boolean](expr)
 
-    inline def expectType[T <: EvaluatedJValue.JNow](expr: EvaluatedJValue): Future[T] =
+    inline def expectNum(code: JValue): Nested[Task, TypedJValue, Double] = expectType[Double](code)
+    inline def expectNum(expr: EvaluatedJValue): TypedJValue[Double] = expectType[Double](expr)
+
+    inline def expectString(code: JValue): Nested[Task, TypedJValue, String] = expectType[String](code)
+    inline def expectString(expr: EvaluatedJValue): TypedJValue[String] = expectType[String](expr)
+
+    inline def expectArray(code: JValue): Nested[Task, TypedJValue, Seq[EvaluatedJValue]] = expectType[Seq[EvaluatedJValue]](code)
+    inline def expectArray(expr: EvaluatedJValue): TypedJValue[Seq[EvaluatedJValue]] = expectType[Seq[EvaluatedJValue]](expr)
+
+    inline def expectObject(code: JValue): Nested[Task, TypedJValue, EvaluatedJObject] = expectType[EvaluatedJObject](code)
+    inline def expectObject(expr: EvaluatedJValue): TypedJValue[EvaluatedJObject] = expectType[EvaluatedJObject](expr)
+
+    inline def expectFunction(code: JValue): Nested[Task, TypedJValue, EvaluatedJValue.JFunction] = expectType[EvaluatedJValue.JFunction](code)
+    inline def expectFunction(expr: EvaluatedJValue): TypedJValue[EvaluatedJValue.JFunction] = expectType[EvaluatedJValue.JFunction](expr)
+
+    inline def expectFieldName(code: JValue): Nested[Task, TypedJValue, String | Unit] =
+      Nested(evalUnsafe(ctx)(code).map(
+        expectType[String | Unit](_, s"Field name must be string or null, got ${typeString(theExpr)}")
+      ))
+
+    inline def expectType[T](expr: EvaluatedJValue, msg: EvaluatedJValue ?=> String): TypedJValue[T] =
+      given ExecutionContext = ctx.executionContext
+      macros.typedUnionApply[T, TypedJValue[T]](expr, {
+        case _: Boolean => (v: EvaluatedJValue.JBoolean) => TypedJValue(v.value)
+        case _: String  => (v: EvaluatedJValue.JString) => TypedJValue(v.str)
+        case _: Double  => (v: EvaluatedJValue.JNum) => TypedJValue(v.double)
+        case _: Seq[EvaluatedJValue]  => (v: EvaluatedJValue.JArray) => TypedJValue(v.elements)
+        case _: EvaluatedJObject  => (v: EvaluatedJValue.JObject) => TypedJValue(v.imp)
+        case _: Unit  => (v: EvaluatedJValue.JNull) => TypedJValue(())
+        case _ => TypedJValue.error(ctx.error(expr.src, msg(using expr)))
+      })
+
+    inline def expectType[T](expr: EvaluatedJValue): TypedJValue[T] =
       expectType[T](expr, s"Unexpected type ${typeString(theExpr)}, expected ${typeString[T]}")
 
-    inline def expectType[T <: EvaluatedJValue.JNow](code: JValue): Future[T] =
-      expectType[T](evalUnsafe(ctx)(code))
+    inline def expectType[T](code: JValue): Nested[Task, TypedJValue, T] =
+      Nested(evalUnsafe(ctx)(code).map(expectType[T](_)))
 
   private[root] case class Imp(
     val bloopServer: Bsp4sBloopServerConnection,
@@ -285,11 +279,12 @@ object EvaluationContext:
     stack: List[StackEntry],
     executionContext: concurrent.ExecutionContextExecutorService,
   ) extends EvaluationContext:
-    def error(src: Source, message: String): Nothing = throw new EvaluationError(file, src, message, stack)
+    def error(src: Source, message: String): EvaluatedJValue.JError =
+      EvaluatedJValue.JError(src, message, stack)
 
     def lookup(src: Source, id: String): LazyValue =
       scope.get(id).getOrElse(
-        error(src, s"no variable $id defined")
+        LazyValue.strict(error(src, s"no variable $id defined"))
       )
 
     def objectCtx(obj: EvaluatedJValue.JObject): ObjectEvaluationContext =
@@ -323,8 +318,8 @@ object EvaluationContext:
       val newScope = scope + (id -> LazyValue(ctx, value))
       this.copy(scope = newScope)
 
-    def self(src: Source): EvaluatedJValue.JObject = error(src, "no self")
-    def `super`(src: Source): EvaluatedJValue.JObject = error(src, "no super")
+    def self(src: Source): EvaluatedJValue.JError | EvaluatedJValue.JObject = error(src, "no self")
+    def `super`(src: Source): EvaluatedJValue.JError | EvaluatedJValue.JObject = error(src, "no super")
     def hasSuper: Boolean = false
     def withStackEntry(entry: StackEntry) = this.copy(stack = entry +: stack)
 
@@ -342,7 +337,8 @@ object EvaluationContext:
     def `super`(src: Source) = superChain.headOption.getOrElse(topCtx.`super`(src))
     def hasSuper: Boolean = superChain.headOption.isDefined
 
-    def error(src: Source, message: String): Nothing = throw new EvaluationError(file, src, message, stack)
+    def error(src: Source, message: String): EvaluatedJValue.JError =
+      EvaluatedJValue.JError(src, message, stack)
 
     lazy val cache = collection.mutable.HashMap[String, EvaluatedJValue]()
     val scope = locals.map {
