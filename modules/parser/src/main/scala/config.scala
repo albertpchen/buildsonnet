@@ -18,10 +18,11 @@ import bloop.config.Config.{
 }
 import bloop.config.PlatformFiles.Path
 
+import monix.eval.Task
+
 object Config:
   given JDecoder[CompileOrder] with
-    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): concurrent.Future[CompileOrder] =
-      given concurrent.ExecutionContext = ctx.executionContext
+    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Task[CompileOrder] =
       path.expectType[EvaluatedJValue.JString](ctx, expr).map { str =>
         if str.str == Mixed.id then Mixed
         else if str.str == JavaThenScala.id then JavaThenScala
@@ -29,16 +30,14 @@ object Config:
         else path.error(ctx, expr.src, "not a valid compileOrder")
       }
   given JDecoder[LinkerMode] with
-    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): concurrent.Future[LinkerMode] =
-      given concurrent.ExecutionContext = ctx.executionContext
+    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Task[LinkerMode] =
       path.expectType[EvaluatedJValue.JString](ctx, expr).map { str =>
         if str.str == LinkerMode.Debug.id then LinkerMode.Debug
         else if str.str == LinkerMode.Release.id then LinkerMode.Release
         else path.error(ctx, expr.src, "not a valid linkerMode")
       }
   given JDecoder[ModuleKindJS] with
-    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): concurrent.Future[ModuleKindJS] =
-      given concurrent.ExecutionContext = ctx.executionContext
+    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Task[ModuleKindJS] =
       path.expectType[EvaluatedJValue.JString](ctx, expr).map { str =>
         if str.str == ModuleKindJS.NoModule.id then ModuleKindJS.NoModule
         else if str.str == ModuleKindJS.CommonJSModule.id then ModuleKindJS.CommonJSModule
@@ -54,8 +53,7 @@ object Config:
   given JDecoder[Platform.Jvm] = JDecoder.derived[Platform.Jvm]
   given JDecoder[Platform.Native] = JDecoder.derived[Platform.Native]
   given JDecoder[Platform] with
-    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): concurrent.Future[Platform] =
-      given concurrent.ExecutionContext = ctx.executionContext
+    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Task[Platform] =
       path.expectType[EvaluatedJValue.JObject](ctx, expr).flatMap { obj =>
         val name = obj.members().getOrElse("name", path.error(ctx, expr.src, "platform must have a 'name' field")).evaluated
         path.withField("name").expectType[EvaluatedJValue.JString](ctx, name).flatMap { name =>

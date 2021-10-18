@@ -40,7 +40,7 @@ def connectToLauncher(
   bloopVersion: String,
   bloopPort: Int,
   logStream: java.io.PrintStream,
-)(using ec: ExecutionContextExecutorService): Future[SocketConnection] =
+)(using ec: Scheduler): Future[SocketConnection] =
   val launcherInOutPipe = Pipe.open()
   val launcherIn = Channels.newInputStream(launcherInOutPipe.source())
   val clientOut = Channels.newOutputStream(launcherInOutPipe.sink())
@@ -62,7 +62,7 @@ def connectToLauncher(
   )
 
   val finished = Promise[Unit]()
-  val job = ec.submit(new Runnable {
+  val job = ec.scheduleOnce(0, java.util.concurrent.TimeUnit.MILLISECONDS, new Runnable {
     override def run(): Unit = {
       launcher.runLauncher(
         bloopVersion,
@@ -83,7 +83,7 @@ def connectToLauncher(
           clientOut.flush()
           clientOut.close()
         },
-        Cancelable(() => job.cancel(true))
+        Cancelable(() => job.cancel())
       ),
       finished
     )
@@ -195,9 +195,9 @@ def bsp4sClient(
 
 
 sealed trait Bsp4sBloopServerConnection:
-  def shutdown(): Future[Unit]
-  def compile(targetId: String): Future[Either[String, bsp.CompileResult]]
-  def jvmRunEnvironment(targetId: String): Future[Either[String, bsp.JvmRunEnvironmentResult]]
+  def shutdown(): Task[Unit]
+  def compile(targetId: String): Task[Either[String, bsp.CompileResult]]
+  def jvmRunEnvironment(targetId: String): Task[Either[String, bsp.JvmRunEnvironmentResult]]
 
 object Bsp4sBloopServerConnection:
   def std(
@@ -206,82 +206,84 @@ object Bsp4sBloopServerConnection:
     scribeLogger: scribe.Logger,
     bloopPort: Int,
     logStream: java.io.PrintStream,
-  )(using ExecutionContextExecutorService): Bsp4sBloopServerConnection =
+  ): Bsp4sBloopServerConnection =
     new Bsp4sBloopServerConnection:
-      private val launchedServer = new AtomicBoolean(false)
+      private val launchedServer = Task(new AtomicBoolean(false)).memoize
 
-      private given scheduler: Scheduler = Scheduler(implicitly[java.util.concurrent.ExecutorService])
-
-      private lazy val pair = {
+      private val pair = Task.deferFutureAction { scheduler =>
+        given Scheduler = scheduler
         val services = BuildsonnetServices(workspace, scribeLogger, logger)
-        val connection = Await.result(
-          connectToLauncher("buildsonnet", "1.4.9", bloopPort, logStream),
-          Duration.Inf
-        )
-        val client =  Await.result(
-          bsp4sClient(workspace, services.services, connection, scribeLogger, scheduler).runToFuture,
-          Duration.Inf
-        )
-        (connection, client, services)
-      }
-      private def connection = pair._1
-      given jsonrpc4s.RpcClient = pair._2
-      private def services = pair._3
+        for
+          connection <- connectToLauncher("buildsonnet", "1.4.9", bloopPort, logStream)
+          client <- bsp4sClient(workspace, services.services, connection, scribeLogger, scheduler).runToFuture
+        yield
+          (connection, client, services)
+      }.memoize
+      private def connection = pair.map(_._1)
+      private def services = pair.map(_._3)
 
       private val isShuttingDown = new AtomicBoolean(false)
 
-      def shutdown(): Future[Unit] = Future {
+      def shutdown(): Task[Unit] = launchedServer.flatMap { launchedServer =>
         if launchedServer.get() then
-          try
-            if (isShuttingDown.compareAndSet(false, true))
-              for
-                _ <- endpoints.Build.shutdown.request(bsp.Shutdown())
-                _ = endpoints.Build.exit.notify(bsp.Exit())
-              do
-                services.cancel()
-                connection.cancelables.foreach(_.cancel())
-                logStream.print("Shut down connection with bloop server.")
-          catch
-            case _: java.util.concurrent.TimeoutException =>
-              logger.error(s"timeout: bloop server during shutdown")
-            case e: Throwable =>
-              logger.error(s"bloop server shutdown $e")
-        logStream.close()
+          Task.deferFutureAction { scheduler =>
+            given Scheduler = scheduler
+            pair.map { (connection, client, services) =>
+              given jsonrpc4s.RpcClient = client
+              try
+                if (isShuttingDown.compareAndSet(false, true))
+                  for
+                    _ <- endpoints.Build.shutdown.request(bsp.Shutdown())
+                    _ = endpoints.Build.exit.notify(bsp.Exit())
+                  do
+                    services.cancel()
+                    connection.cancelables.foreach(_.cancel())
+                    logStream.print("Shut down connection with bloop server.")
+              catch
+                case _: java.util.concurrent.TimeoutException =>
+                  logger.error(s"timeout: bloop server during shutdown")
+                case e: Throwable =>
+                  logger.error(s"bloop server shutdown $e")
+              logStream.close()
+            }.runToFuture
+          }
+        else
+          Task.now(logStream.close())
       }
 
-      def compile(targetId: String): Future[Either[String, bsp.CompileResult]] =
-        compileTask(targetId).runToFuture
-
-      def compileTask(targetId: String): Task[Either[String, bsp.CompileResult]] =
-        val params = bsp.CompileParams(
-          List(bsp.BuildTargetIdentifier(bsp.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
-            None,
-            None,
-        )
-        endpoints.BuildTarget.compile.request(params).map {
-          case jsonrpc4s.RpcSuccess(value, _) => Right(value)
-          case jsonrpc4s.RpcFailure(methodName, underlying) => Left(jsonrpc4s.RpcFailure.toMsg(methodName, underlying))
+      def compile(targetId: String): Task[Either[String, bsp.CompileResult]] =
+        pair.flatMap { (connection, client, services) =>
+          given jsonrpc4s.RpcClient = client
+          val params = bsp.CompileParams(
+            List(bsp.BuildTargetIdentifier(bsp.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
+              None,
+              None,
+          )
+          endpoints.BuildTarget.compile.request(params).map {
+            case jsonrpc4s.RpcSuccess(value, _) => Right(value)
+            case jsonrpc4s.RpcFailure(methodName, underlying) => Left(jsonrpc4s.RpcFailure.toMsg(methodName, underlying))
+          }
         }
 
-      def jvmRunEnvironment(targetId: String): Future[Either[String, bsp.JvmRunEnvironmentResult]] =
-        jvmRunEnvironmentTask(targetId).runToFuture
-
-      def jvmRunEnvironmentTask(targetId: String): Task[Either[String, bsp.JvmRunEnvironmentResult]] =
-        compileTask(targetId).flatMap {
-          case Right(compileResult) =>
-            compileResult.statusCode match
-            case bsp.StatusCode.Ok =>
-              val params = bsp.JvmRunEnvironmentParams(
-                List(bsp.BuildTargetIdentifier(bsp.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
-                None
-              )
-              endpoints.BuildTarget.jvmRunEnvironment.request(params).map {
-                case jsonrpc4s.RpcSuccess(value, _) => Right(value)
-                case jsonrpc4s.RpcFailure(methodName, underlying) => Left(jsonrpc4s.RpcFailure.toMsg(methodName, underlying))
-              }
-            case bsp.StatusCode.Error =>
-              Task.pure(Left(s"compilation for '$targetId' was cancelled"))
-            case  bsp.StatusCode.Cancelled =>
-              Task.pure(Left(s"compilation for '$targetId' failed"))
-          case Left(msg) => Task.pure(Left(msg))
+      def jvmRunEnvironment(targetId: String): Task[Either[String, bsp.JvmRunEnvironmentResult]] =
+        pair.flatMap { (connection, client, services) =>
+          given jsonrpc4s.RpcClient = client
+          compile(targetId).flatMap {
+            case Right(compileResult) =>
+              compileResult.statusCode match
+              case bsp.StatusCode.Ok =>
+                val params = bsp.JvmRunEnvironmentParams(
+                  List(bsp.BuildTargetIdentifier(bsp.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
+                  None
+                )
+                endpoints.BuildTarget.jvmRunEnvironment.request(params).map {
+                  case jsonrpc4s.RpcSuccess(value, _) => Right(value)
+                  case jsonrpc4s.RpcFailure(methodName, underlying) => Left(jsonrpc4s.RpcFailure.toMsg(methodName, underlying))
+                }
+              case bsp.StatusCode.Error =>
+                Task.pure(Left(s"compilation for '$targetId' was cancelled"))
+              case  bsp.StatusCode.Cancelled =>
+                Task.pure(Left(s"compilation for '$targetId' failed"))
+            case Left(msg) => Task.pure(Left(msg))
+          }
         }

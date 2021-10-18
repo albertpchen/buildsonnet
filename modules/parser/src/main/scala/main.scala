@@ -111,6 +111,7 @@ object Buildsonnet:
         System.exit(1)
       case Right(buildObject) =>
         val exec = java.util.concurrent.Executors.newCachedThreadPool()
+        given monix.execution.Scheduler = monix.execution.Scheduler(exec)
         given ExecutionContextExecutorService = ExecutionContext.fromExecutorService(exec)
         val withoutStd = EvaluationContext(
           file = sourceFile,
@@ -133,7 +134,7 @@ object Buildsonnet:
                   fn.fn(ctx, params)
                 case e => e
               }
-              Right(Await.result(applied, Duration.Inf).await(ctx))
+              Right(Await.result(applied.runToFuture, Duration.Inf).await(ctx))
             case fn: EvaluatedJValue.JFunction =>
               val params = EvaluatedJFunctionParameters(fn.src, Seq(
                 EvaluatedJValue.JArray(Source.empty, buildArgs.map(EvaluatedJValue.JString(Source.empty, _)))
@@ -145,7 +146,7 @@ object Buildsonnet:
           catch
             case err: EvaluationError => Left(err)
           finally
-            Await.result(ctx.bloopServer.shutdown(), Duration.Inf)
+            Await.result(ctx.bloopServer.shutdown().runToFuture, Duration.Inf)
             summon[ExecutionContextExecutorService].shutdown()
         result match
           case Left(err) =>

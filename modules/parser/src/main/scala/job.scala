@@ -1,8 +1,7 @@
 package root
 
-import scala.concurrent.{Await, ExecutionContext, Future}
-import scala.concurrent.duration.Duration
-import scala.util.{Failure, Success}
+import monix.eval.Task
+import monix.execution.Scheduler
 
 import slick.jdbc.JdbcBackend.Database
 import slick.jdbc.SQLiteProfile.api
@@ -75,7 +74,7 @@ sealed trait JobRunner:
     ctx: EvaluationContext,
     src: Source,
     desc: JobDescription,
-  ): Future[EvaluatedJValue.JJob]
+  ): Task[EvaluatedJValue.JJob]
 
 object JobRunner:
   import java.nio.file.attribute.FileTime
@@ -142,17 +141,14 @@ object JobRunner:
         .get("lastModifiedTime")
         .asInstanceOf[FileTime]
 
-  def apply()(using ExecutionContext): JobRunner = new JobRunner:
-    private val databaseMap = collection.concurrent.TrieMap[String, Future[(api.TableQuery[JobTable], Database)]]()
-    def database(ctx: EvaluationContext): Future[(api.TableQuery[JobTable], Database)] =
-      databaseMap.getOrElseUpdate(ctx.workspaceDir.toString, {
+  def apply(): JobRunner = new JobRunner:
+    def database(ctx: EvaluationContext): Task[(api.TableQuery[JobTable], Database)] =
       val jobTable = new api.TableQuery(new JobTable(_))
       val database = Database.forURL(
         s"jdbc:sqlite:${ctx.workspaceDir.toString}/buildsonnet.db",
         driver = "org.sqlite.JDBC",
       )
-      database.run(jobTable.schema.createIfNotExists).map { _ => jobTable -> database }
-    })
+      Task.deferFutureAction(database.run(jobTable.schema.createIfNotExists).map { _ => jobTable -> database })
 
     private def resolveCommand(
       cmd: String,
@@ -176,8 +172,7 @@ object JobRunner:
       ctx: EvaluationContext,
       src: Source,
       desc: JobDescription,
-    ): Future[EvaluatedJValue.JJob] =
-      given ExecutionContext = ctx.executionContext
+    ): Task[EvaluatedJValue.JJob] =
       database(ctx).flatMap { (jobTable, database) =>
         desc.directory.foreach { directory =>
           if directory.startsWith("/") then ctx.error(src, s"job directory may not be an absolute path, got $directory")
@@ -217,24 +212,27 @@ object JobRunner:
 
         val cached =
           if isOutputStale then
-            Future(None)
+            Task.now(None)
           else
             val inputFilesBytes = stringsToByteArray(desc.inputFiles.map(_.path.toString))
-            database.run(
-              jobTable
-                .filter(_.cmdline === stringsToByteArray(desc.cmdline))
-                .filter(_.envVars === stringsToByteArray(desc.envVars.getOrElse(Map.empty).toSeq.sorted.flatMap((a, b) => Seq(a, b))))
-                .filter(_.inputFiles === inputFilesBytes)
-                .filter(_.stdin === desc.stdin.getOrElse(""))
-                .filter(_.directory === directory.toString)
-                .take(1)
-                .result
-            ).map(_.headOption)
+            Task.deferFutureAction(a => {
+              given Scheduler = a
+              database.run(
+                jobTable
+                  .filter(_.cmdline === stringsToByteArray(desc.cmdline))
+                  .filter(_.envVars === stringsToByteArray(desc.envVars.getOrElse(Map.empty).toSeq.sorted.flatMap((a, b) => Seq(a, b))))
+                  .filter(_.inputFiles === inputFilesBytes)
+                  .filter(_.stdin === desc.stdin.getOrElse(""))
+                  .filter(_.directory === directory.toString)
+                  .take(1)
+                  .result
+              ).map(_.headOption)
+          })
         cached.flatMap {
           case Some(cached) if !isOutputStale =>
             val jobRow = JobRow.fromTuple(cached)
             val outputs: Seq[EvaluatedJValue.JPath] = outputPaths.distinct.map(EvaluatedJValue.JPath(src, _))
-            Future(EvaluatedJValue.JJob(src, desc, jobRow.stdout, jobRow.stderr, outputs, jobRow.exitCode))
+            Task.now(EvaluatedJValue.JJob(src, desc, jobRow.stdout, jobRow.stderr, outputs, jobRow.exitCode))
           case _ =>
             println(desc.cmdline.mkString(" ")) // print cmdline feedback before running
             val process =
@@ -256,18 +254,21 @@ object JobRunner:
               System.err.println(stderr)
               ctx.error(src, s"nonzero exit code returned from job: $exitCode")
             else
-              database.run(jobTable.insertOrUpdate((
-                stringsToByteArray(desc.cmdline),
-                stringsToByteArray(desc.envVars.getOrElse(Map.empty).toSeq.sorted.flatMap((a, b) => Seq(a, b))),
-                stringsToByteArray(desc.inputFiles.map(_.path.toString)),
-                desc.stdin.getOrElse(""),
-                directory.toString,
+              Task.deferFutureAction(s => {
+                given Scheduler = s
+                database.run(jobTable.insertOrUpdate((
+                  stringsToByteArray(desc.cmdline),
+                  stringsToByteArray(desc.envVars.getOrElse(Map.empty).toSeq.sorted.flatMap((a, b) => Seq(a, b))),
+                  stringsToByteArray(desc.inputFiles.map(_.path.toString)),
+                  desc.stdin.getOrElse(""),
+                  directory.toString,
 
-                stdout,
-                stderr,
-                exitCode,
-              ))).map { _ =>
-                EvaluatedJValue.JJob(src, desc, stdout, stderr, outputs, exitCode)
-              }
+                  stdout,
+                  stderr,
+                  exitCode,
+                ))).map { _ =>
+                  EvaluatedJValue.JJob(src, desc, stdout, stderr, outputs, exitCode)
+                }
+              })
         }
       }

@@ -1,8 +1,9 @@
 package root
 
+import monix.eval.Task
+
 import scala.compiletime.{constValue, erasedValue, summonInline, summonFrom}
 import scala.deriving.Mirror
-import scala.concurrent.{ExecutionContext, Future}
 
 final class JDecoderPath(
   path: Seq[String | Int]
@@ -14,7 +15,7 @@ final class JDecoderPath(
     else
       ctx.error(src, s"error at path $toString, $msg")
 
-  inline def expectType[T <: EvaluatedJValue.JNow](ctx: EvaluationContext, expr: EvaluatedJValue): Future[T] =
+  inline def expectType[T <: EvaluatedJValue.JNow](ctx: EvaluationContext, expr: EvaluatedJValue): Task[T] =
     if isEmpty then
       ctx.expectType[T](expr)
     else
@@ -43,40 +44,35 @@ object JDecoderPath:
   def empty: JDecoderPath = new JDecoderPath(Seq.empty)
 
 trait JDecoder[T]:
-  def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Future[T]
-  final def decode(ctx: EvaluationContext, expr: EvaluatedJValue): Future[T] = decode(ctx, JDecoderPath.empty, expr)
+  def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Task[T]
+  final def decode(ctx: EvaluationContext, expr: EvaluatedJValue): Task[T] = decode(ctx, JDecoderPath.empty, expr)
 
 sealed trait JObjectDecoder[T]:
-  def decode(ctx: EvaluationContext, path: JDecoderPath, obj: EvaluatedJValue.JObject): Future[T]
-  final def decode(ctx: EvaluationContext, obj: EvaluatedJValue.JObject): Future[T] = decode(ctx, JDecoderPath.empty, obj)
+  def decode(ctx: EvaluationContext, path: JDecoderPath, obj: EvaluatedJValue.JObject): Task[T]
+  final def decode(ctx: EvaluationContext, obj: EvaluatedJValue.JObject): Task[T] = decode(ctx, JDecoderPath.empty, obj)
 
 object JDecoder:
   def apply[T](using decoder: JDecoder[T]): JDecoder[T] = decoder
 
   given JDecoder[String] with
-    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Future[String] =
-      given ExecutionContext = ctx.executionContext
+    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Task[String] =
       path.expectType[EvaluatedJValue.JString](ctx, expr).map(_.str)
 
   given JDecoder[Double] with
-    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Future[Double] =
-      given ExecutionContext = ctx.executionContext
+    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Task[Double] =
       path.expectType[EvaluatedJValue.JNum](ctx, expr).map(_.double)
 
   given JDecoder[Int] with
-    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Future[Int] =
-      given ExecutionContext = ctx.executionContext
+    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Task[Int] =
       path.expectType[EvaluatedJValue.JNum](ctx, expr).map(_.double.toInt)
 
   given JDecoder[Boolean] with
-    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Future[Boolean] =
-      given ExecutionContext = ctx.executionContext
+    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Task[Boolean] =
       path.expectType[EvaluatedJValue.JBoolean](ctx, expr).map(_.value)
 
   import bloop.config.PlatformFiles.Path
   given JDecoder[Path] with
-    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Future[Path] =
-      given ExecutionContext = ctx.executionContext
+    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Task[Path] =
       path.expectType[EvaluatedJValue.JPath | EvaluatedJValue.JString](ctx, expr).map {
         case p: EvaluatedJValue.JPath => p.path
         case s: EvaluatedJValue.JString =>
@@ -89,24 +85,22 @@ object JDecoder:
   inline given identityDecoder[T <: EvaluatedJValue.JNow]: JDecoder[T] = identity[T]
 
   inline def identity[T <: EvaluatedJValue.JNow]: JDecoder[T] = new JDecoder[T]:
-    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Future[T] =
+    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Task[T] =
       path.expectType[T](ctx, expr)
 
   given iterableDecoder[L[X] <: Iterable[X], T](using f: collection.Factory[T, L[T]], d: => JDecoder[T]): JDecoder[L[T]] with
-    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Future[L[T]] =
-      given ExecutionContext = ctx.executionContext
+    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Task[L[T]] =
       path.expectType[EvaluatedJValue.JArray](ctx, expr).flatMap { arr =>
-        val elements: Seq[Future[T]] = arr.elements.map(summon[JDecoder[T]].decode(ctx, path, _))
-        Future.sequence(elements).map(f.fromSpecific)
+        val elements: Seq[Task[T]] = arr.elements.map(summon[JDecoder[T]].decode(ctx, path, _))
+        Task.sequence(elements).map(f.fromSpecific)
       }
 
   given mapDecoder[T](using => JDecoder[T]): JDecoder[Map[String, T]] with
-    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Future[Map[String, T]] =
-      given ExecutionContext = ctx.executionContext
+    def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Task[Map[String, T]] =
       val nested = for
         obj <- path.expectType[EvaluatedJValue.JObject](ctx, expr)
       yield
-        Future.sequence(obj.members().map { (key, lazyValue) =>
+        Task.sequence(obj.members().map { (key, lazyValue) =>
           summon[JDecoder[T]].decode(ctx, path, lazyValue.evaluated).map(key -> _)
         }).map(_.toMap)
       nested.flatten
@@ -116,15 +110,13 @@ object JDecoder:
       case _: EmptyTuple =>
         val decoder = new JObjectDecoder[EmptyTuple]:
           def decode(ctx: EvaluationContext, path: JDecoderPath, obj: EvaluatedJValue.JObject) =
-            given ExecutionContext = ctx.executionContext
-            Future(EmptyTuple)
+            Task.now(EmptyTuple)
         decoder.asInstanceOf[JObjectDecoder[T]]
       case _: ((name, Option[head]) *: tail) =>
         val decoder = new JObjectDecoder[(Option[head] *: tail)]:
           def decode(ctx: EvaluationContext, path: JDecoderPath, obj: EvaluatedJValue.JObject) =
-            given ExecutionContext = ctx.executionContext
             val field = constValue[name].toString
-            val head = obj.imp.lookupOpt(obj.src, field).fold(Future(None)) { lvalue =>
+            val head = obj.imp.lookupOpt(obj.src, field).fold(Task.now(None)) { lvalue =>
               summonInline[JDecoder[head]].decode(ctx, path.withField(field), lvalue.evaluated).map(Some(_))
             }
             val tail = decodeProduct[tail].decode(ctx, path, obj)
@@ -137,7 +129,6 @@ object JDecoder:
             val value = obj.lookup(obj.src, field)
             val head = summonInline[JDecoder[head]].decode(ctx, path.withField(field), value)
             val tail = decodeProduct[tail].decode(ctx, path, obj)
-            given ExecutionContext = ctx.executionContext
             head.zip(tail).map(_ *: _)
         decoder.asInstanceOf[JObjectDecoder[T]]
 
@@ -147,7 +138,6 @@ object JDecoder:
     val objDecoder = decodeProduct[Tuple.Zip[m.MirroredElemLabels, m.MirroredElemTypes]]
     new JDecoder[T]:
       def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue) =
-        given ExecutionContext = ctx.executionContext
         path.expectType[EvaluatedJValue.JObject](ctx, expr).flatMap(objDecoder.decode(ctx, path, _)).map {
           m.fromProduct
         }

@@ -2,6 +2,9 @@ package root
 
 import concurrent.{ExecutionContext, Future}
 
+import monix.eval.Task
+import monix.execution.Scheduler
+
 object Std:
   private def bindArgs(
     argNames: Seq[(String, Option[EvaluatedJValue])],
@@ -144,11 +147,11 @@ object Std:
 
   type JFunction1[T] = (EvaluationContext, Source, EvaluatedJValue) => T
 
-  val toStringImp: JFunction1[EvaluatedJValue.JString] = (ctx, src, a) => {
-    val value = a match
-    case EvaluatedJValue.JString(_, str) => str
-    case _ => a.manifest(ctx).toString
-    EvaluatedJValue.JString(src, value)
+  val toStringImp: JFunction1[EvaluatedJValue] = (ctx, src, a) => {
+    import EvaluatedJValue.toJValue
+    a match
+    case EvaluatedJValue.JString(_, str) => EvaluatedJValue.JString(src, str)
+    case _ => a.manifestFuture(ctx).map(m => EvaluatedJValue.JString(src, m.toString)).toJValue
   }
 
   private val stdSrc = Source.Generated(SourceFile.std)
@@ -161,7 +164,6 @@ object Std:
     "type" -> function1(Arg.x) { (ctx, src, x) =>
       x match
       case x: EvaluatedJValue.JFuture =>
-        given concurrent.ExecutionContext = ctx.executionContext
         x.future.map { x =>
           EvaluatedJValue.JString(src, EvaluationContext.typeString(x))
         }.toJValue
@@ -169,7 +171,6 @@ object Std:
         EvaluatedJValue.JString(src, EvaluationContext.typeString(x))
     },
     "length" -> function1(Arg.x) { (ctx, src, x) =>
-      given concurrent.ExecutionContext = ctx.executionContext
       ctx.expectType[
         EvaluatedJValue.JArray
         | EvaluatedJValue.JString
@@ -184,7 +185,6 @@ object Std:
     },
     "get" -> function4(Arg.x, Arg.f, Arg.default(jnull), Arg.inc_hidden(jtrue)) {
       (ctx, src, o, f, default, i) =>
-        given concurrent.ExecutionContext = ctx.executionContext
         ctx.expectObject(o).zip(ctx.expectString(f)).zip(ctx.expectBoolean(i)).map {
           case ((members, field), inc_hidden) =>
             members.members().get(field.str).fold(default) { m =>
@@ -193,13 +193,11 @@ object Std:
         }.toJValue
     },
     "objectHas" -> function2(Arg.o, Arg.f) { (ctx, src, o, f) =>
-      given concurrent.ExecutionContext = ctx.executionContext
       ctx.expectObject(o).zip(ctx.expectString(f)).map { (o, f) =>
         EvaluatedJValue.JBoolean(src, o.members().contains(f.str))
       }.toJValue
     },
     "objectFields" -> function1(Arg.o) { (ctx, src, o) =>
-      given concurrent.ExecutionContext = ctx.executionContext
       ctx.expectObject(o).map { o =>
         // EvaluatedJValue.JArray(src, o.members().keys.toSeq.sorted) // BUG
         val keys = o.members()
@@ -211,16 +209,14 @@ object Std:
       }.toJValue
     },
     "flatMap" -> function2(Arg.func, Arg.arr) { (ctx, src, func, arr) =>
-      given concurrent.ExecutionContext = ctx.executionContext
       ctx.expectFunction(func).zip(ctx.expectArray(arr)).flatMap { (func, arr) =>
-        arr.elements.foldLeft(Future(Seq.empty[Seq[EvaluatedJValue]])) { (acc, e) =>
+        arr.elements.foldLeft(Task.now(Seq.empty[Seq[EvaluatedJValue]])) { (acc, e) =>
           val params = EvaluatedJFunctionParameters(src, Seq(e), Seq.empty)
           acc.zip(ctx.expectArray(func.fn(ctx, params))).map((acc, e) => e.elements +: acc)
         }.map(a => EvaluatedJValue.JArray(src, a.reverse.flatten))
       }.toJValue
     },
     "uniq" -> function2(Arg.arr, Arg.keyF(jidentity)) { (ctx, src, arr, keyF) =>
-      given concurrent.ExecutionContext = ctx.executionContext
       ctx.expectFunction(keyF).zip(ctx.expectArray(arr)).map { (keyF, arr) =>
         val elements =
           if keyF eq jidentity then arr.elements.distinct
@@ -229,7 +225,6 @@ object Std:
       }.toJValue
     },
     "trace" -> function2(Arg.str, Arg.rest) { (ctx, src, str, rest) =>
-      given concurrent.ExecutionContext = ctx.executionContext
       ctx.expectString(str).map { str =>
         val file = ctx.file
         val lineNum = src match
@@ -240,18 +235,17 @@ object Std:
       }.toJValue
     },
     "print" -> function2(Arg.str, Arg.rest(jnull)) { (ctx, src, str, rest) =>
-      given concurrent.ExecutionContext = ctx.executionContext
-      println(toStringImp(ctx, src, str).str)
-      if rest eq jnull then str
-      else rest
+      ctx.expectString(toStringImp(ctx, src, str)).map { str =>
+        println(str.str)
+        if rest eq jnull then str
+        else rest
+      }.toJValue
     },
     "workspace" -> EvaluatedJValue.JPath(stdSrc, ctx.workspaceDir),
     "runJob" -> function1(Arg.desc) { (ctx, src, desc) =>
-      given concurrent.ExecutionContext = ctx.executionContext
       ctx.decode[JobDescription](desc).flatMap(ctx.runJob(src, _)).toJValue
     },
     "source" -> function1(Arg.pathName) { (ctx, src, pathName) =>
-      given concurrent.ExecutionContext = ctx.executionContext
       ctx.expectType[EvaluatedJValue.JString](pathName).map { pathName =>
         import JobRunner.resolvePath
         if pathName.str.startsWith("/") then ctx.error(src, s"cannot source an absolute path, got $pathName")
@@ -259,7 +253,6 @@ object Std:
       }.toJValue
     },
     "write" -> function2(Arg.pathName, Arg.contents) { (ctx, src, pathName, contents) =>
-      given concurrent.ExecutionContext = ctx.executionContext
       ctx.expectType[EvaluatedJValue.JString | EvaluatedJValue.JPath](pathName).flatMap { pathName =>
         ctx.expectString(contents).map { contents =>
           val path =
@@ -275,26 +268,23 @@ object Std:
       }.toJValue
     },
     "startsWith" -> function2(Arg.a, Arg.b) { (ctx, src, a, b) =>
-      given concurrent.ExecutionContext = ctx.executionContext
       ctx.expectString(a).zip(ctx.expectString(b)).map { (a, b) =>
         EvaluatedJValue.JBoolean(src, a.str.startsWith(b.str))
       }.toJValue
     },
     "join" -> function2(Arg.sep, Arg.arr) { (ctx, src, sep, arr) =>
-      given concurrent.ExecutionContext = ctx.executionContext
       ctx
         .expectString(sep)
         .zip(ctx.expectArray(arr)).map {
           case (sep, arr) if arr.elements.isEmpty => EvaluatedJValue.JString(src, "")
           case (sep, arr) if arr.elements.size == 1 => ctx.expectString(arr.elements.head).toJValue
           case (sep, arr) =>
-            arr.elements.foldLeft(Future(Seq.empty[String])) {
+            arr.elements.foldLeft(Task.now(Seq.empty[String])) {
               case (acc, e) => acc.flatMap(acc => ctx.expectString(e).map(e => e.str +: acc))
             }.map(r => EvaluatedJValue.JString(src, r.reverse.mkString(sep.str))).toJValue
         }.toJValue
     },
     "getenv" -> function1(Arg.varName) { (ctx, src, varName) =>
-      given concurrent.ExecutionContext = ctx.executionContext
       ctx.expectType[EvaluatedJValue.JString](varName).map { varNamex =>
         val varName = varNamex.str
         try
@@ -309,7 +299,6 @@ object Std:
     },
     "scala" -> makeObject(ctx.bind("std", JValue.JSelf(stdSrc)), ctx => Map(
       "Dep" -> function3(Arg.org, Arg.name, Arg.version) { (ctx, src, org, name, version) =>
-        given concurrent.ExecutionContext = ctx.executionContext
         ctx.expectString(org).zip(ctx.expectString(name)).zip(ctx.expectString(version)).map {
           case ((org, name), version) => makeObject(ctx, ctx => Map(
             "org" -> org,
@@ -327,25 +316,26 @@ object Std:
         import coursier.{Classifier, Dependency, Fetch, Module, ModuleName, Organization, Type}
         import coursier.cache.FileCache
         import coursier.cache.loggers.RefreshLogger
-        given concurrent.ExecutionContext = ctx.executionContext
-        ctx.decode[Seq[CoursierDependency]](deps).zip(ctx.expectBoolean(withSources)).flatMap { (deps, withSources) =>
-          (if withSources.value then Fetch().addClassifiers(Classifier.sources) else Fetch())
-            .withDependencies(deps.map(_.toDependency))
-            // .addDependencies(params.deps.map(_.toDependency)) // BUG
-            // .addClassifiers(Classifier.sources)
-            // .addArtifactTypes(Type.source)
-            .withClasspathOrder(true)
-            .withCache(
-              FileCache().withLogger(RefreshLogger.create(System.out))
-            )
-            .future()
-            .map { files =>
-              EvaluatedJValue.JArray(src, files.map(a => EvaluatedJValue.JPath(src, a.toPath)))
+          ctx.decode[Seq[CoursierDependency]](deps).zip(ctx.expectBoolean(withSources)).flatMap { (deps, withSources) =>
+            Task.deferFutureAction { s =>
+              given ExecutionContext = s
+              (if withSources.value then Fetch().addClassifiers(Classifier.sources) else Fetch())
+                .withDependencies(deps.map(_.toDependency))
+                // .addDependencies(params.deps.map(_.toDependency)) // BUG
+                // .addClassifiers(Classifier.sources)
+                // .addArtifactTypes(Type.source)
+                .withClasspathOrder(true)
+                .withCache(
+                  FileCache().withLogger(RefreshLogger.create(System.out))
+                )
+                .future()
+                .map { files =>
+                  EvaluatedJValue.JArray(src, files.map(a => EvaluatedJValue.JPath(src, a.toPath)))
+                }
             }
-        }.toJValue
+          }.toJValue
       },
       "compile" -> function1(Arg.project) { (ctx, src, project) =>
-        given concurrent.ExecutionContext = ctx.executionContext
         ctx.decode[Config.RecursiveProject](project).flatMap { project =>
           Config.write(ctx, project)
           ctx.bloopServer.compile(project.name).map {
@@ -355,7 +345,6 @@ object Std:
         }.toJValue
       },
       "classpath" -> function1(Arg.project) { (ctx, src, project) =>
-        given concurrent.ExecutionContext = ctx.executionContext
         ctx.decode[Config.RecursiveProject](project).flatMap { project =>
           import scala.jdk.CollectionConverters.given
           Config.write(ctx, project)

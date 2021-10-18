@@ -1,6 +1,7 @@
 package root
 
-import scala.concurrent.Future
+import monix.eval.Task
+import monix.execution.Scheduler
 
 sealed trait Importer:
   def `import`(ctx: EvaluationContext, src: Source, fileName: String): EvaluatedJValue
@@ -34,7 +35,6 @@ object Importer:
         Parser(srcFile).parseFile.fold(
           error => ctx.error(src, error.toString),
           ast => {
-            given concurrent.ExecutionContextExecutorService = ctx.executionContext
             val sourceFile = SourceFile(normalized, source)
             val withOutStd = EvaluationContext(sourceFile, ctx.workspaceDir, ctx.bloopServer)
             val newCtx = withOutStd.bindEvaluated("std", Std.obj(withOutStd))
@@ -110,15 +110,6 @@ object LazyValue:
       def withHidden(hidden: Boolean) = withHiddenImp(hidden, this)
       override def toString = code.toString
 
-enum ExprMapper[T <: EvaluatedJValue.JNow]:
-  case Future(ctx: concurrent.ExecutionContext, future: concurrent.Future[T])
-  case Now(expr: T)
-
-  def map[A <: EvaluatedJValue.JNow](fn: T => A): ExprMapper[A] =
-    this match
-    case Future(ctx @ given concurrent.ExecutionContext, future) => Future(ctx, future.map(fn))
-    case Now(expr) => Now(fn(expr))
-
 final class StackEntry(
   val src: Source,
   val message: String,
@@ -165,7 +156,6 @@ object EvaluationError:
 
 sealed trait EvaluationContext:
   def withScope(scope: Map[String, LazyValue]): EvaluationContext
-  def executionContext: concurrent.ExecutionContextExecutorService
   def file: SourceFile
   def withFile(file: SourceFile): EvaluationContext
 
@@ -179,7 +169,7 @@ sealed trait EvaluationContext:
 
   def workspaceDir: java.nio.file.Path
   protected def jobRunner: JobRunner
-  final def runJob(src: Source, desc: JobDescription): Future[EvaluatedJValue.JJob] =
+  final def runJob(src: Source, desc: JobDescription): Task[EvaluatedJValue.JJob] =
     jobRunner.run(this, src, desc)
 
   def error(src: Source, message: String): Nothing
@@ -240,39 +230,37 @@ object EvaluationContext:
     case _: EvaluatedJValue.JFunction => "function"
     case _: EvaluatedJValue.JFuture => "future"
 
-  import concurrent.Future
   extension (ctx: EvaluationContext)
-    def decode[T: JDecoder](expr: EvaluatedJValue): Future[T] = JDecoder[T].decode(ctx, expr)
-    inline def expectBoolean(code: JValue): Future[EvaluatedJValue.JBoolean] = expectType[EvaluatedJValue.JBoolean](code)
-    inline def expectBoolean(expr: EvaluatedJValue): Future[EvaluatedJValue.JBoolean] = expectType[EvaluatedJValue.JBoolean](expr)
-    inline def expectNum(code: JValue): Future[EvaluatedJValue.JNum] = expectType[EvaluatedJValue.JNum](code)
-    inline def expectNum(expr: EvaluatedJValue): Future[EvaluatedJValue.JNum] = expectType[EvaluatedJValue.JNum](expr)
-    inline def expectString(code: JValue): Future[EvaluatedJValue.JString] = expectType[EvaluatedJValue.JString](code)
-    inline def expectString(expr: EvaluatedJValue): Future[EvaluatedJValue.JString] = expectType[EvaluatedJValue.JString](expr)
-    inline def expectFieldName(code: JValue): Future[EvaluatedJValue.JString | EvaluatedJValue.JNull] =
+    def decode[T: JDecoder](expr: EvaluatedJValue): Task[T] = JDecoder[T].decode(ctx, expr)
+    inline def expectBoolean(code: JValue): Task[EvaluatedJValue.JBoolean] = expectType[EvaluatedJValue.JBoolean](code)
+    inline def expectBoolean(expr: EvaluatedJValue): Task[EvaluatedJValue.JBoolean] = expectType[EvaluatedJValue.JBoolean](expr)
+    inline def expectNum(code: JValue): Task[EvaluatedJValue.JNum] = expectType[EvaluatedJValue.JNum](code)
+    inline def expectNum(expr: EvaluatedJValue): Task[EvaluatedJValue.JNum] = expectType[EvaluatedJValue.JNum](expr)
+    inline def expectString(code: JValue): Task[EvaluatedJValue.JString] = expectType[EvaluatedJValue.JString](code)
+    inline def expectString(expr: EvaluatedJValue): Task[EvaluatedJValue.JString] = expectType[EvaluatedJValue.JString](expr)
+    inline def expectFieldName(code: JValue): Task[EvaluatedJValue.JString | EvaluatedJValue.JNull] =
       val expr = evalUnsafe(ctx)(code)
       expectType[EvaluatedJValue.JString | EvaluatedJValue.JNull](expr, s"Field name must be string or null, got ${typeString(theExpr)}")
-    inline def expectArray(code: JValue): Future[EvaluatedJValue.JArray] = expectType[EvaluatedJValue.JArray](code)
-    inline def expectArray(expr: EvaluatedJValue): Future[EvaluatedJValue.JArray] = expectType[EvaluatedJValue.JArray](expr)
-    inline def expectObject(code: JValue): Future[EvaluatedJValue.JObject] = expectType[EvaluatedJValue.JObject](code)
-    inline def expectObject(expr: EvaluatedJValue): Future[EvaluatedJValue.JObject] = expectType[EvaluatedJValue.JObject](expr)
-    inline def expectFunction(code: JValue): Future[EvaluatedJValue.JFunction] = expectType[EvaluatedJValue.JFunction](code)
-    inline def expectFunction(expr: EvaluatedJValue): Future[EvaluatedJValue.JFunction] = expectType[EvaluatedJValue.JFunction](expr)
+    inline def expectArray(code: JValue): Task[EvaluatedJValue.JArray] = expectType[EvaluatedJValue.JArray](code)
+    inline def expectArray(expr: EvaluatedJValue): Task[EvaluatedJValue.JArray] = expectType[EvaluatedJValue.JArray](expr)
+    inline def expectObject(code: JValue): Task[EvaluatedJValue.JObject] = expectType[EvaluatedJValue.JObject](code)
+    inline def expectObject(expr: EvaluatedJValue): Task[EvaluatedJValue.JObject] = expectType[EvaluatedJValue.JObject](expr)
+    inline def expectFunction(code: JValue): Task[EvaluatedJValue.JFunction] = expectType[EvaluatedJValue.JFunction](code)
+    inline def expectFunction(expr: EvaluatedJValue): Task[EvaluatedJValue.JFunction] = expectType[EvaluatedJValue.JFunction](expr)
 
-    inline def expectType[T <: EvaluatedJValue.JNow](expr: EvaluatedJValue, msg: EvaluatedJValue ?=> String): Future[T] =
-      implicit val ec = ctx.executionContext
+    inline def expectType[T <: EvaluatedJValue.JNow](expr: EvaluatedJValue, msg: EvaluatedJValue ?=> String): Task[T] =
       expr match
-      case t: T => Future(t)
+      case t: T => Task.now(t)
       case f: EvaluatedJValue.JFuture => f.future.map {
         case t: T => t
         case expr => ctx.error(expr.src, msg(using expr))
       }
       case _ => ctx.error(expr.src, msg(using expr))
 
-    inline def expectType[T <: EvaluatedJValue.JNow](expr: EvaluatedJValue): Future[T] =
+    inline def expectType[T <: EvaluatedJValue.JNow](expr: EvaluatedJValue): Task[T] =
       expectType[T](expr, s"Unexpected type ${typeString(theExpr)}, expected ${typeString[T]}")
 
-    inline def expectType[T <: EvaluatedJValue.JNow](code: JValue): Future[T] =
+    inline def expectType[T <: EvaluatedJValue.JNow](code: JValue): Task[T] =
       expectType[T](evalUnsafe(ctx)(code))
 
   private[root] case class Imp(
@@ -283,7 +271,6 @@ object EvaluationContext:
     file: SourceFile,
     scope: Map[String, LazyValue],
     stack: List[StackEntry],
-    executionContext: concurrent.ExecutionContextExecutorService,
   ) extends EvaluationContext:
     def error(src: Source, message: String): Nothing = throw new EvaluationError(file, src, message, stack)
 
@@ -336,7 +323,7 @@ object EvaluationContext:
     locals: Map[String, JValue | EvaluatedJValue | LazyValue],
     stack: List[StackEntry],
   ) extends ObjectEvaluationContext:
-    export topCtx.{importer, jobRunner, workspaceDir, file, executionContext}
+    export topCtx.{importer, jobRunner, workspaceDir, file}
 
     def self(src: Source) = selfObj
     def `super`(src: Source) = superChain.headOption.getOrElse(topCtx.`super`(src))
@@ -397,7 +384,7 @@ object EvaluationContext:
     file: SourceFile,
     workspace: java.nio.file.Path,
     bloopServer: Bsp4sBloopServerConnection,
-  )(using executionContext: concurrent.ExecutionContextExecutorService): EvaluationContext =
+  ): EvaluationContext =
     Imp(
       bloopServer,
       Importer(),
@@ -406,13 +393,12 @@ object EvaluationContext:
       file,
       Map.empty,
       List.empty,
-      executionContext
     )
 
   def apply(
     file: SourceFile,
     bloopPort: Int,
-  )(using executionContext: concurrent.ExecutionContextExecutorService): EvaluationContext =
+  ): EvaluationContext =
     val currFileParent = new java.io.File(file.path).getAbsoluteFile.toPath.getParent
     val logStream = new java.io.PrintStream(new java.io.FileOutputStream(
       currFileParent.resolve("bloopLog.txt").toFile, true))
