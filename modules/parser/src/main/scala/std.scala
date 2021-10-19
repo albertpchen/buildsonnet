@@ -185,15 +185,15 @@ object Std:
     },
     "get" -> function4(Arg.x, Arg.f, Arg.default(jnull), Arg.inc_hidden(jtrue)) {
       (ctx, src, o, f, default, i) =>
-        ctx.expectObject(o).zip(ctx.expectString(f)).zip(ctx.expectBoolean(i)).map {
-          case ((members, field), inc_hidden) =>
+        Task.parZip3(ctx.expectObject(o), ctx.expectString(f), ctx.expectBoolean(i)).map {
+          (members, field, inc_hidden) =>
             members.members().get(field.str).fold(default) { m =>
               if !inc_hidden.value && m.isHidden then default else m.evaluated
             }
         }.toJValue
     },
     "objectHas" -> function2(Arg.o, Arg.f) { (ctx, src, o, f) =>
-      ctx.expectObject(o).zip(ctx.expectString(f)).map { (o, f) =>
+      Task.parZip2(ctx.expectObject(o), ctx.expectString(f)).map { (o, f) =>
         EvaluatedJValue.JBoolean(src, o.members().contains(f.str))
       }.toJValue
     },
@@ -209,15 +209,15 @@ object Std:
       }.toJValue
     },
     "flatMap" -> function2(Arg.func, Arg.arr) { (ctx, src, func, arr) =>
-      ctx.expectFunction(func).zip(ctx.expectArray(arr)).flatMap { (func, arr) =>
+      Task.parZip2(ctx.expectFunction(func), ctx.expectArray(arr)).flatMap { (func, arr) =>
         arr.elements.foldLeft(Task.now(Seq.empty[Seq[EvaluatedJValue]])) { (acc, e) =>
           val params = EvaluatedJFunctionParameters(src, Seq(e), Seq.empty)
-          acc.zip(ctx.expectArray(func.fn(ctx, params))).map((acc, e) => e.elements +: acc)
+          Task.parZip2(acc, ctx.expectArray(func.fn(ctx, params))).map((acc, e) => e.elements +: acc)
         }.map(a => EvaluatedJValue.JArray(src, a.reverse.flatten))
       }.toJValue
     },
     "uniq" -> function2(Arg.arr, Arg.keyF(jidentity)) { (ctx, src, arr, keyF) =>
-      ctx.expectFunction(keyF).zip(ctx.expectArray(arr)).map { (keyF, arr) =>
+      Task.parZip2(ctx.expectFunction(keyF), ctx.expectArray(arr)).map { (keyF, arr) =>
         val elements =
           if keyF eq jidentity then arr.elements.distinct
           else arr.elements.distinctBy(e => keyF.fn(ctx, EvaluatedJFunctionParameters(src, Seq(e), Seq.empty)))
@@ -268,21 +268,19 @@ object Std:
       }.toJValue
     },
     "startsWith" -> function2(Arg.a, Arg.b) { (ctx, src, a, b) =>
-      ctx.expectString(a).zip(ctx.expectString(b)).map { (a, b) =>
+      Task.parZip2(ctx.expectString(a), ctx.expectString(b)).map { (a, b) =>
         EvaluatedJValue.JBoolean(src, a.str.startsWith(b.str))
       }.toJValue
     },
     "join" -> function2(Arg.sep, Arg.arr) { (ctx, src, sep, arr) =>
-      ctx
-        .expectString(sep)
-        .zip(ctx.expectArray(arr)).map {
-          case (sep, arr) if arr.elements.isEmpty => EvaluatedJValue.JString(src, "")
-          case (sep, arr) if arr.elements.size == 1 => ctx.expectString(arr.elements.head).toJValue
-          case (sep, arr) =>
-            arr.elements.foldLeft(Task.now(Seq.empty[String])) {
-              case (acc, e) => acc.flatMap(acc => ctx.expectString(e).map(e => e.str +: acc))
-            }.map(r => EvaluatedJValue.JString(src, r.reverse.mkString(sep.str))).toJValue
-        }.toJValue
+      Task.parZip2(ctx.expectString(sep), ctx.expectArray(arr)).map {
+        case (sep, arr) if arr.elements.isEmpty => EvaluatedJValue.JString(src, "")
+        case (sep, arr) if arr.elements.size == 1 => ctx.expectString(arr.elements.head).toJValue
+        case (sep, arr) =>
+          arr.elements.foldLeft(Task.now(Seq.empty[String])) {
+            case (acc, e) => acc.flatMap(acc => ctx.expectString(e).map(e => e.str +: acc))
+          }.map(r => EvaluatedJValue.JString(src, r.reverse.mkString(sep.str))).toJValue
+      }.toJValue
     },
     "getenv" -> function1(Arg.varName) { (ctx, src, varName) =>
       ctx.expectType[EvaluatedJValue.JString](varName).map { varNamex =>
@@ -299,8 +297,8 @@ object Std:
     },
     "scala" -> makeObject(ctx.bind("std", JValue.JSelf(stdSrc)), ctx => Map(
       "Dep" -> function3(Arg.org, Arg.name, Arg.version) { (ctx, src, org, name, version) =>
-        ctx.expectString(org).zip(ctx.expectString(name)).zip(ctx.expectString(version)).map {
-          case ((org, name), version) => makeObject(ctx, ctx => Map(
+        Task.parZip3(ctx.expectString(org), ctx.expectString(name), ctx.expectString(version)).map {
+          (org, name, version) => makeObject(ctx, ctx => Map(
             "org" -> org,
             "name" -> name,
             "version" -> version,
@@ -316,7 +314,10 @@ object Std:
         import coursier.{Classifier, Dependency, Fetch, Module, ModuleName, Organization, Type}
         import coursier.cache.FileCache
         import coursier.cache.loggers.RefreshLogger
-          ctx.decode[Seq[CoursierDependency]](deps).zip(ctx.expectBoolean(withSources)).flatMap { (deps, withSources) =>
+          Task.parZip2(
+            ctx.decode[Seq[CoursierDependency]](deps),
+            ctx.expectBoolean(withSources)
+          ).flatMap { (deps, withSources) =>
             Task.deferFutureAction { s =>
               given ExecutionContext = s
               (if withSources.value then Fetch().addClassifiers(Classifier.sources) else Fetch())

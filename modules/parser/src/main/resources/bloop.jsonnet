@@ -115,6 +115,7 @@ local scalaDep(org, name, version) = {
       cmdline: cmdline,
       envVars: {
         PATH: jvmHome + "/bin",
+        HOME: std.getenv("HOME"),
         JAVA_HOME: jvmHome,
       },
       inputFiles: []

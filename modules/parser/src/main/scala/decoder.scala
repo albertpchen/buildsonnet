@@ -120,7 +120,7 @@ object JDecoder:
               summonInline[JDecoder[head]].decode(ctx, path.withField(field), lvalue.evaluated).map(Some(_))
             }
             val tail = decodeProduct[tail].decode(ctx, path, obj)
-            head.zip(tail).map(_ *: _)
+            Task.parZip2(head, tail).map(_ *: _)
         decoder.asInstanceOf[JObjectDecoder[T]]
       case _: ((name, head) *: tail) =>
         val decoder = new JObjectDecoder[(head *: tail)]:
@@ -129,7 +129,7 @@ object JDecoder:
             val value = obj.lookup(obj.src, field)
             val head = summonInline[JDecoder[head]].decode(ctx, path.withField(field), value)
             val tail = decodeProduct[tail].decode(ctx, path, obj)
-            head.zip(tail).map(_ *: _)
+            Task.parZip2(head, tail).map(_ *: _)
         decoder.asInstanceOf[JObjectDecoder[T]]
 
   inline given [T: Mirror.ProductOf]: JDecoder[T] = derived[T]
