@@ -259,10 +259,14 @@ object Std:
             pathName match
             case str: EvaluatedJValue.JString =>
               if str.str.startsWith("/") then
-                java.nio.file.Paths.get(str.str)
+                java.nio.file.Paths.get(str.str).normalize
               else
-                ctx.workspaceDir.resolve(str.str)
+                ctx.workspaceDir.resolve(str.str).normalize
             case path: EvaluatedJValue.JPath => path.path
+          if !path.getParent.toFile.mkdirs then
+            ctx.error(src, s"could not create parent directories for file '$path'")
+          if java.nio.file.Files.isDirectory(path) then
+            ctx.error(src, s"file '$path' is a directory")
           EvaluatedJValue.JPath(src, JobRunner.write(path, contents.str))
         }
       }.toJValue

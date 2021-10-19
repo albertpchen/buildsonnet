@@ -3,7 +3,7 @@ package root
 import scala.concurrent.{Await, ExecutionContext, ExecutionContextExecutorService, Future}
 
 import cats.parse.{Parser0 => P0, Parser => P, Numbers}
-import cats.syntax.all._
+import cats.syntax.all.{catsSyntaxFoldableOps0 => _, _}
 
 final class Parser(file: SourceFile):
   import cats.instances.all._
@@ -81,6 +81,35 @@ final class Parser(file: SourceFile):
     P.charWhere(c => c >= ' ' && c != quote),
     P.char(quote) *> P.char(quote).map(_ => quote),
   ))
+  val blockStringChar: P[Char | String] = P.oneOf(List(
+    P.charWhere(c => c >= ' ' && c != '|' && c != '\\'),
+    escapedStringChar,
+    (P.char('|') *> P.char('|') *> P.not(P.char('|')).map(_ => "||")).backtrack,
+    P.char('|') *> P.not(P.char('|')).map(_ => '|'),
+  ))
+
+  val newline = (P.char('\r').? ~ P.char('\n')).map { (r, n) =>
+    r.fold("\n")(_ => "\r\n")
+  }
+  val blockString = (
+    P.char('|').rep(3) *> P.charIn(" \t").rep0 *> newline *>
+    (P.charIn(" \t").rep0, blockStringChar.rep0, newline).tupled
+  ).flatMap { (prefix, headLine, headNewline) =>
+    (
+      (P.string(prefix.mkString_("", "", "")).backtrack *> blockStringChar.rep0 ~ newline).rep0 <*
+      (P.charIn(" \t").rep0 *> P.char('|').rep(3))
+    ).map {  tailLines =>
+      val builder = new StringBuilder()
+      ((headLine, headNewline) +: tailLines).foreach { (tokens, newline) =>
+        tokens.foreach {
+          case s: String => builder ++= s
+          case c: Char => builder += c
+        }
+        builder ++= newline
+      }
+      builder.toString
+    }
+  }
 
   val string = P.oneOf(List(
     P.char('\'') *> stringChar('\'').rep0 <* P.char('\''),
@@ -216,6 +245,7 @@ final class Parser(file: SourceFile):
     }
     P.oneOf(List(
       string.withRange.map(JString(_, _)),
+      blockString.withRange.map(JString(_, _)),
       num,
       list,
       obj,
