@@ -14,10 +14,10 @@ sealed trait EvaluatedJObject:
   def withCtx(newCtx: () => ObjectEvaluationContext): EvaluatedJObject
 
   def lookup(src: Source, field: String): LazyValue =
-    cache.getOrElse(field, ctx.error(src, s"object missing field $field"))
+    members().getOrElse(field, ctx.error(src, s"object missing field $field"))
 
   def lookupOpt(src: Source, field: String): Option[LazyValue] =
-    cache.get(field)
+    members().get(field)
 
   private lazy val _members: collection.Map[String, LazyObjectValue] =
     val members = new collection.mutable.HashMap[String, LazyObjectValue]()

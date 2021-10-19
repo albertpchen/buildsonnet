@@ -1,41 +1,51 @@
-local scalaDep(org, name, version) = {
-  org: org,
-  name: name,
-  version: version,
+local suffixMap = {
+  '3.': function(version) {
+    suffix: '_3',
+    compilerJars: std.scala.cs([std.scala.Dep("org.scala-lang", "scala3-compiler_3", version)]),
+    libraryDeps: [std.scala.Dep("org.scala-lang", "scala3-library_3", version)],
+  },
+  '2.11.': function(version) {
+    suffix: '_2.11',
+    compilerJars: std.scala.cs([std.scala.Dep("org.scala-lang", "scala-compiler", version)]),
+    libraryDeps: [std.scala.Dep("org.scala-lang", "scala-library", version)],
+  },
+  '2.12.': function(version) {
+    suffix: '_2.12',
+    compilerJars: std.scala.cs([std.scala.Dep("org.scala-lang", "scala-compiler", version)]),
+    libraryDeps: [std.scala.Dep("org.scala-lang", "scala-library", version)],
+  },
+  '2.13.': function(version) {
+    suffix: '_2.13',
+    compilerJars: std.scala.cs([std.scala.Dep("org.scala-lang", "scala-compiler", version)]),
+    libraryDeps: [std.scala.Dep("org.scala-lang", "scala-library", version)],
+  },
 };
+
+local crossVersionMap = {
+  for3Use2_13: "_2.13"
+};
+
+local resolveLibraryDep(scalacConfig, dep) =
+  if dep.type == "java" then
+    dep
+  else if "crossVersion" in dep then
+    dep + {
+      name+: crossVersionMap[dep.crossVersion]
+    }
+  else
+    dep + {
+      name+: scalacConfig.suffix
+    };
 
 {
   local base = self,
-  local suffixMap = {
-    '3.': function(version) {
-      suffix: '_3',
-      compilerJars: std.scala.cs([scalaDep("org.scala-lang", "scala3-compiler_3", version)]),
-      libraryDeps: [scalaDep("org.scala-lang", "scala3-library_3", version)],
-    },
-    '2.11.': function(version) {
-      suffix: '_2.11',
-      compilerJars: std.scala.cs([scalaDep("org.scala-lang", "scala-compiler", version)]),
-      libraryDeps: [scalaDep("org.scala-lang", "scala-library", version)],
-    },
-    '2.12.': function(version) {
-      suffix: '_2.12',
-      compilerJars: std.scala.cs([scalaDep("org.scala-lang", "scala-compiler", version)]),
-      libraryDeps: [scalaDep("org.scala-lang", "scala-library", version)],
-    },
-    '2.13.': function(version) {
-      suffix: '_2.13',
-      compilerJars: std.scala.cs([scalaDep("org.scala-lang", "scala-compiler", version)]),
-      libraryDeps: [scalaDep("org.scala-lang", "scala-library", version)],
-    },
-  },
-
   local scalacConfig =
     if std.startsWith(base.scalaVersion, '3.') then suffixMap['3.'](base.scalaVersion)
     else if std.startsWith(base.scalaVersion, '2.11.') then suffixMap['2.11.'](base.scalaVersion)
     else if std.startsWith(base.scalaVersion, '2.12.') then suffixMap['2.12.'](base.scalaVersion)
     else if std.startsWith(base.scalaVersion, '2.13.') then suffixMap['2.13.'](base.scalaVersion),
   local dependencies = std.get(self, 'dependencies', default=[]),
-  local libraries = std.get(self, 'libraries', default=[]),
+  local libraries = [resolveLibraryDep(scalacConfig, dep) for dep in std.get(self, 'libraries', default=[])],
   flattenedLibraries:
     scalacConfig.libraryDeps +
     libraries +

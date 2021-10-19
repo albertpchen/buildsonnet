@@ -263,8 +263,11 @@ object Std:
               else
                 ctx.workspaceDir.resolve(str.str).normalize
             case path: EvaluatedJValue.JPath => path.path
-          if !path.getParent.toFile.mkdirs then
+          val parent = path.getParent
+          if !java.nio.file.Files.exists(parent) && !parent.toFile.mkdirs then
             ctx.error(src, s"could not create parent directories for file '$path'")
+          if !java.nio.file.Files.isDirectory(parent) then
+            ctx.error(src, s"file parent is not a directory '$path'")
           if java.nio.file.Files.isDirectory(path) then
             ctx.error(src, s"file '$path' is a directory")
           EvaluatedJValue.JPath(src, JobRunner.write(path, contents.str))
@@ -299,14 +302,38 @@ object Std:
           case e: java.lang.SecurityException => ctx.error(src, s"could not access environment variable \"$varName\": ${e.getMessage}")
       }.toJValue
     },
-    "scala" -> makeObject(ctx.bind("std", JValue.JSelf(stdSrc)), ctx => Map(
+    "java" -> makeObject(ctx.bind("std", JValue.JSelf(stdSrc)), ctx => Map(
       "Dep" -> function3(Arg.org, Arg.name, Arg.version) { (ctx, src, org, name, version) =>
         Task.parZip3(ctx.expectString(org), ctx.expectString(name), ctx.expectString(version)).map {
           (org, name, version) => makeObject(ctx, ctx => Map(
             "org" -> org,
             "name" -> name,
             "version" -> version,
+            "type" -> EvaluatedJValue.JString(src, "java"),
           ))
+        }.toJValue
+      },
+    )),
+    "scala" -> makeObject(ctx.bind("std", JValue.JSelf(stdSrc)), ctx => Map(
+      "Dep" -> function4(
+        Arg.org,
+        Arg.name,
+        Arg.version,
+        Arg.crossVersion(jnull)
+      ) { (ctx, src, org, name, version, crossVersion) =>
+        Task.parZip4(
+          ctx.expectString(org),
+          ctx.expectString(name),
+          ctx.expectString(version),
+          ctx.expectType[EvaluatedJValue.JString | EvaluatedJValue.JNull](crossVersion),
+        ).map {
+          (org, name, version, crossVersion) =>
+            makeObject(ctx, ctx => Map(
+              "org" -> org,
+              "name" -> name,
+              "version" -> version,
+              "type" -> EvaluatedJValue.JString(src, "scala"),
+            ) ++ (if !crossVersion.isNull then Some("crossVersion" -> crossVersion) else None))
         }.toJValue
       },
       "Project" -> {
