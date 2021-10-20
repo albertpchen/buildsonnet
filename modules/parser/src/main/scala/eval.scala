@@ -184,24 +184,27 @@ object EvaluatedJValue:
       obj.imp.members()
 
   extension (arr: EvaluatedJValue.JArray)
-    def index(src: Source, ctx: EvaluationContext, idx: Int, endIdxOpt: Option[Int], strideOpt: Option[Int]): EvaluatedJValue =
-      if idx < 0 || endIdxOpt.exists(_ < 0) || strideOpt.exists(_ < 0) then
+    def slice(
+      src: Source,
+      ctx: EvaluationContext,
+      idx: Int,
+      endIdxOpt: Option[Int],
+      strideOpt: Option[Int]
+    ): EvaluatedJValue =
+      val endIdx = endIdxOpt.getOrElse(arr.elements.size)
+      val stride = strideOpt.getOrElse(1)
+      if idx < 0 || endIdx < 0 || stride < 0 then
         ctx.error(src, s"negative index, end, or stride are not allowed")
       val size = arr.elements.size
       if size <= idx then ctx.error(src, s"index out of bounds $idx")
-      if endIdxOpt.isEmpty && strideOpt.isEmpty then
-        arr.elements(idx)
+      if idx >= endIdx then
+        EvaluatedJValue.JArray(src, Vector.empty)
       else
-        val stride = strideOpt.getOrElse(1)
-        val endIdx = endIdxOpt.getOrElse(size - 1)
-        if idx >= endIdx then
-          EvaluatedJValue.JArray(src, Vector.empty)
-        else
-          val elements = for
-            i <- idx until endIdx by stride
-            if i < size
-          yield arr.elements(i)
-          EvaluatedJValue.JArray(src, elements.toVector)
+        val elements = for
+          i <- idx until endIdx by stride
+          if i < size
+        yield arr.elements(i)
+        EvaluatedJValue.JArray(src, elements.toVector)
 
   extension (value: EvaluatedJValue)
     def structuralEquals(other: EvaluatedJValue): Task[Boolean] =
@@ -423,7 +426,7 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
         val endIndex = rawEndIndex.fold(none)(num => ctx.expectNum(num).map(n => Some(n.double.toInt)))
         val stride = rawStride.fold(none)(num => ctx.expectNum(num).map(n => Some(n.double.toInt)))
         (index, endIndex, stride).mapN { (index, endIndex, stride) =>
-          arr.index(src, ctx, index.double.toInt, endIndex, stride)
+          arr.slice(src, ctx, index.double.toInt, endIndex, stride)
         }
     }.toJValue
   case JValue.JApply(src, loc, positionalArgs, namedArgs) =>

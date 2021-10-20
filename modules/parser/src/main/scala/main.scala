@@ -16,7 +16,7 @@ object Buildsonnet:
       Right(result)
 
   val usage =
-    """usage: buildsonnet [<builsonnet-options>] <command> [<args>]
+    """usage: buildsonnet [<buildsonnet-options>] <command> [<args>]
       |
       |buildsonnet will search for a build.jsonnet file starting from the
       |current directory and searching upwards. This file should evaluate to a

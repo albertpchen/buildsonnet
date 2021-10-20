@@ -113,7 +113,18 @@ local resolveLibraryDep(scalacConfig, dep) =
   compile:: std.scala.compile(self.bloopConfig),
   classpathString:: std.join(":", [path.name for path in std.scala.classpath(self.bloopConfig)]),
   classpath:: std.print(self.classpathString),
+  mainClasses:: std.print(std.scala.mainClasses(self.bloopConfig)),
   run(args)::
+    local len = std.length(args);
+    assert len >= 1: 'missing main class argument';
+    std.scala.run(
+      project=self.bloopConfig,
+      jvmOptions=std.get(base, "runtimeJavaOpts", default=[]),
+      environmentVariables=[],
+      main=args[0],
+      args=if len > 1 then args[1:] else [],
+    ),
+  runFork(args)::
     local extraArgs = std.get(base, "runtimeJavaOpts", default=[]);
     local cmdline = ['java', '-cp', self.classpathString] + extraArgs + args;
     local jvmHome =

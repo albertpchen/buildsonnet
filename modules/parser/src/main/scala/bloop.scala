@@ -144,7 +144,7 @@ object BuildsonnetServices:
         }
       }
       .notification(endpoints.Build.showMessage)(params => logger.info(params.message))
-      .notification(endpoints.Build.logMessage)(params => logger.info(s"LOG: ${params.message}"))
+      .notification(endpoints.Build.logMessage)(params => logger.info(params.message))
       .notification(endpoints.Build.publishDiagnostics) { params =>
         val file = workspace.relativize(params.textDocument.uri.toPath)
         params.diagnostics.foreach { diagnostic =>
@@ -198,6 +198,8 @@ sealed trait Bsp4sBloopServerConnection:
   def shutdown(): Task[Unit]
   def compile(targetId: String): Task[Either[String, bsp.CompileResult]]
   def jvmRunEnvironment(targetId: String): Task[Either[String, bsp.JvmRunEnvironmentResult]]
+  def run(targetId: String, scalaMainClass: bsp.ScalaMainClass): Task[Either[String, bsp.RunResult]]
+  def mainClasses(targetId: String): Task[Either[String, bsp.ScalaMainClassesResult]]
 
 object Bsp4sBloopServerConnection:
   def std(
@@ -251,39 +253,75 @@ object Bsp4sBloopServerConnection:
           Task.now(logStream.close())
       }
 
-      def compile(targetId: String): Task[Either[String, bsp.CompileResult]] =
+      private def clientTask[T](task: jsonrpc4s.RpcClient ?=> Task[T]): Task[T] =
         pair.flatMap { (connection, client, services) =>
-          given jsonrpc4s.RpcClient = client
-          val params = bsp.CompileParams(
-            List(bsp.BuildTargetIdentifier(bsp.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
-              None,
-              None,
-          )
-          endpoints.BuildTarget.compile.request(params).map {
-            case jsonrpc4s.RpcSuccess(value, _) => Right(value)
-            case jsonrpc4s.RpcFailure(methodName, underlying) => Left(jsonrpc4s.RpcFailure.toMsg(methodName, underlying))
-          }
+          task(using client)
         }
 
-      def jvmRunEnvironment(targetId: String): Task[Either[String, bsp.JvmRunEnvironmentResult]] =
-        pair.flatMap { (connection, client, services) =>
-          given jsonrpc4s.RpcClient = client
-          compile(targetId).flatMap {
-            case Right(compileResult) =>
-              compileResult.statusCode match
-              case bsp.StatusCode.Ok =>
-                val params = bsp.JvmRunEnvironmentParams(
-                  List(bsp.BuildTargetIdentifier(bsp.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
-                  None
-                )
-                endpoints.BuildTarget.jvmRunEnvironment.request(params).map {
-                  case jsonrpc4s.RpcSuccess(value, _) => Right(value)
-                  case jsonrpc4s.RpcFailure(methodName, underlying) => Left(jsonrpc4s.RpcFailure.toMsg(methodName, underlying))
-                }
-              case bsp.StatusCode.Error =>
-                Task.pure(Left(s"compilation for '$targetId' was cancelled"))
-              case  bsp.StatusCode.Cancelled =>
-                Task.pure(Left(s"compilation for '$targetId' failed"))
-            case Left(msg) => Task.pure(Left(msg))
-          }
+      def compile(targetId: String): Task[Either[String, bsp.CompileResult]] = clientTask {
+        val params = bsp.CompileParams(
+          List(bsp.BuildTargetIdentifier(bsp.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
+            None,
+            None,
+        )
+        endpoints.BuildTarget.compile.request(params).map {
+          case jsonrpc4s.RpcSuccess(value, _) => Right(value)
+          case jsonrpc4s.RpcFailure(methodName, underlying) => Left(jsonrpc4s.RpcFailure.toMsg(methodName, underlying))
         }
+      }
+
+      def jvmRunEnvironment(targetId: String): Task[Either[String, bsp.JvmRunEnvironmentResult]] = clientTask {
+        compile(targetId).flatMap {
+          case Right(compileResult) =>
+            compileResult.statusCode match
+            case bsp.StatusCode.Ok =>
+              val params = bsp.JvmRunEnvironmentParams(
+                List(bsp.BuildTargetIdentifier(bsp.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
+                None
+              )
+              endpoints.BuildTarget.jvmRunEnvironment.request(params).map {
+                case jsonrpc4s.RpcSuccess(value, _) => Right(value)
+                case jsonrpc4s.RpcFailure(methodName, underlying) => Left(jsonrpc4s.RpcFailure.toMsg(methodName, underlying))
+              }
+            case bsp.StatusCode.Error =>
+              Task.pure(Left(s"compilation for '$targetId' was cancelled"))
+            case  bsp.StatusCode.Cancelled =>
+              Task.pure(Left(s"compilation for '$targetId' failed"))
+          case Left(msg) => Task.pure(Left(msg))
+        }
+      }
+
+      def run(targetId: String, scalaMainClass: bsp.ScalaMainClass): Task[Either[String, bsp.RunResult]] = clientTask {
+        compile(targetId).flatMap {
+          case Right(compileResult) =>
+            compileResult.statusCode match
+            case bsp.StatusCode.Ok =>
+              val params = bsp.RunParams(
+                bsp.BuildTargetIdentifier(bsp.Uri(new java.net.URI(s"file://$workspace/?id=$targetId"))),
+                originId = None,
+                arguments = None,
+                dataKind = Some(bsp.RunParamsDataKind.ScalaMainClass),
+                data = Some(jsonrpc4s.RawJson.toJson(scalaMainClass)),
+              )
+              endpoints.BuildTarget.run.request(params).map {
+                case jsonrpc4s.RpcSuccess(value, _) => Right(value)
+                case jsonrpc4s.RpcFailure(methodName, underlying) => Left(jsonrpc4s.RpcFailure.toMsg(methodName, underlying))
+              }
+            case bsp.StatusCode.Error =>
+              Task.pure(Left(s"compilation for '$targetId' was cancelled"))
+            case  bsp.StatusCode.Cancelled =>
+              Task.pure(Left(s"compilation for '$targetId' failed"))
+          case Left(msg) => Task.pure(Left(msg))
+        }
+      }
+
+      def mainClasses(targetId: String): Task[Either[String, bsp.ScalaMainClassesResult]] = clientTask {
+        val params = bsp.ScalaMainClassesParams(
+          List(bsp.BuildTargetIdentifier(bsp.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
+          originId = None,
+        )
+        endpoints.BuildTarget.scalaMainClasses.request(params).map {
+          case jsonrpc4s.RpcSuccess(value, _) => Right(value)
+          case jsonrpc4s.RpcFailure(methodName, underlying) => Left(jsonrpc4s.RpcFailure.toMsg(methodName, underlying))
+        }
+      }

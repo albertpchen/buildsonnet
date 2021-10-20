@@ -126,6 +126,32 @@ object Std:
       fn(applyCtx, params.src, a1, a2, a3, a4)
     })
 
+  private inline def function5[
+    Name1 <: String,
+    Name2 <: String,
+    Name3 <: String,
+    Name4 <: String,
+    Name5 <: String,
+  ](
+    arg1: Arg[Name1],
+    arg2: Arg[Name2],
+    arg3: Arg[Name3],
+    arg4: Arg[Name4],
+    arg5: Arg[Name5],
+  )(
+    fn: (EvaluationContext, Source, EvaluatedJValue, EvaluatedJValue, EvaluatedJValue, EvaluatedJValue, EvaluatedJValue) => EvaluatedJValue,
+  ): EvaluatedJValue.JFunction =
+    EvaluatedJValue.JFunction(stdSrc, 4, (applyCtx, params) => {
+      val Array(a1, a2, a3, a4, a5) = bindArgs(Seq(
+        compiletime.constValue[Name1] -> arg1.default,
+        compiletime.constValue[Name2] -> arg2.default,
+        compiletime.constValue[Name3] -> arg3.default,
+        compiletime.constValue[Name4] -> arg4.default,
+        compiletime.constValue[Name5] -> arg5.default,
+      ), applyCtx, params)
+      fn(applyCtx, params.src, a1, a2, a3, a4, a5)
+    })
+
   private def makeObject(
     ctx: EvaluationContext,
     staticMembers: EvaluationContext => Map[String, EvaluatedJValue | LazyObjectValue],
@@ -156,6 +182,7 @@ object Std:
 
   private val stdSrc = Source.Generated(SourceFile.std)
   private val jnull = EvaluatedJValue.JNull(stdSrc)
+  private val jarray = EvaluatedJValue.JArray(stdSrc, Seq.empty)
   private val jtrue = EvaluatedJValue.JBoolean(stdSrc, true)
   private val jfalse = EvaluatedJValue.JBoolean(stdSrc, false)
   private val jidentity = function1(Arg.x) { (ctx, src, x) => x }
@@ -234,10 +261,10 @@ object Std:
         rest
       }.toJValue
     },
-    "print" -> function2(Arg.str, Arg.rest(jnull)) { (ctx, src, str, rest) =>
-      ctx.expectString(toStringImp(ctx, src, str)).map { str =>
+    "print" -> function2(Arg.str, Arg.rest(jnull)) { (ctx, src, rawStr, rest) =>
+      ctx.expectString(toStringImp(ctx, src, rawStr)).map { str =>
         println(str.str)
-        if rest eq jnull then str
+        if rest eq jnull then rawStr
         else rest
       }.toJValue
     },
@@ -376,15 +403,53 @@ object Std:
           }
         }.toJValue
       },
+      "run" -> function5(
+        Arg.project,
+        Arg.jvmOptions,
+        Arg.environmentVariables,
+        Arg.main,
+        Arg.args(jarray),
+      ) { (ctx, src, project, jvmOptions, environmentVariables, main, args) =>
+        Task.parZip5(
+          ctx.decode[Config.RecursiveProject](project),
+          ctx.decode[String](main),
+          ctx.decode[List[String]](jvmOptions),
+          ctx.decode[List[String]](args),
+          ctx.decode[List[String]](environmentVariables),
+        ).flatMap { (project, main, jvmOptions, args, environmentVariables) =>
+          Config.write(ctx, project)
+          ctx.bloopServer.run(project.name, ch.epfl.scala.bsp.ScalaMainClass(
+            `class` = main,
+            arguments = args,
+            environmentVariables = environmentVariables,
+            jvmOptions = jvmOptions,
+          )).map {
+            case Right(_) => EvaluatedJValue.JNull(src)
+            case Left(msg) => ctx.error(src, msg)
+          }
+        }.toJValue
+      },
       "classpath" -> function1(Arg.project) { (ctx, src, project) =>
         ctx.decode[Config.RecursiveProject](project).flatMap { project =>
-          import scala.jdk.CollectionConverters.given
           Config.write(ctx, project)
           ctx.bloopServer.jvmRunEnvironment(project.name).map {
             case Right(env) =>
               val strings = env.items.head.classpath.map { item =>
                 val file = java.nio.file.Paths.get(new java.net.URI(item))
                 EvaluatedJValue.JPath(src, file)
+              }.toSeq
+              EvaluatedJValue.JArray(src, strings)
+            case Left(msg) => ctx.error(src, msg)
+          }
+        }.toJValue
+      },
+      "mainClasses" -> function1(Arg.project) { (ctx, src, project) =>
+        ctx.decode[Config.RecursiveProject](project).flatMap { project =>
+          Config.write(ctx, project)
+          ctx.bloopServer.mainClasses(project.name).map {
+            case Right(env) =>
+              val strings = env.items.head.classes.map { item =>
+                EvaluatedJValue.JString(src, item.`class`)
               }.toSeq
               EvaluatedJValue.JArray(src, strings)
             case Left(msg) => ctx.error(src, msg)
