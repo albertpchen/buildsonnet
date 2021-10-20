@@ -90,7 +90,7 @@ object JBinaryOperator:
             case '=' => Op_<=
             case '<' => Op_<<
       case '>' =>
-        if op.size == 1 then Op_<
+        if op.size == 1 then Op_>
         else
           (op(1): @switch) match
             case '=' => Op_>=

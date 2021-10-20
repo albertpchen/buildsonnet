@@ -60,8 +60,7 @@
     ],
     runtimeJvmHome: std.getenv("HOME") + "/.cache/coursier/jvm/graalvm-java11@21.2.0/",
     runtimeJavaOpts: [
-      "-agentlib:native-image-agent=config-output-dir=" + std.workspace.name + "/native-image-agent-config-output-dir"
-      //"-agentpath:/home/achen2012/tools/async-profiler-2.0-linux-x64/build/libasyncProfiler.so=start,event=cpu,file=profile.html"
+      // "-agentlib:native-image-agent=config-output-dir=" + std.workspace.name + "/native-image-agent-config-output-dir"
     ],
   },
 }

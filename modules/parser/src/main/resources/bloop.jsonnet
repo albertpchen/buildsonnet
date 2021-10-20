@@ -120,7 +120,10 @@ local resolveLibraryDep(scalacConfig, dep) =
     std.scala.run(
       project=self.bloopConfig,
       jvmOptions=std.get(base, "runtimeJavaOpts", default=[]),
-      environmentVariables=[],
+      environmentVariables=[
+        "JAVA_HOME=" + if "runtimeJvmHome" in base then base.runtimeJvmHome else std.getenv("JAVA_HOME"),
+        "HOME=" + std.getenv("HOME"),
+      ],
       main=args[0],
       args=if len > 1 then args[1:] else [],
     ),
