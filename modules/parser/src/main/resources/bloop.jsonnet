@@ -38,26 +38,27 @@ local resolveLibraryDep(scalacConfig, dep) =
     };
 
 {
+  withSources: false,
+  dependencies: [],
+  libraries: [],
   local base = self,
   local scalacConfig =
     if std.startsWith(base.scalaVersion, '3.') then suffixMap['3.'](base.scalaVersion)
     else if std.startsWith(base.scalaVersion, '2.11.') then suffixMap['2.11.'](base.scalaVersion)
     else if std.startsWith(base.scalaVersion, '2.12.') then suffixMap['2.12.'](base.scalaVersion)
     else if std.startsWith(base.scalaVersion, '2.13.') then suffixMap['2.13.'](base.scalaVersion),
-  local dependencies = std.get(self, 'dependencies', default=[]),
-  local libraries = [resolveLibraryDep(scalacConfig, dep) for dep in std.get(self, 'libraries', default=[])],
   flattenedLibraries:
     scalacConfig.libraryDeps +
-    libraries +
+    [resolveLibraryDep(scalacConfig, dep) for dep in base.libraries] +
     std.flatMap(
       function(p) p.flattenedLibraries,
-      dependencies,
+      base.dependencies,
     ),
   dependencyClasspath:
-    std.uniq([p.bloopConfig.classesDir for p in dependencies] +
+    std.uniq([p.bloopConfig.classesDir for p in base.dependencies] +
     std.flatMap(
       function(p) p.dependencyClasspath,
-      dependencies
+      base.dependencies
     )),
   bloopConfig: {
     assert scalacConfig != null: "scala version must start with one of" + std.objectFields(suffixMap),
@@ -66,8 +67,12 @@ local resolveLibraryDep(scalacConfig, dep) =
     directory: ".",
     workspaceDir: std.workspace,
     sources: base.sources,
-    dependencies: [p.bloopConfig for p in std.get(base, 'dependencies', default=[])],
-    classpath: base.dependencyClasspath + [path.name for path in std.scala.cs(base.flattenedLibraries)],
+    dependencies: [p.bloopConfig for p in base.dependencies],
+    classpath: base.dependencyClasspath + [
+      path.name
+      for path
+      in std.scala.cs(base.flattenedLibraries, withSources = base.withSources)
+    ],
     out: ".bloop/" + bloopConfig.name,
     classesDir: bloopConfig.out + "/classes",
     resources: std.get(base, "resources", default=[]),

@@ -376,17 +376,21 @@ object Std:
             ctx.decode[Seq[CoursierDependency]](deps),
             ctx.expectBoolean(withSources)
           ).flatMap { (deps, withSources) =>
-            Task.deferFutureAction { s =>
-              given ExecutionContext = s
-              (if withSources.value then Fetch().addClassifiers(Classifier.sources) else Fetch())
-                .withDependencies(deps.map(_.toDependency))
+            Task.deferFutureAction { implicit s =>
+              val base =
+                Fetch()
+                  .withDependencies(deps.map(_.toDependency))
+                  .withClasspathOrder(true)
+                  .withCache(FileCache().withLogger(RefreshLogger.create(System.out)))
+              val withOptions =
+                if withSources.value then
+                  base
+                    .addClassifiers(Classifier.sources)
+                    .addArtifactTypes(Type.source)
+                else
+                  base
+              withOptions
                 // .addDependencies(params.deps.map(_.toDependency)) // BUG
-                // .addClassifiers(Classifier.sources)
-                // .addArtifactTypes(Type.source)
-                .withClasspathOrder(true)
-                .withCache(
-                  FileCache().withLogger(RefreshLogger.create(System.out))
-                )
                 .future()
                 .map { files =>
                   EvaluatedJValue.JArray(src, files.map(a => EvaluatedJValue.JPath(src, a.toPath)))
