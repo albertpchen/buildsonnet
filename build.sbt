@@ -4,6 +4,7 @@ val scala213Version = "2.13.6"
 val Dependencies = new {
   val coursierVersion = "2.0.16"
   val coursier = "io.get-coursier" %% "coursier" % coursierVersion
+  val coursierJvm = "io.get-coursier" %% "coursier-jvm" % coursierVersion
   val coursierCache = "io.get-coursier" %% "coursier-cache" % coursierVersion
   val coursierLauncher = "io.get-coursier" %% "coursier-launcher" % coursierVersion
 
@@ -93,6 +94,7 @@ lazy val parser = project
       ("org.typelevel" %% "cats-parse" % "0.3.4").cross(CrossVersion.for3Use2_13),
       "org.scalameta" %%% "munit" % "0.7.26" % Test,
       Dependencies.coursier.cross(CrossVersion.for3Use2_13),
+      Dependencies.coursierJvm.cross(CrossVersion.for3Use2_13),
       Dependencies.coursierLauncher.cross(CrossVersion.for3Use2_13),
       ("com.typesafe.slick" %% "slick" % "3.3.3").cross(CrossVersion.for3Use2_13),
       "org.slf4j" % "slf4j-nop" % "1.6.4",
@@ -120,8 +122,20 @@ lazy val parser = project
 
         "-H:ReflectionConfigurationFiles=" + workspaceDir + "/native-image-reflect-config.json",
         "-H:ResourceConfigurationFiles=" + workspaceDir + "/native-image-resource-config.json",
+
+        "-H:ReflectionConfigurationFiles=" + nativeImageConfigDir + "/reflect-config.json",
+        "-H:ResourceConfigurationFiles=" + nativeImageConfigDir + "/resource-config.json",
+        "-H:JNIConfigurationFiles=" + nativeImageConfigDir + "/jni-config.json",
+
+        "--initialize-at-build-time=scala.Symbol",
+        "--initialize-at-build-time=scala.Function1",
+        "--initialize-at-build-time=scala.Function2",
+        "--initialize-at-build-time=scala.runtime.StructuralCallSite",
+        "--initialize-at-build-time=scala.runtime.EmptyMethodCache",
+        // "--initialize-at-build-time",
+
+        "--initialize-at-run-time=scribe.Logger$",
         "--initialize-at-run-time=scribe.LoggerId$",
-        "--initialize-at-run-time=scribe.LoggerId",
         // "--enable-url-protocols=https",
       )
     },

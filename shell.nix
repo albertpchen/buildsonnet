@@ -1,5 +1,5 @@
 with (import <nixpkgs> {});
-mkShell {
+mkShell rec {
   buildInputs = [
     sbt
     bloop
@@ -8,4 +8,5 @@ mkShell {
 
     zlib
   ];
+  LIBRARY_PATH = lib.makeLibraryPath buildInputs;
 }

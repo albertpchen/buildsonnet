@@ -45,12 +45,14 @@
   },
   parser: std.scala.Project {
     name: "parser",
+    //withSources: true,
     dependencies: [$.bloopLauncher, $.parser213],
     sources: ["modules/parser/src/main/scala"],
     scalaVersion: "3.0.2",
     libraries: [
       std.scala.Dep("org.typelevel", "cats-parse", "0.3.4", crossVersion="for3Use2_13"),
       std.scala.Dep("io.get-coursier", "coursier", "2.0.16", crossVersion="for3Use2_13"),
+      std.scala.Dep("io.get-coursier", "coursier-jvm", "2.0.16", crossVersion="for3Use2_13"),
       std.scala.Dep("io.get-coursier", "coursier-launcher", "2.0.16", crossVersion="for3Use2_13"),
       std.scala.Dep("com.typesafe.slick", "slick", "3.3.3", crossVersion="for3Use2_13"),
       std.java.Dep("org.xerial", "sqlite-jdbc", "3.36.0.3"),
@@ -63,4 +65,54 @@
       // "-agentlib:native-image-agent=config-output-dir=" + std.workspace.name + "/native-image-agent-config-output-dir"
     ],
   },
+  help(args):
+    local jvmHome = std.scala.jvm("graalvm-java11:21.2.0").name;
+    std.runJob({
+      cmdline: [jvmHome + "/bin/native-image", "--help"],
+      inputFiles: [],
+    }),
+  nativeImage(args):
+    local jvmHome = std.scala.jvm("graalvm-java11:21.2.0").name;
+    local workspaceDir = std.workspace.name;
+    local nativeImageConfigDir = workspaceDir + "/native-image-agent-config-output-dir";
+    std.runJob({
+      cmdline: [jvmHome + "/bin/native-image", "-cp", $.parser.classpathString] + [
+        "--no-server",
+        "--enable-http",
+        "--enable-https",
+        "-H:EnableURLProtocols=http,https",
+        "--enable-all-security-services",
+        "--no-fallback",
+        "--allow-incomplete-classpath",
+        "-H:+ReportExceptionStackTraces",
+
+        "-H:+PrintClassInitialization",
+        "--report-unsupported-elements-at-runtime",
+
+        "-H:ReflectionConfigurationFiles=" + workspaceDir + "/native-image-reflect-config.json",
+        "-H:ResourceConfigurationFiles=" + workspaceDir + "/native-image-resource-config.json",
+
+        "-H:ReflectionConfigurationFiles=" + nativeImageConfigDir + "/reflect-config.json",
+        "-H:ResourceConfigurationFiles=" + nativeImageConfigDir + "/resource-config.json",
+        "-H:JNIConfigurationFiles=" + nativeImageConfigDir + "/jni-config.json",
+
+        "--initialize-at-build-time=scala.Symbol",
+        "--initialize-at-build-time=scala.Function1",
+        "--initialize-at-build-time=scala.Function2",
+        "--initialize-at-build-time=scala.runtime.StructuralCallSite",
+        "--initialize-at-build-time=scala.runtime.EmptyMethodCache",
+        // "--initialize-at-build-time=root",
+        // "--initialize-at-build-time=scala",
+        // "--initialize-at-build-time",
+
+        "--initialize-at-run-time=scribe.Logger$",
+        "--initialize-at-run-time=scribe.LoggerId$",
+        // "--enable-url-protocols=https",
+      ] + args,
+      inputFiles: std.scala.classpath($.parser.bloopConfig),
+      envVars: {
+        PATH: std.getenv("PATH"),
+        LIBRARY_PATH: std.getenv("LIBRARY_PATH"),
+      }
+    }),
 }

@@ -110,9 +110,7 @@ object Buildsonnet:
         System.err.println("syntax error at: " + error.toString)
         System.exit(1)
       case Right(buildObject) =>
-        val exec = java.util.concurrent.Executors.newCachedThreadPool()
-        given monix.execution.Scheduler = monix.execution.Scheduler(exec)
-        given ExecutionContextExecutorService = ExecutionContext.fromExecutorService(exec)
+        given monix.execution.Scheduler = monix.execution.Scheduler.global
         val withoutStd = EvaluationContext(
           file = sourceFile,
           bloopPort = bloopPort,
@@ -147,7 +145,7 @@ object Buildsonnet:
             case err: EvaluationError => Left(err)
           finally
             Await.result(ctx.bloopServer.shutdown().runToFuture, Duration.Inf)
-            summon[ExecutionContextExecutorService].shutdown()
+            // summon[monix.execution.schedulers.SchedulerService].shutdown()
         result match
           case Left(err) =>
             System.err.println(err)

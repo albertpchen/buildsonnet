@@ -234,41 +234,59 @@ object JobRunner:
             val outputs: Seq[EvaluatedJValue.JPath] = outputPaths.distinct.map(EvaluatedJValue.JPath(src, _))
             Task.now(EvaluatedJValue.JJob(src, desc, jobRow.stdout, jobRow.stderr, outputs, jobRow.exitCode))
           case _ =>
-            println(desc.cmdline.mkString(" ")) // print cmdline feedback before running
-            val process =
-              java.lang.Runtime.getRuntime().exec(
-                (cmd +: desc.cmdline.tail).toArray,
-                desc.envVars.fold(Seq.empty)(_.toSeq).map((k, v) => s"$k=$v").sorted.toArray,
-                directory.toFile
-              )
-            val exitCode = process.waitFor()
-            val missingFiles = outputPaths.filterNot(ctx.exists)
-            if missingFiles.nonEmpty then
-              ctx.error(src, s"job did not produce expected output files: ${missingFiles.mkString(", ")}")
-            val stdOut = process
-            val stdout = scala.io.Source.fromInputStream(process.getInputStream).mkString
-            val stderr = scala.io.Source.fromInputStream(process.getErrorStream).mkString
-            val outputs: Seq[EvaluatedJValue.JPath] = outputPaths.distinct.map(EvaluatedJValue.JPath(src, _))
-            print(stdout)
-            if exitCode != 0 then
-              System.err.println(stderr)
-              ctx.error(src, s"nonzero exit code returned from job: $exitCode")
-            else
-              Task.deferFutureAction(s => {
-                given Scheduler = s
-                database.run(jobTable.insertOrUpdate((
-                  stringsToByteArray(desc.cmdline),
-                  stringsToByteArray(desc.envVars.getOrElse(Map.empty).toSeq.sorted.flatMap((a, b) => Seq(a, b))),
-                  stringsToByteArray(desc.inputFiles.map(_.path.toString)),
-                  desc.stdin.getOrElse(""),
-                  directory.toString,
+            Task.deferFutureAction(s => {
+              println(desc.cmdline.mkString(" ")) // print cmdline feedback before running
+              val process =
+                java.lang.Runtime.getRuntime().exec(
+                  (cmd +: desc.cmdline.tail).toArray,
+                  desc.envVars.fold(Seq.empty)(_.toSeq).map((k, v) => s"$k=$v").sorted.toArray,
+                  directory.toFile
+                )
+              val missingFiles = outputPaths.filterNot(ctx.exists)
+              if missingFiles.nonEmpty then
+                ctx.error(src, s"job did not produce expected output files: ${missingFiles.mkString(", ")}")
+              val stdoutObservable =
+                monix.reactive.Observable.fromLinesReaderUnsafe(new java.io.BufferedReader(new java.io.InputStreamReader(process.getInputStream), 2048))
+              val printAndBuildConsumer: monix.reactive.Consumer[String, StringBuilder] =
+              monix.reactive.Consumer.foldLeft(new StringBuilder) { (builder, line) =>
+                println(line)
+                builder ++= line
+                builder ++= Logger.lineSeparator
+                builder
+              }
+              given Scheduler = s
+              val stdout =
+                monix.reactive.Observable.fromLinesReaderUnsafe(new java.io.BufferedReader(new java.io.InputStreamReader(process.getInputStream), 2048))
+                  .consumeWith(printAndBuildConsumer)
+                  .map(_.toString)
+                  .runToFuture
+              val stderr =
+                monix.reactive.Observable.fromLinesReaderUnsafe(new java.io.BufferedReader(new java.io.InputStreamReader(process.getErrorStream), 2048))
+                  .consumeWith(printAndBuildConsumer)
+                  .map(_.toString)
+                  .runToFuture
+              val outputs: Seq[EvaluatedJValue.JPath] = outputPaths.distinct.map(EvaluatedJValue.JPath(src, _))
+              // print(stdout)
+              val exitCode = process.waitFor()
+              stdout.zip(stderr).flatMap { (stdout, stderr) =>
+                if exitCode != 0 then
+                  //System.err.println(stderr)
+                  ctx.error(src, s"$stderr\nnonzero exit code returned from job: $exitCode")
+                else
+                  database.run(jobTable.insertOrUpdate((
+                    stringsToByteArray(desc.cmdline),
+                    stringsToByteArray(desc.envVars.getOrElse(Map.empty).toSeq.sorted.flatMap((a, b) => Seq(a, b))),
+                    stringsToByteArray(desc.inputFiles.map(_.path.toString)),
+                    desc.stdin.getOrElse(""),
+                    directory.toString,
 
-                  stdout,
-                  stderr,
-                  exitCode,
-                ))).map { _ =>
-                  EvaluatedJValue.JJob(src, desc, stdout, stderr, outputs, exitCode)
-                }
-              })
+                    stdout,
+                    stderr,
+                    exitCode,
+                  ))).map { _ =>
+                    EvaluatedJValue.JJob(src, desc, stdout, stderr, outputs, exitCode)
+                  }
+              }
+            })
         }
       }

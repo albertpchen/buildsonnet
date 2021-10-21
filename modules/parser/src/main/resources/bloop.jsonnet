@@ -118,6 +118,7 @@ local resolveLibraryDep(scalacConfig, dep) =
   compile:: std.scala.compile(self.bloopConfig),
   classpathString:: std.join(":", [path.name for path in std.scala.classpath(self.bloopConfig)]),
   classpath:: std.print(self.classpathString),
+  classpathPaths:: std.scala.classpath(self.bloopConfig),
   mainClasses:: std.print(std.scala.mainClasses(self.bloopConfig)),
   run(args)::
     local len = std.length(args);
