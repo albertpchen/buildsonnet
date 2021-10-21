@@ -398,6 +398,34 @@ object Std:
             }
           }.toJValue
       },
+      "jvm" -> function2(
+        Arg.name,
+        Arg.index(EvaluatedJValue.JString(
+          stdSrc,
+          "https://github.com/coursier/jvm-index/raw/master/index.json",
+        ))
+      ) { (ctx, src, name, index) =>
+        import coursier.cache.FileCache
+        import coursier.cache.loggers.RefreshLogger
+        import coursier.jvm.{JavaHome, JvmCache}
+        Task.parZip2(
+          ctx.decode[String](name),
+          ctx.decode[String](index),
+        ).flatMap { (name, index) =>
+          Task.deferFutureAction { implicit s =>
+            val fileCache = FileCache()
+              .withLogger(RefreshLogger.create(System.out))
+            val jvmCache = JvmCache()
+              .withCache(fileCache)
+              .withIndex(index)
+            JavaHome()
+              .withCache(jvmCache)
+              .get(name)
+              .future()
+              .map(f => EvaluatedJValue.JPath(src, f.toPath))
+          }
+        }.toJValue
+      },
       "compile" -> function1(Arg.project) { (ctx, src, project) =>
         ctx.decode[Config.RecursiveProject](project).flatMap { project =>
           Config.write(ctx, project)
