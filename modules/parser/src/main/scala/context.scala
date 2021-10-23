@@ -247,7 +247,19 @@ object EvaluationContext:
     inline def expectObject(expr: EvaluatedJValue): Task[EvaluatedJValue.JObject] = expectType[EvaluatedJValue.JObject](expr)
     inline def expectFunction(code: JValue): Task[EvaluatedJValue.JFunction] = expectType[EvaluatedJValue.JFunction](code)
     inline def expectFunction(expr: EvaluatedJValue): Task[EvaluatedJValue.JFunction] = expectType[EvaluatedJValue.JFunction](expr)
-
+/*
+    inline def expectTypeS[T <: EvaluatedJValue.JNow](expr: EvaluatedJValue, msg: EvaluatedJValue ?=> String): Task[T] =
+      Task.deferAction { implicit scheduler =>
+        expr match
+        case t: T => t
+        case f: EvaluatedJValue.JFuture =>
+          val value = concurrent.Await.result(f.future.runToFuture, concurrent.duration.Duration.Inf)
+          value match
+          case t: T => t
+          case expr => ctx.error(expr.src, msg(using expr))
+        case _ => ctx.error(expr.src, msg(using expr))
+      }
+*/
     inline def expectType[T <: EvaluatedJValue.JNow](expr: EvaluatedJValue, msg: EvaluatedJValue ?=> String): Task[T] =
       expr match
       case t: T => Task.now(t)
