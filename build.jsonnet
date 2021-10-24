@@ -1,4 +1,10 @@
 {
+  ecs: std.scala.Project {
+    name: "ecs",
+    sources: ["modules/ecs/src"],
+    scalaVersion: "3.0.2",
+  },
+
   bloopgun: std.scala.Project {
     name: "bloopgun",
     sources: [
@@ -24,6 +30,7 @@
       std.java.Dep("org.bouncycastle", "bcpkix-jdk15on", "1.64"),
     ],
   },
+
   bloopLauncher: std.scala.Project {
     name: "bloop-launcher",
     dependencies: [$.bloopgun],
@@ -35,6 +42,7 @@
       std.java.Dep("org.scala-sbt.ipcsocket", "ipcsocket", "1.4.0",),
     ],
   },
+
   parser213: std.scala.Project {
     name: "parser213",
     sources: ["modules/parser213/src/main/scala"],
@@ -43,12 +51,14 @@
       std.scala.Dep("ch.epfl.scala", "bsp4s", "2.0.0"),
     ],
   },
+
   parser: std.scala.Project {
     name: "parser",
     //withSources: true,
     dependencies: [$.bloopLauncher, $.parser213],
     sources: ["modules/parser/src/main/scala"],
-    scalaVersion: "3.0.2",
+    scalaVersion: "3.1.0",
+    scalacOptions: ["-Xmax-inlines", "100"],
     libraries: [
       std.scala.Dep("org.typelevel", "cats-parse", "0.3.4", crossVersion="for3Use2_13"),
       std.scala.Dep("io.get-coursier", "coursier", "2.0.16", crossVersion="for3Use2_13"),
@@ -62,21 +72,32 @@
     ],
     runtimeJvmHome: std.getenv("HOME") + "/.cache/coursier/jvm/graalvm-java11@21.2.0/",
     runtimeJavaOpts: [
+      // "-agentpath:/path/to/libasyncProfiler.so=start,event=cpu,file=profile.html",
       // "-agentlib:native-image-agent=config-output-dir=" + std.workspace.name + "/native-image-agent-config-output-dir"
     ],
   },
+
+  glob(args):
+    local syntax = if std.length(args) >= 3 then args[2] else "glob";
+    local paths = std.paths(args[0], args[1], syntax);
+    std.print([path.name for path in paths]),
+
   help(args):
     local jvmHome = std.scala.jvm("graalvm-java11:21.2.0").name;
     std.runJob({
       cmdline: [jvmHome + "/bin/native-image", "--help"],
       inputFiles: [],
     }),
+
   nativeImage(args):
     local jvmHome = std.scala.jvm("graalvm-java11:21.2.0").name;
     local workspaceDir = std.workspace.name;
     local nativeImageConfigDir = workspaceDir + "/native-image-agent-config-output-dir";
     std.runJob({
-      cmdline: [jvmHome + "/bin/native-image", "-cp", $.parser.classpathString] + [
+      cmdline: [
+        jvmHome + "/bin/native-image",
+        "-cp", $.parser.classpathString
+      ] + [
         "--no-server",
         "--enable-http",
         "--enable-https",
@@ -101,13 +122,9 @@
         "--initialize-at-build-time=scala.Function2",
         "--initialize-at-build-time=scala.runtime.StructuralCallSite",
         "--initialize-at-build-time=scala.runtime.EmptyMethodCache",
-        // "--initialize-at-build-time=root",
-        // "--initialize-at-build-time=scala",
-        // "--initialize-at-build-time",
 
         "--initialize-at-run-time=scribe.Logger$",
         "--initialize-at-run-time=scribe.LoggerId$",
-        // "--enable-url-protocols=https",
       ] + args,
       inputFiles: std.scala.classpath($.parser.bloopConfig),
       envVars: {

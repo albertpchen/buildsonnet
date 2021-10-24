@@ -301,6 +301,46 @@ object Std:
         }
       }.toJValue
     },
+    "paths" -> function3(Arg.dir, Arg.pattern, Arg.syntax(EvaluatedJValue.JString(stdSrc, "glob"))) { (ctx, src, dir, pattern, syntax) =>
+      Task.parZip3(
+        ctx.expectType[EvaluatedJValue.JString | EvaluatedJValue.JPath](dir),
+        ctx.decode[String](pattern),
+        ctx.decode[String](syntax)
+      ).map { (dir, pattern, syntax) =>
+        import collection.JavaConverters.asScalaIteratorConverter
+        val dirPath =
+          dir match
+          case str: EvaluatedJValue.JString =>
+            if str.str.startsWith("/") then
+              java.nio.file.Paths.get(str.str).normalize
+            else
+              ctx.workspaceDir.resolve(str.str).normalize
+          case path: EvaluatedJValue.JPath => path.path
+        if !java.nio.file.Files.exists(dirPath) then
+          ctx.error(src, s"directory does not exist, got '$dirPath'")
+        if !java.nio.file.Files.isDirectory(dirPath) then
+          ctx.error(src, s"filename is not a directory, got '$dirPath'")
+        val matcher = syntax match
+          case "glob" | "regex" =>
+            println(s"$syntax:$pattern")
+            java.nio.file.FileSystems.getDefault.getPathMatcher(s"$syntax:$pattern")
+          case _ =>
+            ctx.error(src, s"paths syntax must be either 'glob' or 'regex', got $syntax")
+          
+        val elements = java.nio.file.Files.find(
+            dirPath,
+            Integer.MAX_VALUE,
+           (filePath, fileAttr) => {
+             fileAttr.isRegularFile() && matcher.matches(filePath)
+           }
+         )
+          .iterator()
+          .asScala
+          .map(EvaluatedJValue.JPath(src, _))
+          .toSeq
+        EvaluatedJValue.JArray(src, elements)
+      }.toJValue
+    },
     "startsWith" -> function2(Arg.a, Arg.b) { (ctx, src, a, b) =>
       Task.parZip2(ctx.expectString(a), ctx.expectString(b)).map { (a, b) =>
         EvaluatedJValue.JBoolean(src, a.str.startsWith(b.str))

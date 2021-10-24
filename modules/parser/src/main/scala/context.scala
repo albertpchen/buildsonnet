@@ -261,13 +261,16 @@ object EvaluationContext:
       }
 */
     inline def expectType[T <: EvaluatedJValue.JNow](expr: EvaluatedJValue, msg: EvaluatedJValue ?=> String): Task[T] =
+      expectType[T](expr.src, expr, msg)
+
+    inline def expectType[T <: EvaluatedJValue.JNow](src: Source, expr: EvaluatedJValue, msg: EvaluatedJValue ?=> String): Task[T] =
       expr match
       case t: T => Task.now(t)
       case f: EvaluatedJValue.JFuture => f.future.map {
         case t: T => t
-        case expr => ctx.error(expr.src, msg(using expr))
+        case expr => ctx.error(src, msg(using expr))
       }
-      case _ => ctx.error(expr.src, msg(using expr))
+      case _ => ctx.error(src, msg(using expr))
 
     inline def expectType[T <: EvaluatedJValue.JNow](expr: EvaluatedJValue): Task[T] =
       expectType[T](expr, s"Unexpected type ${typeString(theExpr)}, expected ${typeString[T]}")
