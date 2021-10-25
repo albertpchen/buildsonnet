@@ -232,6 +232,7 @@ object EvaluationContext:
 
   extension (ctx: EvaluationContext)
     def decode[T: JDecoder](expr: EvaluatedJValue): Task[T] = JDecoder[T].decode(ctx, expr)
+    def decode[T: JDecoder](expr: JValue): Task[T] = decode(evalUnsafe(ctx)(expr))
     inline def expectBoolean(code: JValue): Task[EvaluatedJValue.JBoolean] = expectType[EvaluatedJValue.JBoolean](code)
     inline def expectBoolean(expr: EvaluatedJValue): Task[EvaluatedJValue.JBoolean] = expectType[EvaluatedJValue.JBoolean](expr)
     inline def expectNum(code: JValue): Task[EvaluatedJValue.JNum] = expectType[EvaluatedJValue.JNum](code)

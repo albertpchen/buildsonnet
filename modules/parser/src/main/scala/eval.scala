@@ -522,6 +522,14 @@ def evalUnsafe(ctx: EvaluationContext)(jvalue: JValue): EvaluatedJValue =
       evalUnsafe(ctx)(left).structuralEquals(evalUnsafe(ctx)(right)).map(EvaluatedJValue.JBoolean(src, _)).toJValue
     case JBinaryOperator.Op_!= =>
       evalUnsafe(ctx)(left).structuralEquals(evalUnsafe(ctx)(right)).map(n => EvaluatedJValue.JBoolean(src, !n)).toJValue
+    case JBinaryOperator.Op_&& =>
+      Task.parZip2(ctx.decode[Boolean](left), ctx.decode[Boolean](right)).map { (left, right) =>
+        EvaluatedJValue.JBoolean(src, left && right)
+      }.toJValue
+    case JBinaryOperator.Op_|| =>
+      Task.parZip2(ctx.decode[Boolean](left), ctx.decode[Boolean](right)).map { (left, right) =>
+        EvaluatedJValue.JBoolean(src, left || right)
+      }.toJValue
 
   case JValue.JUnaryOp(src, op, rawOperand) =>
     op match
