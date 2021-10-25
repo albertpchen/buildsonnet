@@ -242,9 +242,6 @@ object JobRunner:
                   desc.envVars.fold(Seq.empty)(_.toSeq).map((k, v) => s"$k=$v").sorted.toArray,
                   directory.toFile
                 )
-              val missingFiles = outputPaths.filterNot(ctx.exists)
-              if missingFiles.nonEmpty then
-                ctx.error(src, s"job did not produce expected output files: ${missingFiles.mkString(", ")}")
               val stdoutObservable =
                 monix.reactive.Observable.fromLinesReaderUnsafe(new java.io.BufferedReader(new java.io.InputStreamReader(process.getInputStream), 2048))
               val printAndBuildConsumer: monix.reactive.Consumer[String, StringBuilder] =
@@ -268,10 +265,13 @@ object JobRunner:
               val outputs: Seq[EvaluatedJValue.JPath] = outputPaths.distinct.map(EvaluatedJValue.JPath(src, _))
               // print(stdout)
               val exitCode = process.waitFor()
+              val missingFiles = outputPaths.filterNot(ctx.exists)
               stdout.zip(stderr).flatMap { (stdout, stderr) =>
                 if exitCode != 0 then
                   //System.err.println(stderr)
                   ctx.error(src, s"$stderr\nnonzero exit code returned from job: $exitCode")
+                else if missingFiles.nonEmpty then
+                  ctx.error(src, s"job did not produce expected output files: ${missingFiles.mkString(", ")}")
                 else
                   database.run(jobTable.insertOrUpdate((
                     stringsToByteArray(desc.cmdline),

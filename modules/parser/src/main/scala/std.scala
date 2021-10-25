@@ -322,7 +322,6 @@ object Std:
           ctx.error(src, s"filename is not a directory, got '$dirPath'")
         val matcher = syntax match
           case "glob" | "regex" =>
-            println(s"$syntax:$pattern")
             java.nio.file.FileSystems.getDefault.getPathMatcher(s"$syntax:$pattern")
           case _ =>
             ctx.error(src, s"paths syntax must be either 'glob' or 'regex', got $syntax")
@@ -331,7 +330,7 @@ object Std:
             dirPath,
             Integer.MAX_VALUE,
            (filePath, fileAttr) => {
-             fileAttr.isRegularFile() && matcher.matches(filePath)
+             fileAttr.isRegularFile() && matcher.matches(dirPath.relativize(filePath))
            }
          )
           .iterator()
