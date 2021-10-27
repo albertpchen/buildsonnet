@@ -33,7 +33,12 @@ object Importer:
         val source = scala.io.Source.fromFile(normalized).getLines.mkString("\n")
         val srcFile = SourceFile(normalized, source)
         Parser(srcFile).parseFile.fold(
-          error => ctx.error(src, error.toString),
+          error => {
+            import cats.syntax.all.catsSyntaxOrder
+            val offset = error.expected.map(_.offset).toList.max
+            val (line, col) = srcFile.getLineCol(offset)
+            ctx.error(src, s"syntax error at ${Console.UNDERLINED}${srcFile.path}${Console.RESET}:$line:$col")
+          },
           ast => {
             val sourceFile = SourceFile(normalized, source)
             val withOutStd = EvaluationContext(sourceFile, ctx.workspaceDir, ctx.bloopServer)

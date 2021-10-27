@@ -107,7 +107,10 @@ object Buildsonnet:
     val sourceFile = SourceFile(buildFile.toString, source)
     Parser(sourceFile).parseFile match
       case Left(error) =>
-        System.err.println("syntax error at: " + error.toString)
+        import cats.syntax.all.catsSyntaxOrder
+        val offset = error.expected.map(_.offset).toList.max
+        val (line, col) = sourceFile.getLineCol(offset)
+        System.err.println(s"syntax error at ${Console.UNDERLINED}${sourceFile.path}${Console.RESET}:$line:$col")
         System.exit(1)
       case Right(buildObject) =>
         given monix.execution.Scheduler = monix.execution.Scheduler.global
