@@ -479,7 +479,15 @@ object JValue:
     import quotes.reflect.given
     val file = SourceFile(srcFilename.valueOrError, readFileString(relativeFilename))
     Parser(file).parseFile.fold(
-      err => report.throwError(err.toString, Position.ofMacroExpansion),
+      error => {
+        import cats.syntax.all.catsSyntaxOrder
+        val offset = error.expected.map(_.offset).toList.max
+        val (line, col) = file.getLineCol(offset)
+        report.throwError(
+          s"syntax error at ${Console.UNDERLINED}${file.path}${Console.RESET}:$line:$col",
+          Position.ofMacroExpansion,
+        )
+      },
       jvalue => Expr(jvalue),
     )
 

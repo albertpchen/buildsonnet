@@ -403,6 +403,7 @@ object Std:
         }.toJValue
       },
       "Project" -> {
+
         val contents = JValue.readFile("../resources/bloop.jsonnet")
         val newCtx = ctx.withFile(SourceFile("std.scala.Project", contents))
         LazyValue(newCtx, JValue.reifyFile("../resources/bloop.jsonnet", "std.scala.Project"), true)
