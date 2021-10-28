@@ -141,6 +141,7 @@ local getScalacConfig(project) =
         kind: base.kind,
         emitSourceMaps: base.emitSourceMaps,
         toolchain: [],
+        [if 'nodePath' in base then 'nodePath']: base.nodePath,
         output: bloopConfig.out + "/" + base.name + ".js",
       },
       mainClass: base.mainClass,
@@ -166,18 +167,25 @@ local getScalacConfig(project) =
   classpathPaths:: std.scala.classpath(self.bloopConfig),
   mainClasses:: std.print(std.scala.mainClasses(self.bloopConfig)),
   run(args)::
-    local len = std.length(args);
-    assert len >= 1: 'missing main class argument';
-    std.scala.run(
-      project=self.bloopConfig,
-      jvmOptions=std.get(base, "runtimeJavaOpts", default=[]),
-      environmentVariables=[
-        "JAVA_HOME=" + if "runtimeJvmHome" in base then base.runtimeJvmHome else std.getenv("JAVA_HOME"),
-        "HOME=" + std.getenv("HOME"),
-      ],
-      main=args[0],
-      args=if len > 1 then args[1:] else [],
-    ),
+    if base.platform == 'java' then
+      local len = std.length(args);
+      assert len >= 1: 'missing main class argument';
+      std.scala.run(
+        project=self.bloopConfig,
+        main=args[0],
+        environmentVariables=[
+          "JAVA_HOME=" + if "runtimeJvmHome" in base then base.runtimeJvmHome else std.getenv("JAVA_HOME"),
+          "HOME=" + std.getenv("HOME"),
+        ],
+        jvmOptions=std.get(base, "runtimeJavaOpts", default=[]),
+        args=if len > 1 then args[1:] else [],
+      )
+    else if base.platform == 'js' then
+      std.scala.run(
+        project=self.bloopConfig,
+        main=base.mainClass,
+        args=args,
+      ),
   runFork(args)::
     local extraArgs = std.get(base, "runtimeJavaOpts", default=[]);
     local cmdline = ['java', '-cp', self.classpathString] + extraArgs + args;

@@ -1,8 +1,23 @@
+// local CppProject = {
+//   local base = self,
+//   compile(args=[]):
+//     std.runJob({
+//       cmdline: base.args,
+//       inputFiles: base.inputs + std.flatMap(function(proj) proj.compile().outputs, std.get(base "dependencies", default=[])),
+//       outputFiles: base.outputs,
+//       envVars: {
+//         PATH: std.getenv("PATH"),
+//         LIBRARY_PATH: std.getenv("LIBRARY_PATH"),
+//       }
+//     }),
+// };
+local scala3Version = "3.0.2";
+local scala213Version = "2.13.6";
 {
   ecs: std.scala.Project {
     name: "ecs",
     sources: ["modules/ecs/src"],
-    scalaVersion: "3.0.2",
+    scalaVersion: scala3Version,
   },
 
   bloopgun: std.scala.Project {
@@ -17,7 +32,7 @@
         }
       |||)
     ],
-    scalaVersion: "2.13.6",
+    scalaVersion: scala213Version,
     libraries: [
       std.scala.Dep("me.vican.jorge", "snailgun-cli", "0.4.0"),
       std.java.Dep("org.zeroturnaround", "zt-exec", "1.11"),
@@ -35,7 +50,7 @@
     name: "bloop-launcher",
     dependencies: [$.bloopgun],
     sources: ["bloop/launcher/src/main/scala"],
-    scalaVersion: "2.13.6",
+    scalaVersion: scala213Version,
     libraries: [
       std.scala.Dep("io.get-coursier", "coursier", "2.0.16"),
       std.scala.Dep("io.get-coursier", "coursier-cache", "2.0.16"),
@@ -46,18 +61,31 @@
   parser213: std.scala.Project {
     name: "parser213",
     sources: ["modules/parser213/src/main/scala"],
-    scalaVersion: "2.13.6",
+    scalaVersion: scala213Version,
     libraries: [
       std.scala.Dep("ch.epfl.scala", "bsp4s", "2.0.0"),
     ],
   },
 
+  js: std.scala.Project {
+    name: "js",
+    platform: "js",
+    scalaVersion: "3.0.2",
+    scalaJsVersion: "1.7.1",
+    sources: ["modules/js/src"],
+    mode: 'release',
+    mainClass: 'tutorial.webapp.hello',
+    nodePath: '/nix/store/s1cc19ypzs09mnhzlyrvl6ml44nkx7yy-nodejs-14.18.0/bin/node',
+    libraries: [
+      std.scala.Dep("org.scala-js", "scalajs-dom", "2.0.0",),
+    ],
+  },
   parser: std.scala.Project {
     name: "parser",
-    //withSources: true,
+    withSources: true,
     dependencies: [$.bloopLauncher, $.parser213],
     sources: ["modules/parser/src/main/scala"],
-    scalaVersion: "3.1.0",
+    scalaVersion: scala3Version,
     scalacOptions: ["-Xmax-inlines", "100"],
     libraries: [
       std.scala.Dep("org.typelevel", "cats-parse", "0.3.4", crossVersion="for3Use2_13"),
@@ -87,6 +115,18 @@
     std.runJob({
       cmdline: [jvmHome + "/bin/native-image", "--help"],
       inputFiles: [],
+    }),
+
+  cpp(args):
+    local paths = std.paths("modules/cpp/src", "**.cpp");
+    std.runJob({
+      cmdline: [std.getenv("CXX"), "-std=c++17", "-o", "HelloWorld"] + args + [path.name for path in paths],
+      inputFiles: paths,
+      outputFiles: ["HelloWorld"],
+      envVars: {
+        PATH: std.getenv("PATH"),
+        LIBRARY_PATH: std.getenv("LIBRARY_PATH"),
+      }
     }),
 
   nativeImage(args):

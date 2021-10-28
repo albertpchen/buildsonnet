@@ -403,7 +403,6 @@ object Std:
         }.toJValue
       },
       "Project" -> {
-
         val contents = JValue.readFile("../resources/bloop.jsonnet")
         val newCtx = ctx.withFile(SourceFile("std.scala.Project", contents))
         LazyValue(newCtx, JValue.reifyFile("../resources/bloop.jsonnet", "std.scala.Project"), true)
@@ -477,11 +476,11 @@ object Std:
       },
       "run" -> function5(
         Arg.project,
-        Arg.jvmOptions,
-        Arg.environmentVariables,
         Arg.main,
         Arg.args(jarray),
-      ) { (ctx, src, project, jvmOptions, environmentVariables, main, args) =>
+        Arg.jvmOptions(jarray),
+        Arg.environmentVariables(jarray),
+      ) { (ctx, src, project, main, args, jvmOptions, environmentVariables) =>
         Task.parZip5(
           ctx.decode[Config.RecursiveProject](project),
           ctx.decode[String](main),
