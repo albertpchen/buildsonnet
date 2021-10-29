@@ -24,6 +24,14 @@ val Dependencies = new {
 }
 
 lazy val root = project.in(file("."))
+lazy val ecs = project
+  .in(file("modules/ecs"))
+  .settings(
+    run / fork := true,
+    Compile / scalaSource := baseDirectory.value / "src",
+    version := "0.1.0",
+    scalaVersion := scala3Version,
+  )
 
 lazy val bloopgun: Project = project
   .in(file("bloop/bloopgun"))

@@ -120,7 +120,7 @@ local getScalacConfig(project) =
         arguments: [ ]
       }
     },
-    platform: if base.platform == 'java' then {
+    platform: if base.platform == 'jvm' then {
       name: "jvm",
       runtimeConfig: {
         options: std.get(base, "runtimeJavaOpts", default=[]),
@@ -167,7 +167,7 @@ local getScalacConfig(project) =
   classpathPaths:: std.scala.classpath(self.bloopConfig),
   mainClasses:: std.print(std.scala.mainClasses(self.bloopConfig)),
   run(args)::
-    if base.platform == 'java' then
+    if base.platform == 'jvm' then
       local len = std.length(args);
       assert len >= 1: 'missing main class argument';
       std.scala.run(

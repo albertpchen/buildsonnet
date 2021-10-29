@@ -73,11 +73,23 @@ local scala213Version = "2.13.6";
     scalaVersion: "3.0.2",
     scalaJsVersion: "1.7.1",
     sources: ["modules/js/src"],
-    mode: 'release',
+    withSources: true,
+    mode: 'debug',
     mainClass: 'tutorial.webapp.hello',
     nodePath: '/nix/store/s1cc19ypzs09mnhzlyrvl6ml44nkx7yy-nodejs-14.18.0/bin/node',
     libraries: [
-      std.scala.Dep("org.scala-js", "scalajs-dom", "2.0.0",),
+      // std.scala.Dep("org.scala-js", "scalajs-dom", "2.0.0",),
+      // available for 2.12, 2.13, 3.0
+      std.scala.Dep("co.fs2", "fs2-core", "3.1.6"),
+
+      // optional I/O library
+      std.scala.Dep("co.fs2", "fs2-io", "3.1.6"),
+
+      // // optional reactive streams interop
+      // std.scala.Dep("co.fs2", "fs2-reactive-streams", "3.2.0"),
+
+      // // optional scodec interop
+      // std.scala.Dep("co.fs2", "fs2-scodec", "3.1.6"),
     ],
   },
   parser: std.scala.Project {
