@@ -1,16 +1,3 @@
-// local CppProject = {
-//   local base = self,
-//   compile(args=[]):
-//     std.runJob({
-//       cmdline: base.args,
-//       inputFiles: base.inputs + std.flatMap(function(proj) proj.compile().outputs, std.get(base "dependencies", default=[])),
-//       outputFiles: base.outputs,
-//       envVars: {
-//         PATH: std.getenv("PATH"),
-//         LIBRARY_PATH: std.getenv("LIBRARY_PATH"),
-//       }
-//     }),
-// };
 local scala3Version = "3.0.2";
 local scala213Version = "2.13.6";
 {
@@ -183,5 +170,29 @@ local scala213Version = "2.13.6";
         PATH: std.getenv("PATH"),
         LIBRARY_PATH: std.getenv("LIBRARY_PATH"),
       }
+    }),
+  mdoc(args):
+    local classpath = std.join(":", [path.name for path in std.scala.cs([std.scala.Dep("org.scalameta", "mdoc_3", "2.2.24")])]);
+    local cmdline = [
+      'java',
+      '-cp', classpath,
+      'mdoc.Main',
+      '--classpath', $.parser.classpathString,
+      '--in', 'docs/src/usage.md',
+      '--out', 'docs',
+    ] + args;
+    local jvmHome =
+      if "runtimeJvmHome" in $.parser then
+        $.parser.runtimeJvmHome
+      else
+        std.getenv("JAVA_HOME");
+    std.runJob({
+      cmdline: cmdline,
+      envVars: {
+        PATH: jvmHome + "/bin",
+        HOME: std.getenv("HOME"),
+        JAVA_HOME: jvmHome,
+      },
+      inputFiles: $.parser.classpathPaths + std.paths('docs/src', '**'),
     }),
 }

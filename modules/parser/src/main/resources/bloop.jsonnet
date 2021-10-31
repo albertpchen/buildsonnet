@@ -162,9 +162,9 @@ local getScalacConfig(project) =
     },
   },
   compile:: std.scala.compile(self.bloopConfig),
-  classpathString:: std.join(":", [path.name for path in std.scala.classpath(self.bloopConfig)]),
-  classpath:: std.print(self.classpathString),
   classpathPaths:: std.scala.classpath(self.bloopConfig),
+  classpathString:: std.join(":", [path.name for path in self.classpathPaths]),
+  classpath:: std.print(self.classpathString),
   mainClasses:: std.print(std.scala.mainClasses(self.bloopConfig)),
   run(args)::
     if base.platform == 'jvm' then
