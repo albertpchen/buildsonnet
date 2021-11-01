@@ -15,7 +15,7 @@ local scala213Version = "2.13.6";
         package bloopgun.internal.build
         
         case object BloopgunInfo {
-          val version: String = "1.3.4+186-db2dcbcb"
+          val version: String = "0.1.0-SNAPSHOT"
         }
       |||)
     ],
@@ -156,12 +156,6 @@ local scala213Version = "2.13.6";
         "-H:ResourceConfigurationFiles=" + nativeImageConfigDir + "/resource-config.json",
         "-H:JNIConfigurationFiles=" + nativeImageConfigDir + "/jni-config.json",
 
-        "--initialize-at-build-time=scala.Symbol",
-        "--initialize-at-build-time=scala.Function1",
-        "--initialize-at-build-time=scala.Function2",
-        "--initialize-at-build-time=scala.runtime.StructuralCallSite",
-        "--initialize-at-build-time=scala.runtime.EmptyMethodCache",
-
         "--initialize-at-run-time=scribe.Logger$",
         "--initialize-at-run-time=scribe.LoggerId$",
       ] + args,
@@ -178,8 +172,8 @@ local scala213Version = "2.13.6";
       '-cp', classpath,
       'mdoc.Main',
       '--classpath', $.parser.classpathString,
-      '--in', 'docs/src/usage.md',
-      '--out', 'docs',
+      '--in', 'docs/src',
+      '--out', '.',
     ] + args;
     local jvmHome =
       if "runtimeJvmHome" in $.parser then
