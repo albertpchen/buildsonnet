@@ -141,6 +141,17 @@ object JobRunner:
         .get("lastModifiedTime")
         .asInstanceOf[FileTime]
 
+    def fileHash(path: java.nio.file.Path): Task[String] = Task {
+      import java.security.{MessageDigest, DigestInputStream}
+      val buffer = Array.ofDim[Byte](8192)
+      val md5 = MessageDigest.getInstance("MD5")
+
+      val dis = new DigestInputStream(new java.io.FileInputStream(path.toFile), md5)
+      try { while (dis.read(buffer) != -1) { } } finally { dis.close() }
+
+      md5.digest.map("%02x".format(_)).mkString
+    }
+
   def apply(): JobRunner = new JobRunner:
     def database(ctx: EvaluationContext): Task[(api.TableQuery[JobTable], Database)] =
       val jobTable = new api.TableQuery(new JobTable(_))

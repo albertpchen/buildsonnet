@@ -1,30 +1,41 @@
 # Overview
 Buildsonnet is a work-in-progress, general-purpose build tool based on the
-jsonnet language with built-in support for building scala code through bloop.
-Scala project configuration is similar to sbt but done using jsonnet's object
-mix-in features rather than a scala DSL. The standard library is extended with
-functions for running command-line jobs and compiling and running scala code.
+Jsonnet language with built-in support for building scala code through
+[bloop](https://scalacenter.github.io/bloop/). Scala project configuration is
+similar to [Sbt](https://www.scala-sbt.org) but done using jsonnet's object mix-in features rather than a
+scala DSL. The Jsonnet standard library is extended with functions for running
+command-line jobs and compiling and running scala code.
 
 Buildsonnet can be compiled with graal native-image for fast startup times.
-Scala compilations are also fast through the use of bloop build server.
+Scala compilations are dispatched to a bloop instance using the build server
+protocol and the included bloop-launcher.
 
-Jobs are cached using file timestamps with stdout/stderr stored in an sqlite
+Jobs are cached using file timestamps with results stored in an sqlite
 database.
 
 # Motivation
-Sbt's extensiblity comes from it's lazily evaluated settings keys that are
-defined using scala macros. It is also where a lot of my frustrations with sbt
-come from. The reliance on a scala dsl makes start-up times slow, and project
+Sbt's extensiblity comes from its lazily evaluated settings keys that are
+defined using a scala DSL. It is also where a lot of my frustrations with sbt
+come from. The reliance on a scala DSL makes start-up times slow, and project
 configurations unnecessarily verbose and complex.
 
-Mill relies on scala inheritance for project configuration, leading to many of
-the same problems as sbt.
+[Mill](https://com-lihaoyi.github.io/mill/mill/Intro_to_Mill.html) relies on
+scala inheritance for project configuration. While this approach may result in
+more understandable code, it is also very verbose and requires a scala
+interpreter.
 
-The Jsonnet language provides a lot of the same functionality of sbt
-project keys with its object mix-in features with a more concise language. Not
-having to run a full scala interpreter makes start-up times fast.
+The Jsonnet language provides a lot of the same functionality of sbt project
+keys with a more concise syntax. Not having to run a full scala interpreter
+makes start-up times fast.
 
 # Standard Library Extensions
+Buildsonnet extends the Jsonnet standard libary with helpers for running scala
+build commands and running jobs. Note that these are side-effecting functions
+that may modify the build workspace. This means that Buildsonnet loses the
+hermeticity of Jsonnet. Currently jobs are run without any sandboxing and are
+cached using timestamps. A potential future enhancement would be to run jobs
+using Bazel's [sandboxfs](https://github.com/bazelbuild/sandboxfs) and use file
+hashes instead of timestamps.
 
 ## `std.scala.Dep(org, name, version, crossVersion=null)`
 Helper for creating a scala dependency object e.g.

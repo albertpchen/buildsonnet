@@ -172,8 +172,8 @@ local scala213Version = "2.13.6";
       '-cp', classpath,
       'mdoc.Main',
       '--classpath', $.parser.classpathString,
-      '--in', 'docs/src',
-      '--out', '.',
+      '--in', 'docs/src/README.md',
+      '--out', 'README.md',
     ] + args;
     local jvmHome =
       if "runtimeJvmHome" in $.parser then
