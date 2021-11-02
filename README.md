@@ -39,7 +39,7 @@ hashes instead of timestamps.
 
 ## `std.scala.Dep(org, name, version, crossVersion=null)`
 Helper for creating a scala dependency object e.g.
-```json
+```jsonnet
 {
   org: '',
   name: '',
