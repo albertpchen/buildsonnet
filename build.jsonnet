@@ -1,48 +1,162 @@
-local scala3Version = "3.0.2";
+local scala3Version = "3.1.2";
 local scala213Version = "2.13.6";
+
+local deps = {
+  'cats-core': std.scala.Dep("org.typelevel", "cats-core", "2.7.0"),
+  'cats-mtl': std.scala.Dep("org.typelevel", "cats-mtl", "1.2.1"),
+  'cats-effect': std.scala.Dep("org.typelevel", "cats-effect", "3.3.8"),
+  'cats-retry': std.scala.Dep("com.github.cb372", "cats-retry", "3.1.0"),
+  'cats-parse': std.scala.Dep("org.typelevel", "cats-parse", "0.3.7"),
+
+  'log4cats-core': std.scala.Dep("org.typelevel", "log4cats-core", "2.3.0"),
+
+  circe(name): std.scala.Dep("io.circe", name, "0.14.1"),
+  'circe-core': $.circe('circe-core'),
+  'circe-generic': $.circe('circe-generic'),
+
+  http4s(name): std.scala.Dep("org.http4s", name, "0.23.11"),
+  'http4s-core': $.http4s("http4s-core"),
+  'http4s-dsl': $.http4s("http4s-dsl"),
+  'http4s-circe': $.http4s("http4s-circe"),
+  'http4s-ember-server': $.http4s("http4s-ember-server"),
+  'http4s-ember-client': $.http4s("http4s-ember-client"),
+  'http4s-jwt-auth': std.scala.Dep("dev.profunktor", "http4s-jwt-auth", "1.0.0+150-26e4fd68-SNAPSHOT"),
+
+  'squants': std.scala.Dep("org.typelevel", "squants", "1.8.3"),
+
+  'fs2-core': std.scala.Dep("co.fs2", "fs2-core", "3.2.7"),
+  'fs2-io': std.scala.Dep("co.fs2", "fs2-io", "3.2.7"),
+
+  'refined': std.scala.Dep("eu.timepit", "refined", "0.9.28"),
+  'refined-cats': std.scala.Dep("eu.timepit", "refined-cats", "0.9.28"),
+
+  'skunk-core': std.scala.Dep("org.tpolecat", "skunk-core", "0.2.3"),
+  'skunk-circe': std.scala.Dep("org.tpolecat", "skunk-circe", "0.2.3"),
+
+  redis4cats(name): std.scala.Dep("dev.profunktor", name, "1.1.1"),
+  'redis4cats-effects': $.redis4cats('redis4cats-effects'),
+  'redis4cats-streams': $.redis4cats('redis4cats-streams'),
+  'redis4cats-log4cats': $.redis4cats('redis4cats-log4cats'),
+
+  weaver(name): std.scala.Dep("com.disneystreaming", "weaver-" + name, "0.7.11"),
+  'weaver-cats': $.weaver('cats'),
+  'weaver-scalacheck': $.weaver('scalacheck'),
+  monix: std.scala.Dep("io.monix", "monix", "3.4.0"),
+  scribe: std.scala.Dep("com.outr", "scribe", "3.5.5"),
+  # scribeFile: std.scala.Dep("com.outr" %% "scribe-file" % "3.5.5" % Test),
+  'jsoniter-core': std.scala.Dep("com.github.plokhotnyuk.jsoniter-scala", "jsoniter-scala-core", "2.13.8"),
+  'jsoniter-macros': std.scala.Dep("com.github.plokhotnyuk.jsoniter-scala", "jsoniter-scala-macros", "2.13.8"),
+  # "io.monix" %% "minitest" % "2.9.6" % Test,
+  # "com.lihaoyi" %% "pprint" % "0.6.6" % Test
+  'weaver-cats': std.scala.Dep("com.disneystreaming", "weaver-cats", "0.7.11"),
+  'weaver-scalacheck': std.scala.Dep("com.disneystreaming", "weaver-scalacheck", "0.7.11"),
+
+  parboiled: std.scala.Dep("org.parboiled", "parboiled", "2.4.0"),
+
+  'bloop-launcher': std.scala.Dep("ch.epfl.scala", "bloop-launcher", "1.5.0", crossVersion='for3Use2_13'),
+  'decline-effect': std.scala.Dep("com.monovore", "decline-effect", "2.2.0"),
+};
+
 {
+  jsonrpc4cats: std.scala.Project {
+    name: 'jsonrpc4cats',
+    sources: ['modules/jsonrpc4cats/src'],
+    scalaVersion: scala3Version,
+    libraries: [
+      deps['cats-effect'],
+      deps['log4cats-core'],
+      deps['jsoniter-core'],
+      deps['jsoniter-macros'],
+      deps['fs2-core'],
+      deps['fs2-io'],
+    ]
+  },
+
+  'jsonrpc4cats-test': std.scala.Project {
+    name: 'jsonrpc4cats-test',
+    sources: ['modules/jsonrpc4cats/test'],
+    scalaVersion: scala3Version,
+    dependencies: [$.jsonrpc4cats],
+    libraries: [
+      deps['weaver-cats'],
+      deps['weaver-scalacheck'],
+    ]
+  },
+
+  bsp4s: std.scala.Project {
+    name: 'bsp4s',
+    sources: ['build-server-protocol/bsp4s/src/main/scala'],
+    scalaVersion: scala3Version,
+    dependencies: [$.jsonrpc4cats],
+  },
+
+  logger: std.scala.Project {
+    name: 'logger',
+    sources: ['modules/logger/src'],
+    scalaVersion: scala3Version,
+    libraries: [
+      deps['cats-effect'],
+    ],
+  },
+
+  bsp: std.scala.Project {
+    name: 'bsp',
+    sources: ['modules/bsp'],
+    scalaVersion: scala3Version,
+    dependencies: [
+      $.bsp4s,
+      $.jsonrpc4cats,
+      $.logger,
+    ],
+    libraries: [
+      deps['bloop-launcher'],
+    ],
+  },
+
+  ast: std.scala.Project {
+    name: 'ast',
+    sources: ['modules/ast/src'],
+    scalaVersion: scala3Version,
+    libraries: [
+      deps.parboiled,
+      deps['cats-parse'],
+    ]
+  },
+
+  evaluator: std.scala.Project {
+    name: 'evaluator',
+    sources: ['modules/evaluator'],
+    scalaVersion: scala3Version,
+    dependencies: [
+      $.logger,
+      $.ast,
+    ],
+  },
+
+  buildsonnet: std.scala.Project {
+    name: 'buildsonnet',
+    sources: ['modules/buildsonnet/src'],
+    scalaVersion: scala3Version,
+    dependencies: [
+      $.ast,
+      $.logger,
+      $.bsp,
+      $.evaluator,
+    ],
+    libraries: [
+      deps['decline-effect'],
+    ],
+    javaRuntimeOpts: [
+      "-Dcats.effect.stackTracingMode=full",
+      "-Dcats.effect.traceBufferSize=2048",
+    ]
+  },
+
+
   ecs: std.scala.Project {
     name: "ecs",
     sources: ["modules/ecs/src"],
     scalaVersion: scala3Version,
-  },
-
-  bloopgun: std.scala.Project {
-    name: "bloopgun",
-    sources: [
-      "bloop/bloopgun/src/main/scala",
-      std.write("bloop/bloopgun/generated_src/BloopgunInfo.scala", |||
-        package bloopgun.internal.build
-        
-        case object BloopgunInfo {
-          val version: String = "0.1.0-SNAPSHOT"
-        }
-      |||)
-    ],
-    scalaVersion: scala213Version,
-    libraries: [
-      std.scala.Dep("me.vican.jorge", "snailgun-cli", "0.4.0"),
-      std.java.Dep("org.zeroturnaround", "zt-exec", "1.11"),
-      std.java.Dep("org.slf4j", "slf4j-nop", "1.7.2"),
-      std.scala.Dep("io.get-coursier", "coursier", "2.0.16"),
-      std.scala.Dep("io.get-coursier", "coursier-cache", "2.0.16"),
-      std.scala.Dep("com.github.plokhotnyuk.jsoniter-scala", "jsoniter-scala-core", "2.4.0"),
-      std.scala.Dep("com.github.plokhotnyuk.jsoniter-scala", "jsoniter-scala-macros", "2.4.0"),
-      std.java.Dep("org.bouncycastle", "bcprov-jdk15on", "1.64"),
-      std.java.Dep("org.bouncycastle", "bcpkix-jdk15on", "1.64"),
-    ],
-  },
-
-  bloopLauncher: std.scala.Project {
-    name: "bloop-launcher",
-    dependencies: [$.bloopgun],
-    sources: ["bloop/launcher/src/main/scala"],
-    scalaVersion: scala213Version,
-    libraries: [
-      std.scala.Dep("io.get-coursier", "coursier", "2.0.16"),
-      std.scala.Dep("io.get-coursier", "coursier-cache", "2.0.16"),
-      std.java.Dep("org.scala-sbt.ipcsocket", "ipcsocket", "1.4.0",),
-    ],
   },
 
   parser213: std.scala.Project {
@@ -87,7 +201,7 @@ local scala213Version = "2.13.6";
     scalaVersion: scala3Version,
     scalacOptions: ["-Xmax-inlines", "100"],
     libraries: [
-      std.scala.Dep("org.typelevel", "cats-parse", "0.3.4", crossVersion="for3Use2_13"),
+      std.scala.Dep("org.typelevel", "cats-parse", "0.3.y", crossVersion="for3Use2_13"),
       std.scala.Dep("io.get-coursier", "coursier", "2.0.16", crossVersion="for3Use2_13"),
       std.scala.Dep("io.get-coursier", "coursier-jvm", "2.0.16", crossVersion="for3Use2_13"),
       std.scala.Dep("io.get-coursier", "coursier-launcher", "2.0.16", crossVersion="for3Use2_13"),

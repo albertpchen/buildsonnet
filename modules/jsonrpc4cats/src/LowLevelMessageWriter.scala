@@ -59,7 +59,7 @@ object LowLevelMessageWriter {
   }
 
 
-  private[jsonrpc4cats] def toByteStream[F[_]: Logger](stream: Stream[F, Message]): Stream[F, Byte] =
+  def toByteStream[F[_]: Logger](stream: Stream[F, Message]): Stream[F, Byte] =
     stream.flatMap { msg =>
       val protocolMsg = LowLevelMessage.fromMsg(msg)
       Stream.eval(Logger[F].info(

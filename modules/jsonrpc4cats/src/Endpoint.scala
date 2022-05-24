@@ -6,7 +6,7 @@ import com.github.plokhotnyuk.jsoniter_scala.macros.CodecMakerConfig
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonReader
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonWriter
 
-final class Endpoint[A, B](
+open class Endpoint[A, B](
   val method: String
 )(using val codecA: JsonValueCodec[A], val codecB: JsonValueCodec[B])
 
