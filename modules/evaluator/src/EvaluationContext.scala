@@ -23,6 +23,8 @@ sealed trait EvaluationContext[F[_]]:
   def `import`(src: Source, file: String): F[EvaluatedJValue[F]]
   def importStr(src: Source, file: String): F[EvaluatedJValue.JString[F]]
 
+  def workspaceDir: java.nio.file.Path = ???
+
 object EvaluationContext:
   private case class Impl[F[_]](
     self: Option[EvaluatedJValue.JObject[F]],

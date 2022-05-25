@@ -71,22 +71,23 @@ object Buildsonnet extends IOApp:
 
       val run =
         for
-          uninterpreted <- if uninterpreted.isEmpty then
-            IO.raiseError(new CmdlineError("missing build command argument"))
-          else uninterpreted.pure[IO]
-          buildFile <- if buildFile == null then
-            IO.raiseError(new CmdlineError("could not find build.jsonnet file in current directory or in any parent directory"))
-          else
-            buildFile.pure[IO]
+          uninterpreted <-
+            if uninterpreted.isEmpty then IO.raiseError(new CmdlineError("missing build command argument"))
+            else uninterpreted.pure[IO]
+          buildFile <-
+            if buildFile == null then IO.raiseError(new CmdlineError("could not find build.jsonnet file in current directory or in any parent directory"))
+            else buildFile.pure[IO]
           source = scala.io.Source.fromFile(buildFile.toFile).getLines.mkString("\n")
           sourceFile = SourceFile(buildFile.toString, source)
-          buildObject <- Parser(sourceFile).parseFile.fold( { error =>
+          buildObject <- Parser(sourceFile).parseFile.fold(
+            { error =>
               import cats.syntax.all.catsSyntaxOrder
               val offset = error.expected.map(_.offset).toList.max
               val (line, col) = sourceFile.getLineCol(offset)
-              IO
-                .raiseError(new CmdlineError(s"syntax error at ${scala.Console.UNDERLINED}${sourceFile.path}${scala.Console.RESET}:$line:$col"))
-          }, _.pure[IO])
+              IO.raiseError(new CmdlineError(s"syntax error at ${scala.Console.UNDERLINED}${sourceFile.path}${scala.Console.RESET}:$line:$col"))
+            },
+            _.pure[IO]
+          )
           buildCommand = uninterpreted(0)
           buildArgs = uninterpreted.drop(1)
           rootJValue = buildCommand
