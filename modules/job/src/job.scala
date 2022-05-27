@@ -2,6 +2,7 @@ package buildsonnet.job
 
 import buildsonnet.ast.{Source}
 import buildsonnet.evaluator.{EvaluationContext}
+import buildsonnet.job.syntax.*
 import buildsonnet.logger.ConsoleLogger
 
 import cats.effect.{Async, Sync}
@@ -29,16 +30,19 @@ private[job] enum JobOutput:
   case AbsoluteOutputFile(file: String)
   case Success(file: String)
 
-case class JobRow(
-  cmdline: Array[Byte],
-  envVars: Array[Byte],
-  inputFiles: Array[Byte],
+case class JobKey(
+  cmdline: Seq[String],
+  envVars: Seq[(String, String)],
+  inputFiles: Seq[(Path, Array[Byte])],
   stdin: String,
-  directory: String,
+  directory: Path,
+)
 
+case class JobValue(
+  outputFiles: Seq[(Path, Array[Byte])],
   stdout: String,
   stderr: String,
-  exitCode: Int
+  exitCode: Int,
 )
 
 case class Job(
@@ -50,28 +54,18 @@ case class Job(
   exitCode: Int,
 )
 
-sealed trait JobRunner[F[_]]:
+trait JobRunner[F[_]]:
   def run(
     ctx: EvaluationContext[F],
     src: Source,
     desc: JobDescription,
   ): F[Job]
 
-sealed trait JobCache[F[_]]:
-  def get(desc: JobDescription): F[Option[Job]]
-  def insert(job: Job): F[Unit]
+trait JobCache[F[_]]:
+  def get(key: JobKey): F[Option[JobValue]]
+  def insert(key: JobKey, value: JobValue): F[Unit]
 
 object JobRunner:
-  extension (path: Path)
-    def exists: Boolean =
-      Files.exists(path)
-
-    def fileTime: FileTime =
-      Files
-        .readAttributes(path, "lastModifiedTime")
-        .get("lastModifiedTime")
-        .asInstanceOf[FileTime]
-
   private given fileTimeOrdering: math.Ordering[FileTime] = new math.Ordering[FileTime]:
     def compare(x: FileTime, y: FileTime): Int =
       x.compareTo(y)
@@ -91,17 +85,6 @@ object JobRunner:
       if Files.exists(path) then
         return Some(path.normalize().toString)
     return None
-
-  private val charset = "utf-8"
-  private def stringsToByteArray(strings: Seq[String]): Array[Byte] =
-    if strings.isEmpty then Array.empty
-    else
-      val stream = new java.io.ByteArrayOutputStream()
-      strings.foreach { string =>
-        stream.write(string.getBytes(charset))
-        stream.write(0)
-      }
-      stream.toByteArray()
 
   def apply[F[_]: Async: ConsoleLogger: Parallel](
     ctx: EvaluationContext[F],
@@ -129,9 +112,11 @@ object JobRunner:
         inputPaths <- Sync[F].defer {
           // TODO: handle InvalidPathException
           val paths = desc.inputFiles.map(ctx.workspaceDir.resolve)
-          paths.find(path => !Files.exists(path)).fold(paths.pure) { path =>
-            ctx.error(src, s"job input file does not exist, $path")
-          }
+          paths
+            .find(path => !Files.exists(path))
+            .fold(paths.distinct.sorted.pure) { path =>
+              ctx.error(src, s"job input file does not exist, $path")
+            }
         }
         _ <-
           if desc.cmdline.size <= 0 then ctx.error(src, s"job cmdline must be a non-empty list")
@@ -143,22 +128,7 @@ object JobRunner:
             .getOrElse(Seq.empty)
             .map(ctx.workspaceDir.resolve)
             .distinct
-        }
-        isOutputStale <- Sync[F].delay {
-          if desc.outputFiles.isEmpty then
-            false
-          else
-            val outputTimesOpt = outputPaths.foldLeft(Option(Seq.empty[FileTime])) {
-              case (Some(tail), path) => if path.exists then Some(path.fileTime +: tail) else None
-              case _ => None
-            }
-            outputTimesOpt.fold(true) { outputTimes =>
-              val inputTimes = inputPaths.map(_.fileTime)
-              if outputTimes.isEmpty || inputTimes.isEmpty then
-                false
-              else
-                outputTimes.min < inputTimes.max
-            }
+            .sorted
         }
         // TODO: handle InvalidPathException
         directory <- Sync[F].delay(desc.directory.fold(ctx.workspaceDir)(ctx.workspaceDir.resolve(_)))
@@ -169,18 +139,49 @@ object JobRunner:
             directory
           ).fold(ctx.error(src, s"could not resolve command \"${desc.cmdline.head}\""))(_.pure)
         }
-        cached <-
-          if isOutputStale then None.pure
-          else cache.get(desc)
+        cmdline = (cmd +: desc.cmdline.tail).toArray
+        inputPathHashes <- inputPaths.traverse(_.md5Hash)
+        jobKey = JobKey(
+          cmdline = cmdline,
+          envVars = desc.envVars.fold(Seq.empty)(_.toList.sorted),
+          inputFiles = inputPaths.zip(inputPathHashes),
+          stdin = desc.stdin.getOrElse(""),
+          directory = directory.relativize(ctx.workspaceDir),
+        )
+        cached <- cache.get(jobKey).flatMap {
+          case None => None.pure
+          case Some(jobValue) => Sync[F].delay {
+            val paths = jobValue.outputFiles.map { (pathName, hash) =>
+              ctx.workspaceDir.resolve(pathName) -> hash
+            }
+            val expectedOutputPaths = outputPaths.toSet
+            if paths.exists { (path, hash) =>
+              !path.exists || !expectedOutputPaths.contains(path) || path.md5Hash != hash
+            } then
+              None
+            else
+              Some(Job(
+                src,
+                desc,
+                jobValue.stdout,
+                jobValue.stderr,
+                paths.map { (path, _) =>
+                  ctx.workspaceDir.relativize(path)
+                },
+                jobValue.exitCode,
+              ))
+          }
+        }
         job <- cached match
-          case Some(job) if !isOutputStale => job.pure
+          case Some(job) => job.pure
           case _ =>
             for
               _ <- ConsoleLogger[F].info(desc.cmdline.mkString(" "))
+              envVars = desc.envVars.fold(Seq.empty)(_.toSeq).map((k, v) => s"$k=$v").sorted.toArray
               process <- Sync[F].blocking {
                 java.lang.Runtime.getRuntime().exec(
-                  (cmd +: desc.cmdline.tail).toArray,
-                  desc.envVars.fold(Seq.empty)(_.toSeq).map((k, v) => s"$k=$v").sorted.toArray,
+                  cmdline,
+                  envVars,
                   directory.toFile
                 )
               }
@@ -218,8 +219,12 @@ object JobRunner:
                 else if missingFiles.nonEmpty then
                   ctx.error(src, s"job did not produce expected output files: ${missingFiles.mkString(", ")}")
                 else
-                  val job = Job(src, desc, stdout, stderr, outputPaths, exitCode)
-                  cache.insert(job).as(job)
+                  Job(src, desc, stdout, stderr, outputPaths, exitCode).pure
+              outputPathHashes <- outputPaths.traverse(_.md5Hash)
+              _ <- cache.insert(
+                jobKey,
+                JobValue(outputPaths.zip(outputPathHashes), job.stdout, job.stderr, job.exitCode),
+              )
             yield
               job
       yield
