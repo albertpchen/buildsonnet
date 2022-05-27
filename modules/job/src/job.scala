@@ -14,6 +14,8 @@ import java.nio.file.attribute.FileTime
 import java.nio.file.{Files, Path, Paths}
 import java.io.{BufferedReader, InputStreamReader}
 
+import org.typelevel.log4cats.Logger
+
 import scala.concurrent.duration.Duration
 
 case class JobDescription(
@@ -86,7 +88,7 @@ object JobRunner:
         return Some(path.normalize().toString)
     return None
 
-  def apply[F[_]: Async: ConsoleLogger: Parallel](
+  def apply[F[_]: Async: ConsoleLogger: Parallel: Logger](
     ctx: EvaluationContext[F],
     cache: JobCache[F],
   ): JobRunner[F] =

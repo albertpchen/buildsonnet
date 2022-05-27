@@ -1,7 +1,7 @@
 package buildsonnet
 
 import buildsonnet.ast.{Parser, SourceFile, JValue, Source}
-import buildsonnet.evaluator.{EvaluationContext, EvaluatedJValue, EvaluationError}
+import buildsonnet.evaluator.{EvaluationContext, EvaluatedJValue, EvaluationError, LazyValue}
 import buildsonnet.logger.ConsoleLogger
 import cats.effect.{ExitCode, IO, IOApp, Sync}
 import cats.effect.std.Console
@@ -94,7 +94,11 @@ object Buildsonnet extends IOApp:
             .split('.')
             .foldLeft(buildObject)(JValue.JGetField(Source.empty, _, _))
           given ConsoleLogger[IO] = ConsoleLogger.default[IO]("buildsonnet")
-          ctx = EvaluationContext.std[IO]
+          ctx = {
+            val initCtx = EvaluationContext.std[IO]
+            val std = Std(initCtx)
+            initCtx.bind("std", LazyValue.strict(std))
+          }
           buildValue <- buildsonnet.evaluator.eval(ctx)(rootJValue)
           result <- buildValue match
             case fn: EvaluatedJValue.JFunction[IO] =>

@@ -231,3 +231,20 @@ object EvaluatedJValue:
         }
       yield
         obj
+
+    def static[F[_]: Sync](
+      src: Source,
+      ctx: EvaluationContext[F],
+      members: Map[String, EvaluatedJValue[F]],
+    ): JObject[F] =
+      val lazyMembers = members.map { (name, value) =>
+        name -> LazyObjectValue.strict(true, value)
+      }
+      val impl = JObjectImpl[F](
+        lazyMembers.pure,
+        ().pure,
+      )
+      val obj = JObjectLeaf[F](src, null, null, _ => impl)
+      obj.ctx = ctx.withSelf(obj)
+      obj.members = lazyMembers
+      obj

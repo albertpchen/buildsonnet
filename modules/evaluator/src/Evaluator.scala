@@ -70,9 +70,9 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
     def membersFn(ctx: EvaluationContext[F]) =
       val asserts = rawMembers.collect {
         case JObjMember.JAssert(src, rawCond, rawMsg) =>
-          val cond = eval(ctx)(rawCond).flatMap(ctx.expectBoolean(_))
+          val cond = eval(ctx)(rawCond).flatMap(ctx.expect[Boolean](_))
           val msgOpt = rawMsg.fold(Option.empty[String].pure) { msg =>
-            eval(ctx)(msg).flatMap(ctx.expectString(_).map(Some(_)))
+            eval(ctx)(msg).flatMap(ctx.expect[String](_).map(Some(_)))
           }
           (cond, msgOpt).parTupled.flatMap { (cond, msgOpt) =>
             if cond then

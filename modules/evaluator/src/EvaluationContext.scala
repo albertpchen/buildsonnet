@@ -120,12 +120,6 @@ object EvaluationContext:
     inline def expect[T](jvalue: EvaluatedJValue[F]): F[T] =
       expect[T](jvalue, s"Unexpected type ${typeString(theExpr)}, expected ${typeString[F, T]}")
 
-    inline def expectBoolean(jvalue: EvaluatedJValue[F]): F[Boolean] =
-      expect[EvaluatedJValue.JBoolean[F]](jvalue).map(_.bool)
-
-    inline def expectString(jvalue: EvaluatedJValue[F]): F[String] =
-      expect[EvaluatedJValue.JString[F]](jvalue).map(_.string)
-
     inline def expectFieldName(jvalue: EvaluatedJValue[F]): F[EvaluatedJValue.JNull[F] | EvaluatedJValue.JString[F]] =
       expect[EvaluatedJValue.JNull[F] | EvaluatedJValue.JString[F]](
         jvalue, s"Field name must be string or null, got ${typeString(theExpr)}")
