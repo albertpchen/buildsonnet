@@ -35,13 +35,13 @@ private[job] enum JobOutput:
 case class JobKey(
   cmdline: Seq[String],
   envVars: Seq[(String, String)],
-  inputFiles: Seq[(Path, Array[Byte])],
+  inputFiles: Seq[(Path, String)],
   stdin: String,
   directory: Path,
 )
 
 case class JobValue(
-  outputFiles: Seq[(Path, Array[Byte])],
+  outputFiles: Seq[(Path, String)],
   stdout: String,
   stderr: String,
   exitCode: Int,
@@ -139,30 +139,46 @@ object JobRunner:
     )
     _ <- Logger[F].info(s"looking for key $jobKey in cache")
     cached <- cache.get(jobKey).flatMap {
-      case None => None.pure
-      case Some(jobValue) => Sync[F].delay {
+      case None =>
+        Logger[F].info(s"no value found in cache").as(None)
+      case Some(jobValue) => Sync[F].defer {
         val paths = jobValue.outputFiles.map { (pathName, hash) =>
           ctx.workspaceDir.resolve(pathName) -> hash
         }
         val expectedOutputPaths = outputPaths.toSet
-        if paths.exists { (path, hash) =>
-          !path.exists || !expectedOutputPaths.contains(path) || path.md5Hash != hash
-        } then
-          None
+        var staleReason: String | Null = null
+        val diff = expectedOutputPaths.diff(paths.map(_._1).toSet)
+        if diff.nonEmpty then
+          staleReason = s"missing expected output paths:\n  ${diff.toSeq.sorted.mkString("\n  ")}"
         else
-          Some(Job(
-            jobValue.stdout,
-            jobValue.stderr,
-            paths.map { (path, _) =>
-              ctx.workspaceDir.relativize(path)
-            },
-            jobValue.exitCode,
-          ))
+          paths.exists { (path, hash) =>
+            if !path.exists then
+              staleReason = s"output path does not exist: \"$path\" "
+              true
+            else if path.md5HashUnsafe != hash then
+              staleReason = s"output path hash is different from last recorded hash: \"$path\""
+              true
+            else
+              false
+          }
+        staleReason match
+        case reason: String =>
+          Logger[F].info(s"got stale value $jobValue from cache: $reason").as(None)
+        case null =>
+          Logger[F].info(s"got valid value $jobValue from cache").as(
+            Some(Job(
+              jobValue.stdout,
+              jobValue.stderr,
+              paths.map { (path, _) =>
+                ctx.workspaceDir.relativize(path)
+              },
+              jobValue.exitCode,
+            ))
+          )
       }
     }
     job <- cached match
-      case Some(job) =>
-        Logger[F].info(s"got value $job from cache").as(job)
+      case Some(job) => job.pure
       case _ =>
         val cmdlineString = desc.cmdline.mkString(" ")
         for
@@ -213,10 +229,9 @@ object JobRunner:
             else
               Job(stdout, stderr, outputPaths, exitCode).pure
           outputPathHashes <- outputPaths.traverse(_.md5Hash)
-          _ <- cache.insert(
-            jobKey,
-            JobValue(outputPaths.zip(outputPathHashes), job.stdout, job.stderr, job.exitCode),
-          )
+          jobValue = JobValue(outputPaths.zip(outputPathHashes), job.stdout, job.stderr, job.exitCode)
+          _ <- Logger[F].info(s"inserting $jobValue into cache")
+          _ <- cache.insert(jobKey, jobValue)
         yield
           job
   yield

@@ -23,70 +23,47 @@ object DoobieJobCache:
     cmdline: Array[Byte],
     env_vars: Array[Byte],
     directory: String,
-    input_signature: Array[Byte],
+    input_signature: String,
     stdin: String,
     stdout: String,
     stderr: String,
     exit_code: Int
   )
 
-  private val create =
+  private case class JobQueryParams(
+    cmdline: Array[Byte],
+    env_vars: Array[Byte],
+    directory: String,
+    stdin: String,
+    input_signature: String,
+  )
+
+  private val createJobs =
     sql"""
       CREATE TABLE IF NOT EXISTS jobs(
-        job_id           INTEGER    PRIMARY KEY AUTOINCREMENT,
-        cmdline          BLOB       NOT NULL,
-        env_vars         BLOB       NOT NULL,
+        job_id           INTEGER    NOT NULL PRIMARY KEY AUTOINCREMENT,
+        cmdline          BINARY     NOT NULL,
+        env_vars         BINARY     NOT NULL,
         directory        TEXT       NOT NULL,
         stdin            TEXT       NOT NULL,
-        input_signature  BINARY(16) NOT NULL,
+        input_signature  CHAR(32)   NOT NULL,
         stdout           TEXT       NOT NULL,
         stderr           TEXT       NOT NULL,
         exit_code        INTEGER    NOT NULL
-      );
+      )
+    """.update
+
+  private val createPaths =
+    sql"""
       CREATE TABLE IF NOT EXISTS paths(
-        path      TEXT,
-        signature BINARY(16) NOT NULL,
-        job_id    BINARY(16) NOT NULL,
+        path      TEXT       NOT NULL,
+        signature CHAR(32)   NOT NULL,
+        job_id    INTEGER    NOT NULL,
         PRIMARY KEY (path, job_id)
       )
     """.update.run
 
-  private def update(
-    cmdline: Array[Byte],
-    env_vars: Array[Byte],
-    directory: String,
-    stdin: String,
-    input_signature: Array[Byte],
-    output_signature: Array[Byte],
-    stdout: String,
-    stderr: String,
-    exit_code: Int,
-  ) =
-    sql"""
-      UPDATE jobs
-      SET
-       cmdline         = $cmdline,        
-       env_vars        = $env_vars,       
-       directory       = $directory,      
-       stdin           = $stdin,          
-       input_signature = $input_signature,
-       stdout          = $stdout,         
-       stderr          = $stderr,         
-      WHERE
-        cmdline         = $cmdline AND
-        env_vars        = $env_vars AND
-        directory       = $directory AND
-        stdin           = $stdin AND
-        input_signature = $input_signature
-    """.update.run
-
-  private def queryJobs(
-    cmdline: Array[Byte],
-    env_vars: Array[Byte],
-    directory: String,
-    stdin: String,
-    input_signature: Array[Byte],
-  ) =
+  private def queryJobs(params: JobQueryParams) =
     sql"""
       SELECT
         job_id,
@@ -100,12 +77,12 @@ object DoobieJobCache:
         exit_code
       FROM jobs
       WHERE
-        cmdline         = $cmdline AND
-        env_vars        = $env_vars AND
-        directory       = $directory AND
-        stdin           = $stdin AND
-        input_signature = $input_signature
-    """.query[JobRow].option
+        cmdline         = ${params.cmdline} AND
+        env_vars        = ${params.env_vars} AND
+        directory       = ${params.directory} AND
+        stdin           = ${params.stdin} AND
+        input_signature = ${params.input_signature}
+    """.query[JobRow]
 
   private def deleteJobs(job_id: Int) =
     sql"DELETE FROM jobs WHERE job_id = $job_id".update.run
@@ -114,7 +91,7 @@ object DoobieJobCache:
     cmdline: Array[Byte],
     env_vars: Array[Byte],
     directory: String,
-    input_signature: Array[Byte],
+    input_signature: String,
     stdin: String,
     stdout: String,
     stderr: String,
@@ -147,13 +124,13 @@ object DoobieJobCache:
       SELECT path, signature
       FROM paths
       WHERE job_id = $job_id
-    """.query[(String, Array[Byte])].to[List]
+    """.query[(String, String)].to[List]
 
   private def deletePaths(job_id: Int) =
     sql"DELETE FROM paths WHERE job_id = $job_id".update.run
 
-  private def insertPaths(job_id: Int, path: String, hash: Array[Byte]) =
-    sql"INSERT INTO paths (job_id, path, hash) VALUES ($job_id, $path, $hash)".update.run
+  private def insertPaths(job_id: Int, path: String, signature: String) =
+    sql"INSERT INTO paths (job_id, path, signature) VALUES ($job_id, $path, $signature)".update.run
 
   private val charset = "utf-8"
 
@@ -180,43 +157,59 @@ object DoobieJobCache:
         strings += new String(stringBytes, charset)
     strings.toSeq
 
+  private def getQueryParams[F[_]: Sync](key: JobKey): F[JobQueryParams] =
+    for
+      input_signature <- Sync[F].delay {
+        val md5 = MessageDigest.getInstance("MD5")
+        key.inputFiles.foreach { (input, contentHash) =>
+          val nameHash = input.toString.md5Hash(charset)
+          md5.update(nameHash)
+          md5.update(contentHash.md5Hash(charset))
+          println(s"SLDFJLKJ: $contentHash")
+        }
+        val res = md5.digest.map("%02x".format(_)).mkString
+        println(s"INPUT SINGATURE $res")
+        res
+      }
+    yield
+      JobQueryParams(
+        stringsToByteArray(key.cmdline),
+        stringsToByteArray(key.envVars.flatMap((a, b) => Seq(a, b))),
+        key.directory.toString,
+        key.stdin,
+        input_signature,
+      )
+
   def apply[F[_]: Async: Logger](workspaceDir: Path): Resource[F, JobCache[F]] =
     for
       pool <- ExecutionContexts.fixedThreadPool[F](1)
-      _ <- Resource.eval(Logger[F].info(s"initializing hikari transactor at jdbc:sqlite:${workspaceDir}/buildsonnet.db"))
+      _ <- Resource.eval(Logger[F].info(s"initializing sqlite at ${workspaceDir}/.buildsonnet.db"))
       transactor <- HikariTransactor.newHikariTransactor[F](
         "org.sqlite.JDBC",
-        s"jdbc:sqlite:${workspaceDir}/buildsonnet.db",
+        s"jdbc:sqlite:${workspaceDir}/.buildsonnet.db",
         "", // user
         "", // password
         pool,
       )
-      _ <- Resource.eval(create.transact(transactor))
+      _ <- Resource.eval((createJobs.run *> createPaths).transact(transactor))
       lock <- Resource.eval(Semaphore(1))
     yield
       new JobCache[F] {
-        private def getRow(key: JobKey): ConnectionIO[Option[JobRow]] =
+        def getJobRow(params: JobQueryParams) =
           for
-            input_signature <-
-              key.inputFiles.foldLeft(Sync[ConnectionIO].delay(MessageDigest.getInstance("MD5"))) {
-                case (md5, (input, contentHash)) =>
-                  for
-                    md5 <- md5
-                    nameHash = input.toString.md5Hash(charset)
-                    _ <- Sync[ConnectionIO].delay {
-                      md5.digest(nameHash)
-                      md5.digest(contentHash)
-                    }
-                  yield
-                    md5
+            jobRows <- queryJobs(params).to[List]
+            jobRowOpt = if jobRows.isEmpty then None else Some(jobRows.maxBy(_.job_id))
+            outputPaths <- jobRowOpt.fold(List.empty.pure[ConnectionIO]) { jobRow =>
+              queryPaths(jobRow.job_id)
+            }
+            _ <- if jobRows.size > 1 then
+              jobRows.traverse { jobRow =>
+                if jobRow.job_id != jobRowOpt.get.job_id then
+                  deleteJobs(jobRow.job_id).void
+                else
+                  ().pure[ConnectionIO]
               }
-            jobRowOpt <- queryJobs(
-              stringsToByteArray(key.cmdline),
-              stringsToByteArray(key.envVars.flatMap((a, b) => Seq(a, b))),
-              key.directory.toString,
-              key.stdin,
-              input_signature.digest,
-            )
+            else ().pure[ConnectionIO]
           yield
             jobRowOpt
 
@@ -224,7 +217,8 @@ object DoobieJobCache:
           Resource.make(lock.acquire)(_ => lock.release).use { _ =>
             val transaction =
               for
-                jobRowOpt <- getRow(key)
+                queryParams <- getQueryParams[ConnectionIO](key)
+                jobRowOpt <- getJobRow(queryParams)
                 outputPaths <- jobRowOpt.fold(List.empty.pure[ConnectionIO]) { jobRow =>
                   queryPaths(jobRow.job_id)
                 }
@@ -239,6 +233,9 @@ object DoobieJobCache:
                     jobRow.exit_code,
                   )
                 }
+            // val y = transactor.yolo
+            // import y._
+            // getQueryParams[F](key).map(queryJobs).flatMap(_.check) *>
             transaction.transact(transactor)
           }
 
@@ -246,26 +243,27 @@ object DoobieJobCache:
           Resource.make(lock.acquire)(_ => lock.release).use { _ =>
             val transaction =
               for
-                jobRowOpt <- getRow(key)
+                queryParams <- getQueryParams[ConnectionIO](key)
+                jobRowOpt <- getJobRow(queryParams)
                 _ <- jobRowOpt.fold(().pure[ConnectionIO]) { jobRow =>
                   for
                     _ <- deletePaths(jobRow.job_id)
                     _ <- deleteJobs(jobRow.job_id)
-                    job_id <- insertJobs(
-                      jobRow.cmdline,
-                      jobRow.env_vars,
-                      jobRow.directory,
-                      jobRow.input_signature,
-                      jobRow.stdin,
-                      value.stdout,
-                      value.stderr,
-                      value.exitCode,
-                    )
-                    _ <- value.outputFiles.traverse { (path, hash) =>
-                      insertPaths(job_id, path.toString, hash)
-                    }
                   yield
                     ()
+                }
+                job_id <- insertJobs(
+                  queryParams.cmdline,
+                  queryParams.env_vars,
+                  queryParams.directory,
+                  queryParams.input_signature,
+                  queryParams.stdin,
+                  value.stdout,
+                  value.stderr,
+                  value.exitCode,
+                )
+                _ <- value.outputFiles.traverse { (path, hash) =>
+                  insertPaths(job_id, path.toString, hash)
                 }
               yield
                 ()

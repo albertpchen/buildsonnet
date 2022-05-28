@@ -18,22 +18,27 @@ object syntax:
         .asInstanceOf[FileTime]
 
     // TODO: return option instead? in case of non-existent path
-    def md5Hash: F[Array[Byte]] = Sync[F].delay {
+    def md5Hash: F[String] =
+      Sync[F].delay(md5HashUnsafe)
+
+    def md5HashUnsafe: String =
       val buffer = Array.ofDim[Byte](8192)
       val md5 = MessageDigest.getInstance("MD5")
 
-      val dis = new DigestInputStream(new java.io.FileInputStream(path.toFile), md5)
+      println(new String(Files.newInputStream(path).readAllBytes.clone, "utf-8"))
+      val dis = new DigestInputStream(Files.newInputStream(path), md5)
       try
         while dis.read(buffer) != -1 do ()
         dis
       finally
         dis.close()
 
-      md5.digest
-    }
+      val res = md5.digest.map("%02x".format(_)).mkString
+      println(res)
+      res
 
   extension (str: String)
     def md5Hash(charset: String): Array[Byte] =
-      val md5 = MessageDigest.getInstance("MD5")
-      md5.digest(str.getBytes(charset))
-      md5.digest
+      MessageDigest
+        .getInstance("MD5")
+        .digest(str.getBytes(charset))

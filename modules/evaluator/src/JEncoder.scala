@@ -34,7 +34,10 @@ object JEncoder:
 
   given [F[_]]: JEncoder[F, Path] with
     def encode(ctx: EvaluationContext[F], src: Source, t: Path) =
-      EvaluatedJValue.JString[F](src, ctx.workspaceDir.relativize(t).toString)
+      if t.getRoot == null then
+        EvaluatedJValue.JString[F](src, t.toString)
+      else
+        EvaluatedJValue.JString[F](src, ctx.workspaceDir.relativize(t).toString)
 
   given [F[_], L[X] <: Iterable[X], T: [T] =>> JEncoder[F, T]]: JEncoder[F, L[T]] with
     def encode(ctx: EvaluationContext[F], src: Source, t: L[T]) =
