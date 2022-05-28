@@ -3,13 +3,18 @@ package buildsonnet
 import buildsonnet.ast.{Parser, SourceFile, JValue, Source}
 import buildsonnet.evaluator.{EvaluationContext, EvaluatedJValue, EvaluationError, LazyValue}
 import buildsonnet.logger.ConsoleLogger
+
 import cats.effect.{ExitCode, IO, IOApp, Sync}
 import cats.effect.std.Console
 import cats.syntax.all.given
+
 import concurrent.duration.DurationInt
 
 import com.monovore.decline.{Command, Opts}
 import com.monovore.decline.effect.CommandIOApp
+
+import org.typelevel.log4cats.Logger
+import org.typelevel.log4cats.slf4j.Slf4jLogger
 
 import java.nio.file.{Files, Path}
 
@@ -93,32 +98,40 @@ object Buildsonnet extends IOApp:
           rootJValue = buildCommand
             .split('.')
             .foldLeft(buildObject)(JValue.JGetField(Source.empty, _, _))
+          workspaceDir = buildFile.getParent
           given ConsoleLogger[IO] = ConsoleLogger.default[IO]("buildsonnet")
-          ctx = {
-            val initCtx = EvaluationContext.std[IO]
-            val std = Std(initCtx)
-            initCtx.bind("std", LazyValue.strict(std))
+          ctxResource <- {
+            given Logger[IO] = Slf4jLogger.getLogger[IO]
+            val initCtx = EvaluationContext.std[IO](workspaceDir)
+            Std(initCtx).map { std =>
+              initCtx.bind("std", LazyValue.strict(std))
+            }
+          }.pure[IO]
+          _ <- ctxResource.use { ctx =>
+            for
+              buildValue <- buildsonnet.evaluator.eval(ctx)(rootJValue)
+              result <- buildValue match
+                case fn: EvaluatedJValue.JFunction[IO] =>
+                  val params = EvaluatedJValue.JFunctionParameters[IO](
+                    fn.src,
+                    ctx,
+                    Seq(EvaluatedJValue.JArray(Source.empty, buildArgs.map(EvaluatedJValue.JString(Source.empty, _)).toVector)),
+                    Seq.empty,
+                  )
+                  fn.fn(params)
+                case e if buildArgs.nonEmpty =>
+                  IO.raiseError(new CmdlineError(s"build command $buildCommand is not a function"))
+                case e => e.pure[IO]
+              prettyResult <- ctx.prettyPrint(result)
+              _ <- ConsoleLogger[IO].info(prettyResult)
+            yield ()
           }
-          buildValue <- buildsonnet.evaluator.eval(ctx)(rootJValue)
-          result <- buildValue match
-            case fn: EvaluatedJValue.JFunction[IO] =>
-              val params = EvaluatedJValue.JFunctionParameters[IO](
-                fn.src,
-                ctx,
-                Seq(EvaluatedJValue.JArray(Source.empty, buildArgs.map(EvaluatedJValue.JString(Source.empty, _)).toVector)),
-                Seq.empty,
-              )
-              fn.fn(params)
-            case e if buildArgs.nonEmpty =>
-              IO.raiseError(new CmdlineError(s"build command $buildCommand is not a function"))
-            case e => e.pure[IO]
-          prettyResult <- result.prettyPrint[IO]
-          _ <- ConsoleLogger[IO].info(prettyResult)
         yield ExitCode.Success
       run.handleErrorWith {
         case CmdlineError(msg) =>
           Console[IO].error(msg).as(ExitCode.Error)
         case e: EvaluationError =>
           Console[IO].error(e.toString).as(ExitCode.Error)
+        case e => e.raiseError
       }
     }

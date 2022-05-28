@@ -15,6 +15,8 @@ import doobie.hikari.HikariTransactor
 import java.nio.file.Path
 import java.security.MessageDigest
 
+import org.typelevel.log4cats.Logger
+
 object DoobieJobCache:
   private case class JobRow(
     job_id: Int,
@@ -31,21 +33,20 @@ object DoobieJobCache:
   private val create =
     sql"""
       CREATE TABLE IF NOT EXISTS jobs(
-        job_id           INTEGER    AUTOINCREMENT
+        job_id           INTEGER    PRIMARY KEY AUTOINCREMENT,
         cmdline          BLOB       NOT NULL,
         env_vars         BLOB       NOT NULL,
         directory        TEXT       NOT NULL,
         stdin            TEXT       NOT NULL,
-        input_signature  BINARY(16) NOT NULL, // hash(inputs, outputs)
+        input_signature  BINARY(16) NOT NULL,
         stdout           TEXT       NOT NULL,
         stderr           TEXT       NOT NULL,
-        exit_code        INTEGER    NOT NULL,
-        PRIMARY KEY (cmdline, env_vars, directory, stdin, input_signature)
-      )
+        exit_code        INTEGER    NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS paths(
-        path      TEXT
-        signature BINARY(16) NOT NULL, // hash(inputs, outputs)
-        job_id    BINARY(16) NOT NULL, // hash(inputs, outputs)
+        path      TEXT,
+        signature BINARY(16) NOT NULL,
+        job_id    BINARY(16) NOT NULL,
         PRIMARY KEY (path, job_id)
       )
     """.update.run
@@ -179,99 +180,95 @@ object DoobieJobCache:
         strings += new String(stringBytes, charset)
     strings.toSeq
 
-  def apply[F[_]: Async](workspaceDir: Path): F[JobCache[F]] =
-    val transactor: Resource[F, HikariTransactor[F]] =
-      for {
-        pool <- ExecutionContexts.fixedThreadPool[F](1)
-        transactor <- HikariTransactor.newHikariTransactor[F](
-          "org.sqlite.JDBC",
-          s"jdbc:sqlite:${workspaceDir}/buildsonnet.db",
-          "", // user
-          "", // password
-          pool,
-        )
-      } yield transactor
-    transactor.use { transactor =>
-      for
-        _ <- create.transact(transactor)
-        lock <- Semaphore(1)
-      yield
-        new JobCache[F] {
-          private def getRow(key: JobKey): ConnectionIO[Option[JobRow]] =
-            for
-              input_signature <-
-                key.inputFiles.foldLeft(Sync[ConnectionIO].delay(MessageDigest.getInstance("MD5"))) {
-                  case (md5, (input, contentHash)) =>
-                    for
-                      md5 <- md5
-                      nameHash = input.toString.md5Hash(charset)
-                      _ <- Sync[ConnectionIO].delay {
-                        md5.digest(nameHash)
-                        md5.digest(contentHash)
-                      }
-                    yield
-                      md5
+  def apply[F[_]: Async: Logger](workspaceDir: Path): Resource[F, JobCache[F]] =
+    for
+      pool <- ExecutionContexts.fixedThreadPool[F](1)
+      _ <- Resource.eval(Logger[F].info(s"initializing hikari transactor at jdbc:sqlite:${workspaceDir}/buildsonnet.db"))
+      transactor <- HikariTransactor.newHikariTransactor[F](
+        "org.sqlite.JDBC",
+        s"jdbc:sqlite:${workspaceDir}/buildsonnet.db",
+        "", // user
+        "", // password
+        pool,
+      )
+      _ <- Resource.eval(create.transact(transactor))
+      lock <- Resource.eval(Semaphore(1))
+    yield
+      new JobCache[F] {
+        private def getRow(key: JobKey): ConnectionIO[Option[JobRow]] =
+          for
+            input_signature <-
+              key.inputFiles.foldLeft(Sync[ConnectionIO].delay(MessageDigest.getInstance("MD5"))) {
+                case (md5, (input, contentHash)) =>
+                  for
+                    md5 <- md5
+                    nameHash = input.toString.md5Hash(charset)
+                    _ <- Sync[ConnectionIO].delay {
+                      md5.digest(nameHash)
+                      md5.digest(contentHash)
+                    }
+                  yield
+                    md5
+              }
+            jobRowOpt <- queryJobs(
+              stringsToByteArray(key.cmdline),
+              stringsToByteArray(key.envVars.flatMap((a, b) => Seq(a, b))),
+              key.directory.toString,
+              key.stdin,
+              input_signature.digest,
+            )
+          yield
+            jobRowOpt
+
+        def get(key: JobKey): F[Option[JobValue]] =
+          Resource.make(lock.acquire)(_ => lock.release).use { _ =>
+            val transaction =
+              for
+                jobRowOpt <- getRow(key)
+                outputPaths <- jobRowOpt.fold(List.empty.pure[ConnectionIO]) { jobRow =>
+                  queryPaths(jobRow.job_id)
                 }
-              jobRowOpt <- queryJobs(
-                stringsToByteArray(key.cmdline),
-                stringsToByteArray(key.envVars.flatMap((a, b) => Seq(a, b))),
-                key.directory.toString,
-                key.stdin,
-                input_signature.digest,
-              )
-            yield
-              jobRowOpt
+              yield
+                jobRowOpt.map { jobRow =>
+                  JobValue(
+                    outputPaths.map { (pathName, hash) =>
+                      workspaceDir.resolve(pathName) -> hash
+                    },
+                    jobRow.stdout,
+                    jobRow.stderr,
+                    jobRow.exit_code,
+                  )
+                }
+            transaction.transact(transactor)
+          }
 
-          def get(key: JobKey): F[Option[JobValue]] =
-            Resource.make(lock.acquire)(_ => lock.release).use { _ =>
-              val transaction =
-                for
-                  jobRowOpt <- getRow(key)
-                  outputPaths <- jobRowOpt.fold(List.empty.pure[ConnectionIO]) { jobRow =>
-                    queryPaths(jobRow.job_id)
-                  }
-                yield
-                  jobRowOpt.map { jobRow =>
-                    JobValue(
-                      outputPaths.map { (pathName, hash) =>
-                        workspaceDir.resolve(pathName) -> hash
-                      },
-                      jobRow.stdout,
-                      jobRow.stderr,
-                      jobRow.exit_code,
+        def insert(key: JobKey, value: JobValue): F[Unit] =
+          Resource.make(lock.acquire)(_ => lock.release).use { _ =>
+            val transaction =
+              for
+                jobRowOpt <- getRow(key)
+                _ <- jobRowOpt.fold(().pure[ConnectionIO]) { jobRow =>
+                  for
+                    _ <- deletePaths(jobRow.job_id)
+                    _ <- deleteJobs(jobRow.job_id)
+                    job_id <- insertJobs(
+                      jobRow.cmdline,
+                      jobRow.env_vars,
+                      jobRow.directory,
+                      jobRow.input_signature,
+                      jobRow.stdin,
+                      value.stdout,
+                      value.stderr,
+                      value.exitCode,
                     )
-                  }
-              transaction.transact(transactor)
-            }
-
-          def insert(key: JobKey, value: JobValue): F[Unit] =
-            Resource.make(lock.acquire)(_ => lock.release).use { _ =>
-              val transaction =
-                for
-                  jobRowOpt <- getRow(key)
-                  _ <- jobRowOpt.fold(().pure[ConnectionIO]) { jobRow =>
-                    for
-                      _ <- deletePaths(jobRow.job_id)
-                      _ <- deleteJobs(jobRow.job_id)
-                      job_id <- insertJobs(
-                        jobRow.cmdline,
-                        jobRow.env_vars,
-                        jobRow.directory,
-                        jobRow.input_signature,
-                        jobRow.stdin,
-                        value.stdout,
-                        value.stderr,
-                        value.exitCode,
-                      )
-                      _ <- value.outputFiles.traverse { (path, hash) =>
-                        insertPaths(job_id, path.toString, hash)
-                      }
-                    yield
-                      ()
-                  }
-                yield
-                  ()
-              transaction.transact(transactor)
-            }
-        }
-    }
+                    _ <- value.outputFiles.traverse { (path, hash) =>
+                      insertPaths(job_id, path.toString, hash)
+                    }
+                  yield
+                    ()
+                }
+              yield
+                ()
+            transaction.transact(transactor)
+          }
+      }

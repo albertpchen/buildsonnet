@@ -8,78 +8,8 @@ import scala.collection.mutable
 sealed trait EvaluatedJValue[F[_]] extends HasSource:
   import EvaluatedJValue._
 
-  def prettyPrint[F[_]: Sync]: F[String] = Sync[F].defer {
-    val builder = new StringBuilder
-    prettyPrintImp("   ", 0, None, builder) *> Sync[F].delay {
-      builder.toString
-    }
-  }
-
-  private def prettyPrintImp[F[_]: Sync](
-    tab: String,
-    tabNum: Int,
-    firstPrefix: Option[String],
-    builder: StringBuilder
-  ): F[Unit] = Sync[F].defer {
-    val prefix = tab * tabNum
-    builder ++= firstPrefix.getOrElse(prefix)
-    this match
-      case _: JFunction[?] => ???
-      case JNull(_) => builder ++= "null"; ().pure
-      case JString(_, string) =>
-        builder += '"'
-        EvaluatedJValue.escape(string, builder)
-        builder += '"'
-        ().pure
-      case JNum(_, value) =>
-        if value.isWhole then
-          builder ++= value.toLong.toString
-        else
-          builder ++= value.toString
-        ().pure
-      case JBoolean(_, value) => builder ++= (if value then "true" else "false"); ().pure
-      case JArray(_, value) if value.isEmpty => builder ++= "[]"; ().pure
-      case JArray(_, value) =>
-        builder ++= "[\n"
-        value.head.prettyPrintImp(tab, tabNum + 1, None, builder) *>
-        value.tail.foldLeft(().pure[F]) { (sync, e) =>
-          sync *> Sync[F].defer {
-            builder ++= ",\n"
-            e.prettyPrintImp(tab, tabNum + 1, None, builder)
-          }
-        } *> Sync[F].delay {
-          builder += '\n'
-          builder ++= prefix
-          builder += ']'
-        }
-      case obj: JObject[?] if obj.members.isEmpty => builder ++= "{ }"; ().pure
-      case obj: JObject[?] =>
-        val value = obj.asInstanceOf[JObject[F]].members.toSeq.sortBy(_._1)
-        builder ++= "{\n"
-        builder ++= prefix
-        builder ++= tab
-        builder += '"'
-        EvaluatedJValue.escape(value.head._1, builder)
-        value.head._2.value.flatMap(_.prettyPrintImp(tab, tabNum + 1, Some("\": "), builder)) *>
-        value.tail.foldLeft(().pure[F]) { case (sync, (k, v)) =>
-          sync *> Sync[F].defer {
-            builder ++= ",\n"
-            builder ++= prefix
-            builder ++= tab
-            builder += '"'
-            EvaluatedJValue.escape(k, builder)
-            v.value.flatMap(_.prettyPrintImp(tab, tabNum + 1, Some("\": "), builder))
-          }
-        } *>
-        Sync[F].delay {
-          builder += '\n'
-          builder ++= prefix
-          builder += '}'
-        }
-    }
-
 object EvaluatedJValue:
-  private def escape(s: String, builder: StringBuilder): Unit =
+  def escape(s: String, builder: StringBuilder): Unit =
     var idx = 0
     val len = s.length
     while idx < len do

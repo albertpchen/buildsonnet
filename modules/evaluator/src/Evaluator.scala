@@ -194,7 +194,7 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
         eval(ctx)(right).flatMap(ctx.expect[PlusOperand](_)),
       ).parTupled.flatMap {
         case (op1: EvaluatedJValue.JString[F], op2) =>
-          op2.prettyPrint.map(op2 => EvaluatedJValue.JString(src, op1.string + op2))
+          ctx.singleLinePrint(op2).map(op2 => EvaluatedJValue.JString(src, op1.string + op2))
         case (op1: EvaluatedJValue.JObject[F], op2: EvaluatedJValue.JObject[F]) =>
           op1.mixin(src, op2).widen
         case (op1: EvaluatedJValue.JArray[F], op2: EvaluatedJValue.JArray[F]) =>

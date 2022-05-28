@@ -1,11 +1,13 @@
 package buildsonnet.evaluator
 
 import cats.{Monad, MonadError, Parallel}
-import cats.effect.Async
+import cats.effect.{Async, Sync}
 import cats.syntax.all.given
 
 import buildsonnet.ast.*
 import buildsonnet.logger.ConsoleLogger
+
+import java.nio.file.Path
 
 sealed trait EvaluationContext[F[_]]:
   def error[T](src: Source, msg: String): F[T]
@@ -23,13 +25,15 @@ sealed trait EvaluationContext[F[_]]:
   def `import`(src: Source, file: String): F[EvaluatedJValue[F]]
   def importStr(src: Source, file: String): F[EvaluatedJValue.JString[F]]
 
-  def workspaceDir: java.nio.file.Path = ???
+  def workspaceDir: Path
+  def file: SourceFile = ???
 
 object EvaluationContext:
   private case class Impl[F[_]](
     self: Option[EvaluatedJValue.JObject[F]],
     `super`: Option[EvaluatedJValue.JObject[F]],
     scopeArr: Array[(String, LazyValue[F])],
+    val workspaceDir: Path,
   )(using MonadError[F, Throwable]) extends EvaluationContext[F]:
     lazy val scope: Map[String, LazyValue[F]] = scopeArr.toMap
     def error[T](src: Source, msg: String): F[T] =
@@ -54,8 +58,8 @@ object EvaluationContext:
     def `import`(src: Source, file: String): F[EvaluatedJValue[F]] = ???
     def importStr(src: Source, file: String): F[EvaluatedJValue.JString[F]] = ???
 
-  def std[F[_]](using MonadError[F, Throwable]): EvaluationContext[F] =
-    Impl(None, None, Array.empty)
+  def std[F[_]](workspaceDir: Path)(using MonadError[F, Throwable]): EvaluationContext[F] =
+    Impl(None, None, Array.empty, workspaceDir)
 
   given theExpr[F[_]](using expr: EvaluatedJValue[F]): EvaluatedJValue[F] = expr
 
@@ -98,6 +102,12 @@ object EvaluationContext:
     //case _: EvaluatedJValue.JFuture[F] => "future"
 
   extension [F[_]: Monad](ctx: EvaluationContext[F])
+    inline def decode[T: [X] =>> JDecoder[F, X]](expr: EvaluatedJValue[F]): F[T] =
+      JDecoder[F, T].decode(ctx, expr)
+
+    inline def encode[T: [X] =>> JEncoder[F, X]](src: Source, t: T): EvaluatedJValue[F] =
+      JEncoder[F, T].encode(ctx, src, t)
+
     inline def expect[T](jvalue: EvaluatedJValue[F], msg: EvaluatedJValue[F] ?=> String): F[T] =
       inline compiletime.erasedValue[T] match
       case _: Boolean =>
@@ -140,3 +150,130 @@ object EvaluationContext:
         .map((key, value) => LazyValue(eval(ctx)(value)).map(key -> _))
         .sequence
         .map(ctx.bind(_))
+
+    def prettyPrint(value: EvaluatedJValue[F]): F[String] = Sync[F].defer {
+      val builder = new StringBuilder
+      prettyPrintImp("   ", 0, None, builder, value.src, value) *> Sync[F].delay(builder.toString)
+    }
+
+    def singleLinePrint(value: EvaluatedJValue[F]): F[String] = Sync[F].defer {
+      val builder = new StringBuilder
+      singleLinePrintImp(builder, value.src, value) *> Sync[F].delay(builder.toString)
+    }
+
+    private def singleLinePrintImp(
+      builder: StringBuilder,
+      src: Source,
+      value: EvaluatedJValue[F],
+    ): F[Unit] = Sync[F].defer {
+      import EvaluatedJValue.*
+      value match
+        case _: JFunction[F] => ctx.error(src, "couldn't manifest function in JSON output")
+        case JNull(_) => builder ++= "null"; ().pure
+        case JString(_, string) =>
+          builder += '"'
+          EvaluatedJValue.escape(string, builder)
+          builder += '"'
+          ().pure
+        case JNum(_, value) =>
+          if value.isWhole then
+            builder ++= value.toLong.toString
+          else
+            builder ++= value.toString
+          ().pure
+        case JBoolean(_, value) => builder ++= (if value then "true" else "false"); ().pure
+        case JArray(_, value) if value.isEmpty => builder ++= "[]"; ().pure
+        case JArray(_, value) =>
+          Sync[F].defer {
+            builder += '['
+            singleLinePrintImp(builder, src, value.head) *>
+            value.tail.traverse { e =>
+              Sync[F].delay(builder ++= ", ") *> singleLinePrintImp(builder, src, e)
+            } *>
+            Sync[F].delay(builder += ']')
+          }
+        case obj: JObject[F] if obj.members.isEmpty => builder ++= "{ }"; ().pure
+        case obj: JObject[F] =>
+          val value = obj.members.toSeq.sortBy(_._1)
+          builder ++= "{ \""
+          EvaluatedJValue.escape(value.head._1, builder)
+          builder ++= "\": "
+          value.head._2.value.flatMap(singleLinePrintImp(builder, src, _)) *>
+          value.tail.foldLeft(().pure[F]) { case (prev, (k, v)) =>
+            prev *> Sync[F].defer {
+              builder ++= ", \""
+              EvaluatedJValue.escape(k, builder)
+              builder ++= "\": "
+              v.value.flatMap(singleLinePrintImp(builder, src, _))
+            }
+          } *>
+          Sync[F].delay {
+            builder += '}'
+          }
+    }
+
+    private def prettyPrintImp(
+      tab: String,
+      tabNum: Int,
+      firstPrefix: Option[String],
+      builder: StringBuilder,
+      src: Source,
+      value: EvaluatedJValue[F],
+    ): F[Unit] = Sync[F].defer {
+      import EvaluatedJValue.*
+      val prefix = tab * tabNum
+      builder ++= firstPrefix.getOrElse(prefix)
+      value match
+        case _: JFunction[F] => ctx.error(src, "couldn't manifest function in JSON output")
+        case JNull(_) => builder ++= "null"; ().pure
+        case JString(_, string) =>
+          builder += '"'
+          EvaluatedJValue.escape(string, builder)
+          builder += '"'
+          ().pure
+        case JNum(_, value) =>
+          if value.isWhole then
+            builder ++= value.toLong.toString
+          else
+            builder ++= value.toString
+          ().pure
+        case JBoolean(_, value) => builder ++= (if value then "true" else "false"); ().pure
+        case JArray(_, value) if value.isEmpty => builder ++= "[]"; ().pure
+        case JArray(_, value) =>
+          builder ++= "[\n"
+          prettyPrintImp(tab, tabNum + 1, None, builder, src, value.head) *>
+          value.tail.foldLeft(().pure[F]) { (sync, e) =>
+            sync *> Sync[F].defer {
+              builder ++= ",\n"
+              prettyPrintImp(tab, tabNum + 1, None, builder, src, e)
+            }
+          } *> Sync[F].delay {
+            builder += '\n'
+            builder ++= prefix
+            builder += ']'
+          }
+        case obj: JObject[?] if obj.members.isEmpty => builder ++= "{ }"; ().pure
+        case obj: JObject[?] =>
+          val value = obj.asInstanceOf[JObject[F]].members.toSeq.sortBy(_._1)
+          builder ++= "{\n"
+          builder ++= prefix
+          builder ++= tab
+          builder += '"'
+          EvaluatedJValue.escape(value.head._1, builder)
+          value.head._2.value.flatMap(prettyPrintImp(tab, tabNum + 1, Some("\": "), builder, src, _)) *>
+          value.tail.foldLeft(().pure[F]) { case (sync, (k, v)) =>
+            sync *> Sync[F].defer {
+              builder ++= ",\n"
+              builder ++= prefix
+              builder ++= tab
+              builder += '"'
+              EvaluatedJValue.escape(k, builder)
+              v.value.flatMap(prettyPrintImp(tab, tabNum + 1, Some("\": "), builder, src, _))
+            }
+          } *>
+          Sync[F].delay {
+            builder += '\n'
+            builder ++= prefix
+            builder += '}'
+          }
+      }
