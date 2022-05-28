@@ -81,11 +81,13 @@ object ConsoleLogger:
 sealed trait Printer[F[_]]:
   def print(str: String): F[Unit]
   def println(str: String): F[Unit]
+  def printStream: PrintStream
 
 object Printer:
   def apply[F[_]: Sync](stream: PrintStream): Printer[F] = new Printer[F] {
     def print(str: String): F[Unit] = Sync[F].delay(stream.print(str))
     def println(str: String): F[Unit] = Sync[F].delay(stream.println(str))
+    val printStream = stream
   }
 
 /**
@@ -107,6 +109,8 @@ final class ConsoleLogger[F[_]: Sync](
   def error(msg: String): F[Unit] = print(msg, printError)
   def warn(msg: String): F[Unit] = print(msg, printWarning)
   def info(msg: String): F[Unit] = print(msg, printInfo)
+  def outStream: PrintStream = out.printStream
+  def errStream: PrintStream = err.printStream
 
   def isVerbose: Boolean = debugCount > 0
   def asVerbose: ConsoleLogger[F] =

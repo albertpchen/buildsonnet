@@ -7,6 +7,7 @@ import scala.collection.mutable
 
 sealed trait EvaluatedJValue[F[_]] extends HasSource:
   import EvaluatedJValue._
+  def isNull: Boolean = false
 
 object EvaluatedJValue:
   def escape(s: String, builder: StringBuilder): Unit =
@@ -32,7 +33,9 @@ object EvaluatedJValue:
       idx += 1
 
   case class JBoolean[F[_]](src: Source, bool: Boolean) extends EvaluatedJValue[F]
-  case class JNull[F[_]](src: Source) extends EvaluatedJValue[F]
+  case class JNull[F[_]](src: Source) extends EvaluatedJValue[F] {
+    override def isNull: Boolean = true
+  }
   case class JString[F[_]](src: Source, string: String) extends EvaluatedJValue[F]
   case class JNum[F[_]](src: Source, double: Double) extends EvaluatedJValue[F]
   case class JArray[F[_]](src: Source, elements: IArray[EvaluatedJValue[F]]) extends EvaluatedJValue[F]

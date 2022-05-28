@@ -25,7 +25,6 @@ object syntax:
       val buffer = Array.ofDim[Byte](8192)
       val md5 = MessageDigest.getInstance("MD5")
 
-      println(new String(Files.newInputStream(path).readAllBytes.clone, "utf-8"))
       val dis = new DigestInputStream(Files.newInputStream(path), md5)
       try
         while dis.read(buffer) != -1 do ()
@@ -33,9 +32,7 @@ object syntax:
       finally
         dis.close()
 
-      val res = md5.digest.map("%02x".format(_)).mkString
-      println(res)
-      res
+      md5.digest.map("%02x".format(_)).mkString
 
   extension (str: String)
     def md5Hash(charset: String): Array[Byte] =

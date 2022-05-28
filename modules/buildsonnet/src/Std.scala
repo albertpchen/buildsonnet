@@ -2,7 +2,9 @@ package buildsonnet
 
 import cats.{Parallel, Traverse}
 import cats.effect.{Async, Sync, Resource}
+import cats.effect.std.Dispatcher
 import cats.syntax.all.given
+import cats.instances.all.given
 
 import buildsonnet.ast.{JParamList, Source, SourceFile}
 import buildsonnet.evaluator.{EvaluationContext, EvaluatedJValue, LazyValue, eval}
@@ -10,11 +12,14 @@ import buildsonnet.evaluator.given Traverse[Iterable]
 import buildsonnet.logger.ConsoleLogger
 import buildsonnet.job.{JobCache, JobDescription, SQLiteJobCache, JobRunner}
 
+import java.nio.file.{Files, Path}
+
 import org.typelevel.log4cats.Logger
 
 import scala.language.dynamics
 
 private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
+  initCtx: EvaluationContext[F],
   jobCache: JobCache[F],
 ):
   import Std.*
@@ -201,6 +206,7 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
   private val jtrue = EvaluatedJValue.JBoolean[F](stdSrc, true)
   private val jfalse = EvaluatedJValue.JBoolean[F](stdSrc, false)
 
+  var self: EvaluatedJValue.JObject[F] = null
   val members: Map[String, EvaluatedJValue[F]] = Map(
     "toString" -> function1(Arg.x)(x => ctx.singleLinePrint(x).map(EvaluatedJValue.JString(src, _))),
     "type" -> function1(Arg.x) { x =>
@@ -257,7 +263,7 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
       ).tupled.flatMap { (func, arr) =>
         for
           res <- Sync[F].delay(Array.ofDim[IArray[EvaluatedJValue[F]]](arr.elements.size))
-          _ <- ((0 until arr.elements.size): Iterable[Int]).parTraverse { i =>
+          _ <- ((0 until arr.elements.size): Iterable[Int]).traverse { i =>
             val e = arr.elements(i)
             val params = EvaluatedJValue.JFunctionParameters(src, ctx, Seq(e), Seq.empty)
             for
@@ -303,10 +309,216 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
         .flatMap(JobRunner.run(ctx, jobCache, src, _))
         .map(ctx.encode(src, _))
     },
+    "write" -> function2(Arg.pathName, Arg.contents) { (pathName, contents) =>
+      (ctx.expect[String](pathName), ctx.expect[String](contents))
+        .tupled
+        .flatMap { (pathName, contents) =>
+          val path =
+            if pathName.startsWith("/") then
+              java.nio.file.Paths.get(pathName).normalize
+            else
+              ctx.workspaceDir.resolve(pathName).normalize
+          val parent = path.getParent
+          if !java.nio.file.Files.exists(parent) && !parent.toFile.mkdirs then
+            ctx.error(src, s"could not create parent directories for file '$path'")
+          else if !java.nio.file.Files.isDirectory(parent) then
+            ctx.error(src, s"file parent is not a directory '$path'")
+          else if java.nio.file.Files.isDirectory(path) then
+            ctx.error(src, s"file '$path' is a directory")
+          else
+            writeImpl(path, contents).map(p => EvaluatedJValue.JString(src, p.toString))
+        }
+    },
+    "find" -> function3(Arg.dir, Arg.pattern, Arg.syntax(EvaluatedJValue.JString(stdSrc, "glob"))) { (dir, pattern, syntax) =>
+      (
+        ctx.expect[String](dir),
+        ctx.expect[String](pattern),
+        ctx.expect[String](syntax)
+      ).tupled.flatMap { (dirName, pattern, syntax) =>
+        import collection.JavaConverters.asScalaIteratorConverter
+        val dirPath =
+          if dirName.startsWith("/") then
+            java.nio.file.Paths.get(dirName).normalize
+          else
+            ctx.workspaceDir.resolve(dirName).normalize
+        if !java.nio.file.Files.exists(dirPath) then
+          ctx.error(src, s"directory does not exist, got '$dirPath'")
+        else if !java.nio.file.Files.isDirectory(dirPath) then
+          ctx.error(src, s"filename is not a directory, got '$dirPath'")
+        else
+          for
+            matcher <- syntax match
+              case "glob" | "regex" =>
+                java.nio.file.FileSystems.getDefault.getPathMatcher(s"$syntax:$pattern").pure
+              case _ =>
+                ctx.error(src, s"paths syntax must be either 'glob' or 'regex', got $syntax")
+            elements <- Sync[F].delay {
+              Files
+                .find(dirPath, Integer.MAX_VALUE, (filePath, fileAttr) => {
+                   fileAttr.isRegularFile() && matcher.matches(dirPath.relativize(filePath))
+                })
+                .iterator()
+                .asScala
+                .map(p => EvaluatedJValue.JString[F](src, p.toString))
+                .toArray
+            }
+          yield
+            EvaluatedJValue.JArray(src, IArray.unsafeFromArray(elements))
+      }
+    },
+    "startsWith" -> function2(Arg.a, Arg.b) { (a, b) =>
+      (ctx.expect[String](a), ctx.expect[String](b)).mapN { (a, b) =>
+        EvaluatedJValue.JBoolean(src, a.startsWith(b))
+      }
+    },
+    "join" -> function2(Arg.sep, Arg.arr) { (sep, arr) =>
+      (ctx.expect[String](sep), ctx.expect[EvaluatedJValue.JArray[F]](arr))
+        .tupled
+        .flatMap {
+          case (sep, arr) if arr.elements.isEmpty => EvaluatedJValue.JString(src, "").pure
+          case (sep, arr) if arr.elements.size == 1 => ctx.expect[EvaluatedJValue.JString[F]](arr.elements.head).widen
+          case (sep, arr) =>
+            ((0 until arr.elements.size): Iterable[Int])
+              .traverse(i => ctx.expect[String](arr.elements(i)))
+              .map(arr => EvaluatedJValue.JString(src, arr.mkString(sep)))
+        }
+    },
+    "getenv" -> function1(Arg.varName) { (varName) =>
+      ctx.expect[String](varName).flatMap { varName =>
+        Sync[F].defer {
+          try
+            val value = System.getenv(varName)
+            if value eq null then
+              ctx.error(src, s"environment variable \"$varName\" not set")
+            else
+              EvaluatedJValue.JString(src, value).pure
+          catch
+            case e: java.lang.SecurityException =>
+              ctx.error(src, s"could not access environment variable \"$varName\": ${e.getMessage}")
+        }
+      }
+    },
+    "java" -> EvaluatedJValue.JObject.static(stdSrc, initCtx, Map(
+      "Dep" -> function3(Arg.org, Arg.name, Arg.version) { (org, name, version) =>
+        (
+          ctx.expect[EvaluatedJValue.JString[F]](org),
+          ctx.expect[EvaluatedJValue.JString[F]](name),
+          ctx.expect[EvaluatedJValue.JString[F]](version),
+        ).mapN {
+          (org, name, version) => EvaluatedJValue.JObject.static(stdSrc, ctx, Map(
+            "org" -> org,
+            "name" -> name,
+            "version" -> version,
+            "type" -> EvaluatedJValue.JString(src, "java"),
+          ))
+        }
+      },
+    )),
+    "scala" -> EvaluatedJValue.JObject.static(stdSrc, initCtx, Map(
+      "Dep" -> function4(Arg.org, Arg.name, Arg.version, Arg.crossVersion(jnull)) { (org, name, version, crossVersion) =>
+        (
+          ctx.expect[EvaluatedJValue.JString[F]](org),
+          ctx.expect[EvaluatedJValue.JString[F]](name),
+          ctx.expect[EvaluatedJValue.JString[F]](version),
+          ctx.expect[EvaluatedJValue.JString[F] | EvaluatedJValue.JNull[F]](version),
+        ).mapN {
+          (org, name, version, crossVersion) => EvaluatedJValue.JObject.static(stdSrc, ctx, Map(
+            "org" -> org,
+            "name" -> name,
+            "version" -> version,
+            "type" -> EvaluatedJValue.JString(src, "scala"),
+          ) ++ (if !crossVersion.isNull then Some("crossVersion" -> crossVersion) else None))
+        }
+      },
+      "fetch" -> function2(Arg.deps, Arg.withSources(jfalse)) { (deps, withSources) =>
+        import coursier.{Classifier, Fetch, Type}
+        import coursier.cache.FileCache
+        import coursier.cache.loggers.RefreshLogger
+        import CoursierCatsInterop.given
+        (
+          ctx.decode[List[CoursierDependency]](deps),
+          ctx.expect[Boolean](withSources),
+        ).tupled.flatMap { (deps, withSources) =>
+          val logger = RefreshLogger.create(ConsoleLogger[F].outStream)
+          val cache = FileCache[F]()
+          val base =
+            Fetch[F](cache)
+              .withDependencies(deps.map(_.toDependency))
+              .withClasspathOrder(true)
+          val withOptions =
+            if withSources then
+              base
+                .addClassifiers(Classifier.sources)
+                .addArtifactTypes(Type.source)
+            else
+              base
+          withOptions
+            .io
+            .map(files => ctx.encode(src, files.map(_.toPath.normalize.toString)))
+        }
+      },
+      "fetchJvm" -> function2(
+        Arg.name,
+        Arg.index(EvaluatedJValue.JString(
+          stdSrc,
+          "https://github.com/coursier/jvm-index/raw/master/index.json",
+        ))
+      ) { (name, index) =>
+        import coursier.util.Task
+        import coursier.cache.FileCache
+        import coursier.cache.loggers.RefreshLogger
+        import coursier.jvm.{JavaHome, JvmCache}
+        import CoursierCatsInterop.given
+        for
+          name <- ctx.decode[String](name)
+          index <- ctx.decode[String](index)
+          ec <- Async[F].executionContext
+          future = Sync[F].delay {
+            val fileCache = FileCache[Task]()
+              .withLogger(RefreshLogger.create(System.out))
+            val jvmCache = JvmCache()
+              .withCache(fileCache)
+              .withIndex(index)
+            JavaHome()
+              .withCache(jvmCache)
+              .get(name)
+              .attempt
+              .future()(ec)
+          }
+          result <- Async[F].fromFuture(future).flatMap {
+            case Left(e) => ctx.error(src, s"fetchJvm failure: ${e.getMessage}")
+            case Right(f) => EvaluatedJValue.JString[F](src, f.toPath.normalize.toString).pure
+          }
+        yield
+          result
+      },
+    )),
   )
 
 object Std:
   private val stdSrc = Source.Generated(SourceFile.std)
+
+  private def writeImpl[F[_]: Sync](path: Path, contents: String): F[Path] =
+    Sync[F].delay {
+      if !Files.exists(path) || !fileMatchesContents(path.toFile, contents) then
+        Files.write(path, contents.getBytes())
+      path
+    }
+
+  private def fileMatchesContents(file: java.io.File, contents: String): Boolean =
+    val fileStream = new java.io.FileInputStream(file)
+    val contentsStream = new java.io.ByteArrayInputStream(contents.getBytes())
+    var cFile: Int = -1
+    var cContents: Int = -1
+    while
+      cFile = fileStream.read()
+      cContents = contentsStream.read()
+      (cFile == cContents) && (cFile != -1 || cContents != -1)
+    do ()
+    fileStream.close()
+    contentsStream.close()
+    cFile == cContents
+
 
   def apply[F[_]: Async: ConsoleLogger: Logger: Parallel](
     ctx: EvaluationContext[F],
@@ -314,8 +526,11 @@ object Std:
     for
       jobCache <- SQLiteJobCache[F](ctx.workspaceDir)
     yield
-      EvaluatedJValue.JObject.static(
+      val std = new Std[F](ctx, jobCache)
+      val obj = EvaluatedJValue.JObject.static(
         stdSrc,
         ctx,
-        new Std[F](jobCache).members
+        std.members
       )
+      std.self = obj
+      obj
