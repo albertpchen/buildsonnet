@@ -1,13 +1,14 @@
 package buildsonnet
 
-import cats.Parallel
-import cats.effect.{Async, Resource}
+import cats.{Parallel, Traverse}
+import cats.effect.{Async, Sync, Resource}
 import cats.syntax.all.given
 
 import buildsonnet.ast.{JParamList, Source, SourceFile}
 import buildsonnet.evaluator.{EvaluationContext, EvaluatedJValue, LazyValue, eval}
+import buildsonnet.evaluator.given Traverse[Iterable]
 import buildsonnet.logger.ConsoleLogger
-import buildsonnet.job.{JobCache, JobDescription, DoobieJobCache, JobRunner}
+import buildsonnet.job.{JobCache, JobDescription, SQLiteJobCache, JobRunner}
 
 import org.typelevel.log4cats.Logger
 
@@ -196,7 +197,7 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
 
   private val jidentity = function1(Arg.x)(_.pure)
   private val jnull = EvaluatedJValue.JNull[F](stdSrc)
-  private val jarray = EvaluatedJValue.JArray[F](stdSrc, Vector.empty)
+  private val jarray = EvaluatedJValue.JArray[F](stdSrc, IArray.empty)
   private val jtrue = EvaluatedJValue.JBoolean[F](stdSrc, true)
   private val jfalse = EvaluatedJValue.JBoolean[F](stdSrc, false)
 
@@ -244,9 +245,9 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
         val keys = o.members
           .keys
           .map(EvaluatedJValue.JString[F](src, _))
-          .toVector
+          .toArray
           .sortBy(_.string)
-        EvaluatedJValue.JArray(src, keys)
+        EvaluatedJValue.JArray(src, IArray.unsafeFromArray(keys))
       }
     },
     "flatMap" -> function2(Arg.func, Arg.arr) { (func, arr) =>
@@ -254,12 +255,20 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
         ctx.expect[EvaluatedJValue.JFunction[F]](func),
         ctx.expect[EvaluatedJValue.JArray[F]](arr),
       ).tupled.flatMap { (func, arr) =>
-        arr.elements.foldLeft(Vector.empty[Vector[EvaluatedJValue[F]]].pure) { (acc, e) =>
-          val params = EvaluatedJValue.JFunctionParameters(src, ctx, Seq(e), Seq.empty)
-          func.fn(params).flatMap { mapped =>
-            (acc, ctx.expect[EvaluatedJValue.JArray[F]](mapped)).mapN((acc, e) => e.elements +: acc)
+        for
+          res <- Sync[F].delay(Array.ofDim[IArray[EvaluatedJValue[F]]](arr.elements.size))
+          _ <- ((0 until arr.elements.size): Iterable[Int]).parTraverse { i =>
+            val e = arr.elements(i)
+            val params = EvaluatedJValue.JFunctionParameters(src, ctx, Seq(e), Seq.empty)
+            for
+              mapped <- func.fn(params)
+              arr <- ctx.expect[EvaluatedJValue.JArray[F]](mapped)
+              _ <- Sync[F].delay(res(i) = arr.elements)
+            yield
+              ()
           }
-        }.map(a => EvaluatedJValue.JArray(src, a.reverse.flatten))
+        yield
+          EvaluatedJValue.JArray(src, IArray.unsafeFromArray(res.flatten))
       }
     },
     "uniq" -> function2(Arg.arr, Arg.keyF(jidentity)) { (arr, keyF) =>
@@ -303,7 +312,7 @@ object Std:
     ctx: EvaluationContext[F],
   ): Resource[F, EvaluatedJValue.JObject[F]] =
     for
-      jobCache <- DoobieJobCache[F](ctx.workspaceDir)
+      jobCache <- SQLiteJobCache[F](ctx.workspaceDir)
     yield
       EvaluatedJValue.JObject.static(
         stdSrc,

@@ -35,7 +35,7 @@ object EvaluatedJValue:
   case class JNull[F[_]](src: Source) extends EvaluatedJValue[F]
   case class JString[F[_]](src: Source, string: String) extends EvaluatedJValue[F]
   case class JNum[F[_]](src: Source, double: Double) extends EvaluatedJValue[F]
-  case class JArray[F[_]](src: Source, elements: Vector[EvaluatedJValue[F]]) extends EvaluatedJValue[F]
+  case class JArray[F[_]](src: Source, elements: IArray[EvaluatedJValue[F]]) extends EvaluatedJValue[F]
 
   case class JFunctionParameters[F[_]](
     src: Source,

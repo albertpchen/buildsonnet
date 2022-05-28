@@ -41,7 +41,7 @@ object JEncoder:
 
   given [F[_], L[X] <: Iterable[X], T: [T] =>> JEncoder[F, T]]: JEncoder[F, L[T]] with
     def encode(ctx: EvaluationContext[F], src: Source, t: L[T]) =
-      EvaluatedJValue.JArray[F](src, t.map(JEncoder[F, T].encode(ctx, src, _)).toVector)
+      EvaluatedJValue.JArray[F](src, IArray.unsafeFromArray(t.map(JEncoder[F, T].encode(ctx, src, _)).toArray))
 
   given [F[_]: Sync, T: [T] =>> JEncoder[F, T]]: JEncoder[F, Map[String, T]] with
     def encode(ctx: EvaluationContext[F], src: Source, t: Map[String, T]) =

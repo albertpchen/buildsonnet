@@ -1,12 +1,58 @@
 package buildsonnet.evaluator
 
-import cats.{Applicative, Monad, Parallel}
+import cats.{Applicative, Eval, Monad, Monoid, Foldable, Parallel, Traverse}
+import cats.data.Chain
 import cats.effect.{Async, Concurrent, Sync, Ref}
 import cats.syntax.all.given
 import cats.instances.all.given
 
 import buildsonnet.ast.*
 import buildsonnet.logger.ConsoleLogger
+import cats.syntax.ParallelTraversableOps1
+
+given Traverse[Iterable] with
+  override def foldLeft[A, B](fa: Iterable[A], b: B)(f: (B, A) => B): B = fa.foldLeft(b)(f)
+
+  override def foldRight[A, B](fa: Iterable[A], lb: Eval[B])(f: (A, Eval[B]) => Eval[B]): Eval[B] =
+    Foldable.iterateRight(fa, lb)(f)
+
+  override def foldMap[A, B](fa: Iterable[A])(f: A => B)(implicit B: Monoid[B]): B =
+    B.combineAll(fa.iterator.map(f))
+
+  override def reduceLeftOption[A](fa: Iterable[A])(f: (A, A) => A): Option[A] = fa.reduceLeftOption(f)
+
+  override def collectFirst[A, B](fa: Iterable[A])(pf: PartialFunction[A, B]): Option[B] = fa.collectFirst(pf)
+
+  override def fold[A](fa: Iterable[A])(implicit A: Monoid[A]): A = fa.fold(A.empty)(A.combine)
+
+  override def find[A](fa: Iterable[A])(f: A => Boolean): Option[A] = fa.find(f)
+
+  override def toIterable[A](fa: Iterable[A]): Iterable[A] = fa
+
+  override def exists[A](fa: Iterable[A])(p: A => Boolean): Boolean = fa.exists(p)
+
+  override def forall[A](fa: Iterable[A])(p: A => Boolean): Boolean = fa.forall(p)
+
+  override def toList[A](fa: Iterable[A]): List[A] = fa.toList
+
+  override def isEmpty[A](fa: Iterable[A]): Boolean = fa.isEmpty
+
+  override def nonEmpty[A](fa: Iterable[A]): Boolean = fa.nonEmpty
+
+  import cats.kernel.instances.StaticMethods.wrapMutableIndexedSeq
+  
+  private def toImIndexedSeq[A](fa: Iterable[A]): IndexedSeq[A] = fa match {
+    case iseq: IndexedSeq[A] => iseq
+    case _ =>
+      val as = collection.mutable.ArrayBuffer[A]()
+      as ++= fa
+      wrapMutableIndexedSeq(as)
+  }
+
+  // Adapted from List and Vector instances.
+  override def traverse[G[_], A, B](fa: Iterable[A])(f: A => G[B])(implicit G: Applicative[G]): G[Iterable[B]] =
+    if (fa.isEmpty) G.pure(Iterable.empty)
+    else G.map(Chain.traverseViaChain(toImIndexedSeq(fa))(f))(_.toVector)
 
 
 def eval[F[_]: Async: ConsoleLogger: Parallel](
@@ -25,7 +71,15 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
   case JValue.JString(src, str) => EvaluatedJValue.JString(src, str).pure
   case JValue.JNum(src, str) => EvaluatedJValue.JNum(src, str.toDouble).pure
   case JValue.JArray(src, elements) =>
-    elements.parTraverse(eval(ctx)).map(EvaluatedJValue.JArray(src, _))
+    for
+      res <- Sync[F].delay(Array.ofDim[EvaluatedJValue[F]](elements.size))
+      _ <- ((0 until elements.size): Iterable[Int]).parTraverse { i =>
+        eval(ctx)(elements(i)).flatMap { e =>
+          Sync[F].delay(res(i) = e)
+        }
+      }
+    yield
+      EvaluatedJValue.JArray(src, IArray.unsafeFromArray(res))
   case JValue.JLocal(_, name, value, result) =>
     ctx.bindCode(name, value).flatMap(eval(_)(result))
   case JValue.JId(src, name) =>
@@ -107,7 +161,7 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
           key match
           case _: EvaluatedJValue.JNull[F] => None
           case key: EvaluatedJValue.JString[F] => Some((key.string, value, elem))
-      }.sequence
+      }.toList.sequence
     yield
       pairs.flatten
 
@@ -169,13 +223,13 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
             size = arr.elements.size
             _ <- if size <= idx then ctx.error(src, s"index out of bounds $idx") else ().pure
             result <- if idx >= endIdx then
-              EvaluatedJValue.JArray(src, Vector.empty).pure
+              EvaluatedJValue.JArray[F](src, IArray.empty).pure
             else
               val elements = for
                 i <- idx until endIdx by stride
                 if i < size
               yield arr.elements(i)
-              EvaluatedJValue.JArray(src, elements.toVector).pure
+              EvaluatedJValue.JArray(src, IArray.unsafeFromArray(elements.toArray)).pure
           yield result
         }.flatten
     }
@@ -230,21 +284,38 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
   case JValue.JArrayComprehension(src, forVar, forExpr, inExpr, condOpt) =>
     if condOpt.isDefined then
       val cond = condOpt.get
-      ctx.expect[EvaluatedJValue.JArray[F]](inExpr)
-        .flatMap { array =>
-          array.elements.parTraverse { e =>
+      ctx.expect[EvaluatedJValue.JArray[F]](inExpr).flatMap { array =>
+        for
+          res <- Sync[F].delay(Array.ofDim[Option[EvaluatedJValue[F]]](array.elements.size))
+          _ <- ((0 until array.elements.size): Iterable[Int]).parTraverse { i =>
+            val e = array.elements(i)
             val forCtx = ctx.bindStrict(forVar, e)
             forCtx.expect[Boolean](cond).flatMap { cond =>
-              if cond then None.pure else eval(forCtx)(forExpr).map(Some(_))
+              if cond then Sync[F].delay {
+                res(i) = None
+              } else eval(forCtx)(forExpr).flatMap { e =>
+                Sync[F].delay {
+                  res(i) = Some(e)
+                }
+              }
             }
           }
-        }
-        .map(elements => EvaluatedJValue.JArray(src, elements.flatten))
+        yield
+          EvaluatedJValue.JArray(src, IArray.unsafeFromArray(res.flatten))
+      }
     else
       ctx.expect[EvaluatedJValue.JArray[F]](inExpr).flatMap { array =>
-        array.elements.parTraverse { e =>
-          eval(ctx.bindStrict(forVar, e))(forExpr)
-        }.map(EvaluatedJValue.JArray(src, _))
+        for
+          res <- Sync[F].delay(Array.ofDim[EvaluatedJValue[F]](array.elements.size))
+          _ <- ((0 until array.elements.size): Iterable[Int]).parTraverse { i =>
+            val e = array.elements(i)
+            val forCtx = ctx.bindStrict(forVar, e)
+            eval(forCtx)(forExpr).flatMap { e =>
+              Sync[F].delay(res(i) = e)
+            }
+          }
+        yield
+          EvaluatedJValue.JArray(src, IArray.unsafeFromArray(res))
       }
   case JValue.JImport(src, file) => ctx.`import`(src, file)
   case JValue.JImportStr(src, file) => ctx.importStr(src, file).widen

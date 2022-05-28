@@ -216,7 +216,7 @@ final class Parser(file: SourceFile):
     val list =
       P.oneOf0(List(
         listComp.backtrack,
-        commaList(exprDefer).map(elements => JArray(_, elements.toVector)),
+        commaList(exprDefer).map(elements => JArray(_, IArray.unsafeFromArray(elements.toArray))),
       ))
         .surroundedBy(__)
         .with1

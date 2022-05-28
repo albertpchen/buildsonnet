@@ -115,7 +115,7 @@ object Buildsonnet extends IOApp:
                   val params = EvaluatedJValue.JFunctionParameters[IO](
                     fn.src,
                     ctx,
-                    Seq(EvaluatedJValue.JArray(Source.empty, buildArgs.map(EvaluatedJValue.JString(Source.empty, _)).toVector)),
+                    Seq(EvaluatedJValue.JArray(Source.empty, IArray.unsafeFromArray(buildArgs.map(EvaluatedJValue.JString(Source.empty, _)).toArray))),
                     Seq.empty,
                   )
                   fn.fn(params)

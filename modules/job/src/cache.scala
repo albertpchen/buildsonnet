@@ -17,7 +17,7 @@ import java.security.MessageDigest
 
 import org.typelevel.log4cats.Logger
 
-object DoobieJobCache:
+object SQLiteJobCache:
   private case class JobRow(
     job_id: Int,
     cmdline: Array[Byte],

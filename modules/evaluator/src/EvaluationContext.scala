@@ -187,8 +187,8 @@ object EvaluationContext:
           Sync[F].defer {
             builder += '['
             singleLinePrintImp(builder, src, value.head) *>
-            value.tail.traverse { e =>
-              Sync[F].delay(builder ++= ", ") *> singleLinePrintImp(builder, src, e)
+            value.tail.foldLeft(().pure) { (prev, e) =>
+              prev *> Sync[F].delay(builder ++= ", ") *> singleLinePrintImp(builder, src, e)
             } *>
             Sync[F].delay(builder += ']')
           }

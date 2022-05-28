@@ -297,7 +297,7 @@ enum JValue extends HasSource:
   case JOuter(src: Source)
   case JString(src: Source, str: String)
   case JNum(src: Source, str: String)
-  case JArray(src: Source, elements: Vector[JValue])
+  case JArray(src: Source, elements: IArray[JValue])
   case JObject(src: Source, members: List[JObjMember])
   case JObjectComprehension(
     src: Source,
@@ -378,8 +378,9 @@ enum JValue extends HasSource:
 
 object JValue:
   import scala.quoted.*
-  def ofVector[T](xs: Seq[Expr[T]])(using Type[T])(using Quotes): Expr[Vector[T]] =
-    if (xs.isEmpty) '{ Vector.empty[T] } else '{ Vector(${Varargs(xs)}: _*) }
+  import scala.reflect.ClassTag
+  def ofIArray[T](xs: Seq[Expr[T]])(using Type[T])(using Quotes): Expr[IArray[T]] =
+    if (xs.isEmpty) '{ IArray.empty[T](using scala.compiletime.summonInline[ClassTag[T]]) } else '{ IArray(${Varargs(xs)}: _*)(using scala.compiletime.summonInline[ClassTag[T]]) }
 
   given ToExpr[JValue] with
     def apply(jvalue: JValue)(using Quotes): Expr[JValue] =
@@ -392,7 +393,7 @@ object JValue:
       case JOuter(src) => '{ JOuter(${Expr(src)}) }
       case JString(src, str) => '{ JString(${Expr(src)}, ${Expr(str)}) }
       case JNum(src, str) => '{ JNum(${Expr(src)}, ${Expr(str)}) }
-      case JArray(src, elements) => '{ JArray(${Expr(src)}, ${ofVector(elements.map(Expr(_)))}) }
+      case JArray(src, elements) => '{ JArray(${Expr(src)}, ${ofIArray(elements.map(Expr(_)))}) }
       case JObject(src, members) => '{ JObject(${Expr(src)}, ${Expr.ofList(members.map(Expr(_)))}) }
       case JObjectComprehension(src, locals, key, value, forVar, inExpr, cond) => '{
         JObjectComprehension(
