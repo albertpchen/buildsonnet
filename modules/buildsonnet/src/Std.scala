@@ -535,23 +535,15 @@ object Std:
 
   private def lazyResource[F[_]: Async, T](resource: Resource[F, T]): Resource[F, F[T]] =
     for
-      hasValue <- Resource.eval(Ref[F].of(false))
-      deferred <- Resource.eval(Deferred[F, (T, F[Unit])])
-      _ <- Resource.make(().pure) { _ =>
-        for
-          hasValue <- hasValue.get
-          _ <- if hasValue then deferred.get.map(_._2) else ().pure
-        yield
-          ()
+      deferred <- Resource.eval(Deferred[F, F[Unit]])
+      value <- Resource.eval {
+        resource.allocated.flatMap { (value, finalize) =>
+          deferred.complete(finalize).as(value)
+        }.memoize
       }
+      _ <- Resource.onFinalize(deferred.tryGet.flatMap(_.fold(().pure)(identity)))
     yield
-      for
-        hasValue <- hasValue.getAndSet(true)
-        value <-
-          if hasValue then deferred.get
-          else resource.allocated.flatMap(value => deferred.complete(value).as(value))
-      yield
-        value._1
+      value
 
   def apply[F[_]: Async: ConsoleLogger: Logger: Parallel](
     ctx: EvaluationContext[F],
