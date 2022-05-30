@@ -401,14 +401,14 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
         }
       }
     },
-    "java" -> EvaluatedJValue.JObject.static(stdSrc, initCtx, Map(
+    "java" -> EvaluatedJValue.JObject.static(stdSrc, Map(
       "Dep" -> function3(Arg.org, Arg.name, Arg.version) { (org, name, version) =>
         (
           ctx.expect[EvaluatedJValue.JString[F]](org),
           ctx.expect[EvaluatedJValue.JString[F]](name),
           ctx.expect[EvaluatedJValue.JString[F]](version),
         ).mapN {
-          (org, name, version) => EvaluatedJValue.JObject.static(stdSrc, ctx, Map(
+          (org, name, version) => EvaluatedJValue.JObject.static(stdSrc, Map(
             "org" -> org,
             "name" -> name,
             "version" -> version,
@@ -452,7 +452,7 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
           result
       },
     )),
-    "scala" -> EvaluatedJValue.JObject.static(stdSrc, initCtx, Map(
+    "scala" -> EvaluatedJValue.JObject.static(stdSrc, Map(
       "Dep" -> function4(Arg.org, Arg.name, Arg.version, Arg.crossVersion(jnull)) { (org, name, version, crossVersion) =>
         (
           ctx.expect[EvaluatedJValue.JString[F]](org),
@@ -460,7 +460,7 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
           ctx.expect[EvaluatedJValue.JString[F]](version),
           ctx.expect[EvaluatedJValue.JString[F] | EvaluatedJValue.JNull[F]](version),
         ).mapN {
-          (org, name, version, crossVersion) => EvaluatedJValue.JObject.static(stdSrc, ctx, Map(
+          (org, name, version, crossVersion) => EvaluatedJValue.JObject.static(stdSrc, Map(
             "org" -> org,
             "name" -> name,
             "version" -> version,
@@ -551,7 +551,7 @@ object Std:
     for
       jobCache <- SQLiteJobCache[F](ctx.workspaceDir)
       bloopServerEither <- lazyResource(SocketConnection.connectToLauncher[F](
-        bloopVersion = "1.4.9",
+        bloopVersion = "1.5.0",
         bloopPort = 8213,
         logStream = System.out,
       ).flatMap(BloopServer(ctx.workspaceDir, _, maxConcurrentServiceWorkers = 1)))
@@ -563,7 +563,6 @@ object Std:
       val std = new Std[F](ctx, bloopServer, jobCache)
       val obj = EvaluatedJValue.JObject.static(
         stdSrc,
-        ctx,
         std.members
       )
       std.self = obj

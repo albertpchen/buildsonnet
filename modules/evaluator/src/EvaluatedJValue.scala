@@ -1,6 +1,7 @@
 package buildsonnet.evaluator
 
 import buildsonnet.ast.{HasSource, Source}
+import cats.Applicative
 import cats.effect.Sync
 import cats.syntax.all.given
 import scala.collection.mutable
@@ -54,12 +55,14 @@ object EvaluatedJValue:
   sealed trait JObject[F[_]] extends EvaluatedJValue[F]:
     def mixin(src: Source, child: JObject[F]): F[JObject[F]]
 
-    def lookup(src: Source, field: String): F[LazyObjectValue[F]]
-
-    def lookupOpt(src: Source, field: String): Option[LazyObjectValue[F]]
+    def lookupOpt(field: String): Option[LazyObjectValue[F]]
 
     def members: collection.Map[String, LazyObjectValue[F]]
 
+  final class JObjectImplParams[F[_]](
+    val `super`: Option[JObject[F]],
+    val `self`: JObject[F],
+  )
   final class JObjectImpl[F[_]](
     val members: F[collection.Map[String, LazyObjectValue[F]]],
     val asserts: F[Unit],
@@ -68,32 +71,28 @@ object EvaluatedJValue:
   object JObject:
     private class JObjectLeaf[F[_]: Sync](
       val src: Source,
-      var ctx: EvaluationContext[F],
+      var `super`: Option[JObject[F]],
+      var `self`: JObject[F],
       var members: collection.Map[String, LazyObjectValue[F]],
-      implFn: EvaluationContext[F] => JObjectImpl[F]
+      implFn: JObjectImplParams[F] => JObjectImpl[F],
     ) extends JObject[F]:
       final def mixin(src: Source, child: JObject[F]): F[JObject[F]] =
         JObject.mixin(src, this, child).widen
 
-      def withContext(newCtx: EvaluationContext[F]): F[(JObjectLeaf[F], JObjectImpl[F])] =
+      def withSelfSuper(newSuper: Option[JObject[F]], newSelf: JObject[F]): F[(JObjectLeaf[F], JObjectImpl[F])] =
         Sync[F].defer {
-          val obj = JObjectLeaf[F](src, null, null, implFn)
-          obj.ctx = newCtx.withSelf(obj)
-          val impl = implFn(obj.ctx)
+          val obj = JObjectLeaf[F](src, newSuper, newSelf, null, implFn)
+          val impl = implFn(JObjectImplParams(newSuper, newSelf))
           impl.members.map { members =>
             obj.members = members
             (obj, impl)
           }
         }
 
-      def lookup(src: Source, field: String): F[LazyObjectValue[F]] =
-         members
-          .get(field)
-          .fold(ctx.error(src, s"object missing field $field")) { value =>
-            value.pure
-          }
+      def withSelf(newSelf: JObject[F]): F[(JObjectLeaf[F], JObjectImpl[F])] =
+        withSelfSuper(`super`, newSelf)
 
-      def lookupOpt(src: Source, field: String): Option[LazyObjectValue[F]] =
+      def lookupOpt(field: String): Option[LazyObjectValue[F]] =
         members.get(field)
 
 
@@ -104,19 +103,13 @@ object EvaluatedJValue:
       final def mixin(src: Source, child: JObject[F]): F[JObject[F]] =
         JObject.mixin(src, this, child).widen
 
-      def lookupOpt(src: Source, field: String): Option[LazyObjectValue[F]] =
+      def lookupOpt(field: String): Option[LazyObjectValue[F]] =
         var result = Option.empty[LazyObjectValue[F]]
         var i = leaves.size - 1
         while result.isEmpty && i >= 0 do
-          result = leaves(i).lookupOpt(src, field)
+          result = leaves(i).lookupOpt(field)
           i -= 1
         return result
-
-      def lookup(src: Source, field: String): F[LazyObjectValue[F]] =
-        lookupOpt(src, field)
-          .fold(leaves.last.ctx.error(src, s"object missing field $field")) { value =>
-            value.pure
-          }
 
       lazy val members: collection.Map[String, LazyObjectValue[F]] =
         leaves.foldLeft(mutable.HashMap.empty[String, LazyObjectValue[F]]) { (map, leaf) =>
@@ -131,13 +124,13 @@ object EvaluatedJValue:
         case (parent: JObjectChain[F], child: JObjectChain[F]) => (parent.leaves(0), parent.leaves.drop(1) ++ child.leaves)
       for
         obj <- Sync[F].delay(new JObjectChain[F](src, Array.fill(children.size + 1)(null)))
-        parentPair <- parent.withContext(parent.ctx.withSelf(obj))
+        parentPair <- parent.withSelf(obj)
         (parent, parentImpl) = parentPair
         childAsserts <- Range(0, children.size).foldLeft(Sync[F].delay { obj.leaves(0) = parent; ().pure }) { (prevAsserts, i) =>
           val child = children(i)
           for
             prevAsserts <- prevAsserts
-            childPair <- child.withContext(child.ctx.withSuper(obj.leaves(i)))
+            childPair <- child.withSelfSuper(Some(obj.leaves(i)), obj)
           yield
             val (child, childImpl) = childPair
             obj.leaves(i + 1) = child
@@ -149,14 +142,13 @@ object EvaluatedJValue:
 
     def apply[F[_]: Sync](
       src: Source,
-      ctx: EvaluationContext[F],
-      implFn: EvaluationContext[F] => JObjectImpl[F],
+      implFn: JObjectImplParams[F] => JObjectImpl[F],
     ): F[JObject[F]] =
       for
         obj <- Sync[F].defer {
-          val obj = JObjectLeaf[F](src, null, null, implFn)
-          obj.ctx = ctx.withSelf(obj)
-          val impl = implFn(obj.ctx)
+          val obj = JObjectLeaf[F](src, None, null, null, implFn)
+          obj.self = obj
+          val impl = implFn(JObjectImplParams(None, obj))
           impl.members.flatMap { members =>
             obj.members = members
             impl.asserts.as(obj)
@@ -167,7 +159,6 @@ object EvaluatedJValue:
 
     def static[F[_]: Sync](
       src: Source,
-      ctx: EvaluationContext[F],
       members: Map[String, EvaluatedJValue[F]],
     ): JObject[F] =
       val lazyMembers = members.map { (name, value) =>
@@ -177,7 +168,7 @@ object EvaluatedJValue:
         lazyMembers.pure,
         ().pure,
       )
-      val obj = JObjectLeaf[F](src, null, null, _ => impl)
-      obj.ctx = ctx.withSelf(obj)
+      val obj = JObjectLeaf[F](src, None, null, null, _ => impl)
+      obj.self = obj
       obj.members = lazyMembers
       obj

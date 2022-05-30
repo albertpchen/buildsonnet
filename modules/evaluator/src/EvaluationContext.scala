@@ -20,7 +20,7 @@ sealed trait EvaluationContext[F[_]]:
   def `super`: Option[EvaluatedJValue.JObject[F]]
 
   def withSelf(obj: EvaluatedJValue.JObject[F]): EvaluationContext[F]
-  def withSuper(obj: EvaluatedJValue.JObject[F]): EvaluationContext[F]
+  def withSuper(obj: Option[EvaluatedJValue.JObject[F]]): EvaluationContext[F]
 
   def `import`(src: Source, file: String): F[EvaluatedJValue[F]]
   def importStr(src: Source, file: String): F[EvaluatedJValue.JString[F]]
@@ -52,8 +52,8 @@ object EvaluationContext:
     def withSelf(obj: EvaluatedJValue.JObject[F]): EvaluationContext[F] =
       this.copy(self = Some(obj))
 
-    def withSuper(obj: EvaluatedJValue.JObject[F]): EvaluationContext[F] =
-      this.copy(`super` = Some(obj))
+    def withSuper(obj: Option[EvaluatedJValue.JObject[F]]): EvaluationContext[F] =
+      this.copy(`super` = obj)
 
     def `import`(src: Source, file: String): F[EvaluatedJValue[F]] = ???
     def importStr(src: Source, file: String): F[EvaluatedJValue.JString[F]] = ???

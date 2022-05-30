@@ -91,11 +91,8 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
       loc <- eval(ctx)(loc)
       obj <- ctx.expect[EvaluatedJValue.JObject[F]](loc)
       value <- obj
-        .members
-        .get(field)
-        .fold(ctx.error(src, s"object does not have field $field")) { value =>
-          value.value
-        }
+        .lookupOpt(field)
+        .fold(ctx.error(src, s"object does not have field $field"))(_.value)
     yield
       value
   case JValue.JObject(src, rawMembers) =>
@@ -121,7 +118,9 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
                 rawValue
             Some((key, isHidden, value))
     }.parSequence
-    def membersFn(ctx: EvaluationContext[F]) =
+    val outerCtx = ctx
+    def membersFn(params: EvaluatedJValue.JObjectImplParams[F]) =
+      val ctx = outerCtx.withSelf(params.self).withSuper(params.`super`)
       val asserts = rawMembers.collect {
         case JObjMember.JAssert(src, rawCond, rawMsg) =>
           val cond = eval(ctx)(rawCond).flatMap(ctx.expect[Boolean](_))
@@ -147,7 +146,7 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
           collection.Map.from(members)
       EvaluatedJValue.JObjectImpl[F](impl, asserts.void)
 
-    EvaluatedJValue.JObject(jvalue.src, ctx, membersFn).widen
+    EvaluatedJValue.JObject(jvalue.src, membersFn).widen
 
   case JValue.JObjectComprehension(src, locals, rawKey, value, forVar, inExpr, condOpt) =>
     val pairs = for
@@ -165,7 +164,9 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
     yield
       pairs.flatten
 
-    def membersFn(ctx: EvaluationContext[F]) =
+    val outerCtx = ctx
+    def membersFn(params: EvaluatedJValue.JObjectImplParams[F]) =
+      val ctx = outerCtx.withSelf(params.self).withSuper(params.`super`)
       val impl = for
         ctx <- ctx.bindCode(locals.map(local => local.name -> local.value))
         members <- pairs.flatMap(_.map { (key, value, forValue) =>
@@ -175,13 +176,15 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
       yield
         collection.Map.from(members)
       EvaluatedJValue.JObjectImpl[F](impl, ().pure)
-    EvaluatedJValue.JObject(jvalue.src, ctx, membersFn).widen
+    EvaluatedJValue.JObject(jvalue.src, membersFn).widen
 
   case JValue.JIndex(src, loc, rawIndex) =>
     ctx.expect[EvaluatedJValue.JArray[F] | EvaluatedJValue.JObject[F]](loc).flatMap {
       case obj: EvaluatedJValue.JObject[F] =>
         ctx.expect[String](rawIndex).flatMap { field =>
-          obj.lookup(src, field).flatMap(_.value)
+          obj
+            .lookupOpt(field)
+            .fold(ctx.error(src, s"object missing field $field"))(_.value)
         }
       case arr: EvaluatedJValue.JArray[F] =>
         ctx.expect[Double](rawIndex).flatMap { num =>

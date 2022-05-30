@@ -48,7 +48,7 @@ object JEncoder:
       val members = t.map { (k, v) =>
         k -> JEncoder[F, T].encode(ctx, src, v)
       }
-      EvaluatedJValue.JObject.static(src, ctx, members)
+      EvaluatedJValue.JObject.static(src, members)
 
   inline given [F[_]: Sync, T: Mirror.ProductOf]: JEncoder[F, T] = derived[F, T]
 
@@ -73,7 +73,6 @@ object JEncoder:
         }
         EvaluatedJValue.JObject.static[F](
           src,
-          ctx,
           getLabels[m.MirroredElemLabels]
             .zip(values)
             .toMap

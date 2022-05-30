@@ -118,7 +118,7 @@ object JDecoder:
         val decoder = new JObjectDecoder[F, (Option[head] *: tail)]:
           def decode(ctx: EvaluationContext[F], path: JDecoderPath, obj: EvaluatedJValue.JObject[F]) =
             val field = constValue[name].toString
-            val head = obj.lookupOpt(obj.src, field).fold(None.pure) { lvalue =>
+            val head = obj.lookupOpt(field).fold(None.pure) { lvalue =>
               for
                 value <- lvalue.value
                 decoded <- summonInline[JDecoder[F, head]].decode(ctx, path.withField(field), value)
@@ -133,8 +133,9 @@ object JDecoder:
           def decode(ctx: EvaluationContext[F], path: JDecoderPath, obj: EvaluatedJValue.JObject[F]) =
             val field = constValue[name].toString
             for
-              lvalue <- obj.lookup(obj.src, field)
-              value <- lvalue.value
+              value <- obj
+                .lookupOpt(field)
+                .fold(ctx.error(obj.src, s"object does not have field $field"))(_.value)
               head <- summonInline[JDecoder[F, head]].decode(ctx, path.withField(field), value)
               tail <- decodeProduct[F, tail].decode(ctx, path, obj)
             yield
