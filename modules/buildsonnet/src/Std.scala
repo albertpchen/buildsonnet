@@ -1,8 +1,9 @@
 package buildsonnet
 
 import cats.{Parallel, Traverse}
-import cats.effect.{Async, Sync, Resource}
+import cats.effect.{Async, Deferred, Sync, Ref, Resource}
 import cats.effect.std.Dispatcher
+import cats.effect.syntax.all.given
 import cats.syntax.all.given
 import cats.instances.all.given
 
@@ -11,6 +12,7 @@ import buildsonnet.evaluator.{EvaluationContext, EvaluatedJValue, LazyValue, eva
 import buildsonnet.evaluator.given Traverse[Iterable]
 import buildsonnet.logger.ConsoleLogger
 import buildsonnet.job.{JobCache, JobDescription, SQLiteJobCache, JobRunner}
+import buildsonnet.bsp.{SocketConnection, BloopServer}
 
 import java.nio.file.{Files, Path}
 
@@ -20,6 +22,7 @@ import scala.language.dynamics
 
 private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
   initCtx: EvaluationContext[F],
+  bloopServer: F[BloopServer[F]],
   jobCache: JobCache[F],
 ):
   import Std.*
@@ -413,50 +416,6 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
           ))
         }
       },
-    )),
-    "scala" -> EvaluatedJValue.JObject.static(stdSrc, initCtx, Map(
-      "Dep" -> function4(Arg.org, Arg.name, Arg.version, Arg.crossVersion(jnull)) { (org, name, version, crossVersion) =>
-        (
-          ctx.expect[EvaluatedJValue.JString[F]](org),
-          ctx.expect[EvaluatedJValue.JString[F]](name),
-          ctx.expect[EvaluatedJValue.JString[F]](version),
-          ctx.expect[EvaluatedJValue.JString[F] | EvaluatedJValue.JNull[F]](version),
-        ).mapN {
-          (org, name, version, crossVersion) => EvaluatedJValue.JObject.static(stdSrc, ctx, Map(
-            "org" -> org,
-            "name" -> name,
-            "version" -> version,
-            "type" -> EvaluatedJValue.JString(src, "scala"),
-          ) ++ (if !crossVersion.isNull then Some("crossVersion" -> crossVersion) else None))
-        }
-      },
-      "fetch" -> function2(Arg.deps, Arg.withSources(jfalse)) { (deps, withSources) =>
-        import coursier.{Classifier, Fetch, Type}
-        import coursier.cache.FileCache
-        import coursier.cache.loggers.RefreshLogger
-        import CoursierCatsInterop.given
-        (
-          ctx.decode[List[CoursierDependency]](deps),
-          ctx.expect[Boolean](withSources),
-        ).tupled.flatMap { (deps, withSources) =>
-          val logger = RefreshLogger.create(ConsoleLogger[F].outStream)
-          val cache = FileCache[F]()
-          val base =
-            Fetch[F](cache)
-              .withDependencies(deps.map(_.toDependency))
-              .withClasspathOrder(true)
-          val withOptions =
-            if withSources then
-              base
-                .addClassifiers(Classifier.sources)
-                .addArtifactTypes(Type.source)
-            else
-              base
-          withOptions
-            .io
-            .map(files => ctx.encode(src, files.map(_.toPath.normalize.toString)))
-        }
-      },
       "fetchJvm" -> function2(
         Arg.name,
         Arg.index(EvaluatedJValue.JString(
@@ -493,6 +452,61 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
           result
       },
     )),
+    "scala" -> EvaluatedJValue.JObject.static(stdSrc, initCtx, Map(
+      "Dep" -> function4(Arg.org, Arg.name, Arg.version, Arg.crossVersion(jnull)) { (org, name, version, crossVersion) =>
+        (
+          ctx.expect[EvaluatedJValue.JString[F]](org),
+          ctx.expect[EvaluatedJValue.JString[F]](name),
+          ctx.expect[EvaluatedJValue.JString[F]](version),
+          ctx.expect[EvaluatedJValue.JString[F] | EvaluatedJValue.JNull[F]](version),
+        ).mapN {
+          (org, name, version, crossVersion) => EvaluatedJValue.JObject.static(stdSrc, ctx, Map(
+            "org" -> org,
+            "name" -> name,
+            "version" -> version,
+            "type" -> EvaluatedJValue.JString(src, "scala"),
+          ) ++ (if !crossVersion.isNull then Some("crossVersion" -> crossVersion) else None))
+        }
+      },
+      "fetchDep" -> function2(Arg.deps, Arg.withSources(jfalse)) { (deps, withSources) =>
+        import coursier.{Classifier, Fetch, Type}
+        import coursier.cache.FileCache
+        import coursier.cache.loggers.RefreshLogger
+        import CoursierCatsInterop.given
+        (
+          ctx.decode[List[CoursierDependency]](deps),
+          ctx.expect[Boolean](withSources),
+        ).tupled.flatMap { (deps, withSources) =>
+          val logger = RefreshLogger.create(ConsoleLogger[F].outStream)
+          val cache = FileCache[F]()
+          val base =
+            Fetch[F](cache)
+              .withDependencies(deps.map(_.toDependency))
+              .withClasspathOrder(true)
+          val withOptions =
+            if withSources then
+              base
+                .addClassifiers(Classifier.sources)
+                .addArtifactTypes(Type.source)
+            else
+              base
+          withOptions
+            .io
+            .map(files => ctx.encode(src, files.map(_.toPath.normalize.toString)))
+        }
+      },
+      "compile" -> function1(Arg.project) { (project) =>
+        for
+          project <- ctx.expect[String](project)
+          bloopServer <- bloopServer
+          result <- bloopServer.compile(project).flatMap {
+            case Right(_) => EvaluatedJValue.JNull[F](src).pure
+            case Left(msg) => ctx.error(src, msg)
+          }
+        yield
+          result
+      },
+    )),
   )
 
 object Std:
@@ -519,14 +533,42 @@ object Std:
     contentsStream.close()
     cFile == cContents
 
+  private def lazyResource[F[_]: Async, T](resource: Resource[F, T]): Resource[F, F[T]] =
+    for
+      hasValue <- Resource.eval(Ref[F].of(false))
+      deferred <- Resource.eval(Deferred[F, (T, F[Unit])])
+      _ <- Resource.make(().pure) { _ =>
+        for
+          hasValue <- hasValue.get
+          _ <- if hasValue then deferred.get.map(_._2) else ().pure
+        yield
+          ()
+      }
+    yield
+      for
+        hasValue <- hasValue.getAndSet(true)
+        value <-
+          if hasValue then deferred.get
+          else resource.allocated.flatMap(value => deferred.complete(value).as(value))
+      yield
+        value._1
 
   def apply[F[_]: Async: ConsoleLogger: Logger: Parallel](
     ctx: EvaluationContext[F],
   ): Resource[F, EvaluatedJValue.JObject[F]] =
     for
       jobCache <- SQLiteJobCache[F](ctx.workspaceDir)
+      bloopServerEither <- lazyResource(SocketConnection.connectToLauncher[F](
+        bloopVersion = "1.4.9",
+        bloopPort = 8213,
+        logStream = System.out,
+      ).flatMap(BloopServer(ctx.workspaceDir, _, maxConcurrentServiceWorkers = 1)))
     yield
-      val std = new Std[F](ctx, jobCache)
+      val bloopServer = bloopServerEither.flatMap {
+        case Left(error) => ctx.error(stdSrc, error)
+        case Right(server) => server.pure
+      }
+      val std = new Std[F](ctx, bloopServer, jobCache)
       val obj = EvaluatedJValue.JObject.static(
         stdSrc,
         ctx,

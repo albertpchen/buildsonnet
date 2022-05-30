@@ -40,7 +40,7 @@ given Traverse[Iterable] with
   override def nonEmpty[A](fa: Iterable[A]): Boolean = fa.nonEmpty
 
   import cats.kernel.instances.StaticMethods.wrapMutableIndexedSeq
-  
+
   private def toImIndexedSeq[A](fa: Iterable[A]): IndexedSeq[A] = fa match {
     case iseq: IndexedSeq[A] => iseq
     case _ =>
@@ -93,7 +93,7 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
       value <- obj
         .members
         .get(field)
-        .fold(ctx.error(loc.src, s"object does not have field $field")) { value =>
+        .fold(ctx.error(src, s"object does not have field $field")) { value =>
           value.value
         }
     yield

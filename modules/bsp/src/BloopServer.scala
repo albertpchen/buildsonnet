@@ -3,14 +3,12 @@ package buildsonnet.bsp
 import buildsonnet.logger.ConsoleLogger
 
 import cats.Monad
-import cats.effect.{Async, Resource}
+import cats.effect.{Async, Resource, Sync}
 import cats.effect.syntax.all.given
 import cats.syntax.all.given
 
 import ch.epfl.scala.{bsp => bsp4s}
 import ch.epfl.scala.bsp.endpoints
-
-import fs2.Stream
 
 import jsonrpc4cats.{LowLevelMessageWriter, RpcClient, RpcFailure, RpcSuccess, Services}
 
@@ -38,10 +36,22 @@ object BloopServer:
   ): Resource[F, Either[String, BloopServer[F]]] =
     for
       client <- RpcClient.setupBytes(
-        fs2.io.readInputStream(socketConnection.input, chunkSize = 8192),
+        fs2.io.readInputStream(
+          socketConnection.input,
+          chunkSize = 8192,
+          closeAfterUse = true,
+        ),
         bspServices[F](workspace.toString),
-        maxConcurrentServiceWorkers
+        maxConcurrentServiceWorkers,
       )
+      _ <- Resource.make(
+        LowLevelMessageWriter
+          .toByteStream(client.messageStream)
+          .through(fs2.io.writeOutputStream(socketConnection.output))
+          .compile
+          .drain
+          .start
+      )(_.cancel)
       server <- Resource.make[F, Either[String, BloopServer[F]]] {
         val initParams = bsp4s.InitializeBuildParams(
           displayName = "buildsonnet", // name of this client
@@ -51,7 +61,8 @@ object BloopServer:
           capabilities = bsp4s.BuildClientCapabilities(List("scala")),
           data = None
         )
-        def retry(backoff: FiniteDuration, numRetries: Int): F[Either[String, Unit]] =
+        def retry(backoff: FiniteDuration, numRetries: Int): F[Either[String, BloopServer[F]]] =
+          Logger[F].info(s"Sending bsp initilize request") *>
           client.request(endpoints.Build.initialize, initParams).flatMap {
             case RpcFailure(_, error) =>
               if numRetries <= 0 then
@@ -60,10 +71,13 @@ object BloopServer:
               else
                 Logger[F].info(s"failed to initialized bloop bsp ($error), retrying in $backoff seconds") *>
                   Async[F].sleep(backoff) *> retry(backoff * 2, numRetries - 1)
-            case RpcSuccess(_, _) => Right(()).pure
+            case RpcSuccess(_, _) =>
+              Logger[F].info(s"successfully initialized bloop bsp") *>
+                client.notify(endpoints.Build.initialized, bsp4s.InitializedBuildParams()) *>
+                Right(makeServer(workspace, client)).pure
           }
         Logger[F].info(s"Attempting to connect to bloop build server") *>
-          retry(1.seconds, 5).map(_.map(_ => makeServer(workspace, client)))
+          retry(1.seconds, 5)
       } {
         case Left(_) => ().pure // no need to shutdown if we never initialized
         case Right(_) => // TODO: should we not shutdown?
@@ -73,14 +87,6 @@ object BloopServer:
             _ <- Logger[F].info(s"Shut down connection with bloop server")
           yield ()
       }
-      _ <- Resource.make(
-        LowLevelMessageWriter
-          .toByteStream(client.messageStream)
-          .through(fs2.io.writeOutputStream(socketConnection.output))
-          .compile
-          .drain
-          .start
-      )(_.cancel)
     yield
       server
 

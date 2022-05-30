@@ -151,7 +151,7 @@ object LowLevelMessageReader:
       case None => Pull.done
       case Some((head, tail)) =>
         def processUntilEmpty: Pull[F, LowLevelMessage, Unit] =
-          Pull.eval(reader.processMessage).map {
+          Pull.eval(reader.processMessage).flatMap {
             case None => pull(tail, reader)
             case Some(msg) => Pull.output1(msg) >> processUntilEmpty
           }

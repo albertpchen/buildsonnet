@@ -75,7 +75,7 @@ object RpcClient:
     for
       client <- RpcClient[F]
       server <- RpcServer(services, client, in)
-      _ <- server.runForever(maxConcurrentServiceWorkers).background
+      _ <- server.runBackground(maxConcurrentServiceWorkers)
     yield
       client
 

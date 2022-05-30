@@ -1,20 +1,20 @@
 package jsonrpc4cats
 
 import cats.{Monad, MonadError}
-import cats.effect.{Async, Sync, Spawn, Fiber, Ref, Resource}
+import cats.effect.{Async, Deferred, Sync, Spawn, Fiber, Ref, Resource}
 import cats.effect.instances.all.given
 import cats.effect.std.Supervisor
 import cats.effect.syntax.all.given
 import cats.syntax.all.given
 
-import fs2.Stream
+import fs2.{Pull, Stream}
 
 import org.typelevel.log4cats.Logger
 
 import scala.util.control.NonFatal
 
 sealed trait RpcServer[F[_]]:
-  def runForever(maxConcurrent: Int): F[Unit]
+  def runUntilCancelled(maxConcurrent: Int): F[F[Unit]]
 
   private[jsonrpc4cats] def cancel: F[Unit]
 
@@ -22,6 +22,10 @@ sealed trait RpcServer[F[_]]:
 object RpcServer:
   import Endpoint.unitCodec
   val cancelRequest = Endpoint[CancelParams, Unit]("$/cancelRequest")
+
+  extension [F[_]: Async](server: RpcServer[F])
+    def runBackground(maxConcurrentServiceWorkers: Int): Resource[F, Unit] =
+      Resource.make(server.runUntilCancelled(maxConcurrentServiceWorkers))(identity).void
 
   private def applyImpl[F[_]: Async: Logger](
     services: Services[F],
@@ -106,15 +110,20 @@ object RpcServer:
           yield
             ()
 
-    def runForever(maxConcurrent: Int): F[Unit] =
-      in
-        .parEvalMap(maxConcurrent) {
-          case response: Response => handleResponse(response).void
-          case notification: Notification => handleNotification(notification).void
-          case request: Request => handleRequest(request)
-        }
-        .compile
-        .drain
+    def runUntilCancelled(maxConcurrent: Int): F[F[Unit]] =
+      for
+        cancel <- Deferred[F, Unit]
+        _ <- in
+          .interruptWhen(cancel.get.attempt)
+          .parEvalMap(maxConcurrent) {
+            case response: Response => handleResponse(response).void
+            case notification: Notification => handleNotification(notification).void
+            case request: Request => handleRequest(request)
+          }
+          .compile
+          .drain
+          .start
+      yield cancel.complete(()).void
   }
 
   def apply[F[_]: Async: Logger](
