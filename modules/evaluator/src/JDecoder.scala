@@ -15,7 +15,7 @@ object JDecoderPath:
   extension (path: JDecoderPath)
     def isEmpty: Boolean = path.isEmpty
 
-    def error[F[_], T <: EvaluatedJValue[F]](ctx: EvaluationContext[F], src: Source, msg: String): F[Nothing] =
+    def error[F[_], T <: EvaluatedJValue[F], A](ctx: EvaluationContext[F], src: Source, msg: String): F[A] =
       if isEmpty then
         ctx.error(src, msg)
       else
@@ -78,9 +78,8 @@ object JDecoder:
     def decode(ctx: EvaluationContext[F], path: JDecoderPath, expr: EvaluatedJValue[F]): F[Boolean] =
       path.expect[F, Boolean](ctx, expr)
 
-  import java.nio.file.Path
-  given [F[_]: Monad]: JDecoder[F, Path] with
-    def decode(ctx: EvaluationContext[F], path: JDecoderPath, expr: EvaluatedJValue[F]): F[Path] =
+  given [F[_]: Monad]: JDecoder[F, java.nio.file.Path] with
+    def decode(ctx: EvaluationContext[F], path: JDecoderPath, expr: EvaluatedJValue[F]): F[java.nio.file.Path] =
       path.expect[F, String](ctx, expr).map { str =>
         if str.startsWith("/") then
           java.nio.file.Paths.get(str).normalize

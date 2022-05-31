@@ -159,10 +159,11 @@ object EvaluatedJValue:
 
     def static[F[_]: Sync](
       src: Source,
-      members: Map[String, EvaluatedJValue[F]],
+      members: Map[String, EvaluatedJValue[F] | LazyObjectValue[F]],
     ): JObject[F] =
-      val lazyMembers = members.map { (name, value) =>
-        name -> LazyObjectValue.strict(true, value)
+      val lazyMembers = members.map {
+        case (name, value: EvaluatedJValue[F]) => name -> LazyObjectValue.strict(true, value)
+        case (name, value: LazyObjectValue[F]) => name -> value
       }
       val impl = JObjectImpl[F](
         lazyMembers.pure,

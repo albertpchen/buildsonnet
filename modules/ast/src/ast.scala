@@ -380,7 +380,19 @@ object JValue:
   import scala.quoted.*
   import scala.reflect.ClassTag
   def ofIArray[T](xs: Seq[Expr[T]])(using Type[T])(using Quotes): Expr[IArray[T]] =
-    if (xs.isEmpty) '{ IArray.empty[T](using scala.compiletime.summonInline[ClassTag[T]]) } else '{ IArray(${Varargs(xs)}: _*)(using scala.compiletime.summonInline[ClassTag[T]]) }
+    if xs.isEmpty then
+      '{ IArray.empty[T](using scala.compiletime.summonInline[ClassTag[T]]) }
+    else
+      '{ IArray(${Varargs(xs)}: _*)(using scala.compiletime.summonInline[ClassTag[T]]) }
+
+  def jparamsExpr(xs: JParamList)(using Quotes): Expr[JParamList] =
+    if xs.isEmpty then
+      '{ IArray.empty[(String, Option[JValue])] }
+    else
+      val elems = xs.map { (key, value) =>
+        '{ ${Expr(key)} -> ${Expr(value)} }
+      }
+      '{ IArray[(String, Option[JValue])](${Varargs(elems)}: _*) }
 
   given ToExpr[JValue] with
     def apply(jvalue: JValue)(using Quotes): Expr[JValue] =
@@ -423,7 +435,7 @@ object JValue:
       case JBinaryOp(src, left, op, right) => '{ JBinaryOp(${Expr(src)}, ${Expr(left)}, ${Expr(op)}, ${Expr(right)}) }
       case JUnaryOp(src, op, expr) => '{ JUnaryOp(${Expr(src)}, ${Expr(op)}, ${Expr(expr)}) }
       case JLocal(src, name, value, result) => '{ JLocal(${Expr(src)}, ${Expr(name)}, ${Expr(value)}, ${Expr(result)}) }
-      case JFunction(src, params, body) => '{ JFunction(${Expr(src)}, ${Expr(params)}, ${Expr(body)}) }
+      case JFunction(src, params, body) => '{ JFunction(${Expr(src)}, ${jparamsExpr(params)}, ${Expr(body)}) }
       case JIf(src, cond, trueValue, elseValue) => '{ JIf(${Expr(src)}, ${Expr(cond)}, ${Expr(trueValue)}, ${Expr(elseValue)}) }
       case JError(src, expr) => '{ JError(${Expr(src)}, ${Expr(expr)}) }
       case JAssert(src, cond, msg, expr) => '{ JAssert(${Expr(src)}, ${Expr(cond)}, ${Expr(msg)}, ${Expr(expr)}) }
