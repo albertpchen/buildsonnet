@@ -96,87 +96,102 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
     yield
       value
   case JValue.JObject(src, rawMembers) =>
-    val pairs = rawMembers.collect {
-      case JObjMember.JField(src, rawKey, plus, isHidden, rawValue) =>
-        for
-          rawKey <- eval(ctx)(rawKey)
-          key <- ctx.expectFieldName(rawKey)
-        yield
-          key match
-          case _: EvaluatedJValue.JNull[F] => None
-          case expr: EvaluatedJValue.JString[F] =>
-            val key = expr.string
-            val value =
-              if plus then
-                JValue.JBinaryOp(
-                  src,
-                  JValue.JGetField(src, JValue.JSuper(src), key),
-                  JBinaryOperator.Op_+,
+    val pairs =
+      rawMembers.collect {
+        case JObjMember.JField(src, rawKey, plus, isHidden, rawValue) =>
+          for
+            rawKey <- eval(ctx)(rawKey)
+            key <- ctx.expectFieldName(rawKey)
+          yield
+            key match
+            case _: EvaluatedJValue.JNull[F] => None
+            case expr: EvaluatedJValue.JString[F] =>
+              val key = expr.string
+              val value =
+                if plus then
+                  JValue.JBinaryOp(
+                    src,
+                    JValue.JGetField(src, JValue.JSuper(src), key),
+                    JBinaryOperator.Op_+,
+                    rawValue
+                  )
+                else
                   rawValue
-                )
-              else
-                rawValue
-            Some((key, isHidden, value))
-    }.parSequence
-    val outerCtx = ctx
-    def membersFn(params: EvaluatedJValue.JObjectImplParams[F]) =
-      val ctx = outerCtx.withSelf(params.self).withSuper(params.`super`)
-      val asserts = rawMembers.collect {
-        case JObjMember.JAssert(src, rawCond, rawMsg) =>
-          val cond = eval(ctx)(rawCond).flatMap(ctx.expect[Boolean](_))
-          val msgOpt = rawMsg.fold(Option.empty[String].pure) { msg =>
-            eval(ctx)(msg).flatMap(ctx.expect[String](_).map(Some(_)))
-          }
-          (cond, msgOpt).parTupled.flatMap { (cond, msgOpt) =>
-            if cond then
-              ().pure
-            else
-              ctx.error[Unit](src, msgOpt.getOrElse("object assertion failed"))
-          }
-      }.sequence
-      val impl =
-        for
-          ctx <- ctx.bindCode(rawMembers.collect {
-            case local: JObjMember.JLocal => local.name -> local.value
-          })
-          members <- pairs.flatMap(_.collect { case Some((key, isHidden, value)) =>
-            LazyObjectValue[F](isHidden, eval(ctx)(value)).map(key -> _)
-          }.sequence)
-        yield
-          collection.Map.from(members)
-      EvaluatedJValue.JObjectImpl[F](impl, asserts.void)
+              Some((key, isHidden, value))
+      }.parSequence
+    var obj: EvaluatedJValue.JObject[F] = null
+    ctx
+      .lookup("$")
+      .fold(LazyValue(Sync[F].delay(obj)).map(ctx.bind("$", _)))(_ => ctx.pure)
+      .flatMap { outerCtx =>
+        def membersFn(params: EvaluatedJValue.JObjectImplParams[F]) =
+          val ctx = outerCtx.withSelf(params.self).withSuper(params.`super`)
+          val asserts = rawMembers.collect {
+            case JObjMember.JAssert(src, rawCond, rawMsg) =>
+              val cond = eval(ctx)(rawCond).flatMap(ctx.expect[Boolean](_))
+              val msgOpt = rawMsg.fold(Option.empty[String].pure) { msg =>
+                eval(ctx)(msg).flatMap(ctx.expect[String](_).map(Some(_)))
+              }
+              (cond, msgOpt).parTupled.flatMap { (cond, msgOpt) =>
+                if cond then
+                  ().pure
+                else
+                  ctx.error[Unit](src, msgOpt.getOrElse("object assertion failed"))
+              }
+          }.sequence
+          val impl =
+            for
+              ctx <- ctx.bindCode(rawMembers.collect {
+                case local: JObjMember.JLocal => local.name -> local.value
+              })
+              members <- pairs.flatMap(_.collect { case Some((key, isHidden, value)) =>
+                LazyObjectValue[F](isHidden, eval(ctx)(value)).map(key -> _)
+              }.sequence)
+            yield
+              collection.Map.from(members)
+          EvaluatedJValue.JObjectImpl[F](impl, asserts.void)
 
-    EvaluatedJValue.JObject(jvalue.src, membersFn).widen
+        EvaluatedJValue.JObject(jvalue.src, membersFn).flatMap { result =>
+          Sync[F].delay { obj = result }.as(result)
+        }
+      }
 
   case JValue.JObjectComprehension(src, locals, rawKey, value, forVar, inExpr, condOpt) =>
-    val pairs = for
-      jvalue <- eval(ctx)(inExpr)
-      arr <- ctx.expect[EvaluatedJValue.JArray[F]](jvalue)
-      pairs <- arr.elements.map { elem =>
-        for
-          rawKey <- eval(ctx.bindStrict(forVar, elem))(rawKey)
-          key <- ctx.expectFieldName(rawKey)
+    var obj: EvaluatedJValue.JObject[F] = null
+    ctx
+      .lookup("$")
+      .fold(LazyValue(Sync[F].delay(obj)).map(ctx.bind("$", _)))(_ => ctx.pure)
+      .flatMap { outerCtx =>
+        val pairs = for
+          jvalue <- eval(ctx)(inExpr)
+          arr <- ctx.expect[EvaluatedJValue.JArray[F]](jvalue)
+          pairs <- arr.elements.map { elem =>
+            for
+              rawKey <- eval(ctx.bindStrict(forVar, elem))(rawKey)
+              key <- ctx.expectFieldName(rawKey)
+            yield
+              key match
+              case _: EvaluatedJValue.JNull[F] => None
+              case key: EvaluatedJValue.JString[F] => Some((key.string, value, elem))
+          }.toList.sequence
         yield
-          key match
-          case _: EvaluatedJValue.JNull[F] => None
-          case key: EvaluatedJValue.JString[F] => Some((key.string, value, elem))
-      }.toList.sequence
-    yield
-      pairs.flatten
+          pairs.flatten
 
-    val outerCtx = ctx
-    def membersFn(params: EvaluatedJValue.JObjectImplParams[F]) =
-      val ctx = outerCtx.withSelf(params.self).withSuper(params.`super`)
-      val impl = for
-        ctx <- ctx.bindCode(locals.map(local => local.name -> local.value))
-        members <- pairs.flatMap(_.map { (key, value, forValue) =>
-          val valueCtx = ctx.bindStrict(forVar, forValue)
-          LazyObjectValue(false, eval(ctx)(value)).map(key -> _)
-        }.sequence)
-      yield
-        collection.Map.from(members)
-      EvaluatedJValue.JObjectImpl[F](impl, ().pure)
-    EvaluatedJValue.JObject(jvalue.src, membersFn).widen
+        def membersFn(params: EvaluatedJValue.JObjectImplParams[F]) =
+          val ctx = outerCtx.withSelf(params.self).withSuper(params.`super`)
+          val impl = for
+            ctx <- ctx.bindCode(locals.map(local => local.name -> local.value))
+            members <- pairs.flatMap(_.map { (key, value, forValue) =>
+              val valueCtx = ctx.bindStrict(forVar, forValue)
+              LazyObjectValue(false, eval(ctx)(value)).map(key -> _)
+            }.sequence)
+          yield
+            collection.Map.from(members)
+          EvaluatedJValue.JObjectImpl[F](impl, ().pure)
+        EvaluatedJValue.JObject(jvalue.src, membersFn).flatMap { result =>
+          Sync[F].delay { obj = result }.as(result)
+        }
+      }
 
   case JValue.JIndex(src, loc, rawIndex) =>
     ctx.expect[EvaluatedJValue.JArray[F] | EvaluatedJValue.JObject[F]](loc).flatMap {
@@ -250,6 +265,8 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
         eval(ctx)(left).flatMap(ctx.expect[PlusOperand](_)),
         eval(ctx)(right).flatMap(ctx.expect[PlusOperand](_)),
       ).parTupled.flatMap {
+        case (op1: EvaluatedJValue.JString[F], op2: EvaluatedJValue.JString[F]) =>
+          EvaluatedJValue.JString(src, op1.string + op2.string).pure
         case (op1: EvaluatedJValue.JString[F], op2) =>
           ctx.singleLinePrint(op2).map(op2 => EvaluatedJValue.JString(src, op1.string + op2))
         case (op1: EvaluatedJValue.JObject[F], op2: EvaluatedJValue.JObject[F]) =>
@@ -258,6 +275,112 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
           EvaluatedJValue.JArray(src, op1.elements ++ op2.elements).pure
         case (op1, op2) =>
           ctx.error(src, s"$op1, $op2, invalid operand types, expected two numbers, arrays, or objects, or one string")
+      }
+    case JBinaryOperator.Op_- =>
+      (
+        eval(ctx)(left).flatMap(ctx.expect[Double](_)),
+        eval(ctx)(right).flatMap(ctx.expect[Double](_)),
+      ).parTupled.map { (left, right) =>
+        EvaluatedJValue.JNum(src, left - right)
+      }
+    case JBinaryOperator.Op_* =>
+      (
+        eval(ctx)(left).flatMap(ctx.expect[Double](_)),
+        eval(ctx)(right).flatMap(ctx.expect[Double](_)),
+      ).parTupled.map { (left, right) =>
+        EvaluatedJValue.JNum(src, left * right)
+      }
+    case JBinaryOperator.Op_/ =>
+      (
+        eval(ctx)(left).flatMap(ctx.expect[Double](_)),
+        eval(ctx)(right).flatMap(ctx.expect[Double](_)),
+      ).parTupled.map { (left, right) =>
+        EvaluatedJValue.JNum(src, left / right)
+      }
+    case JBinaryOperator.Op_< =>
+      (
+        eval(ctx)(left).flatMap(ctx.expect[Double](_)),
+        eval(ctx)(right).flatMap(ctx.expect[Double](_)),
+      ).parTupled.map { (left, right) =>
+        EvaluatedJValue.JBoolean(src, left < right)
+      }
+    case JBinaryOperator.Op_<= =>
+      (
+        eval(ctx)(left).flatMap(ctx.expect[Double](_)),
+        eval(ctx)(right).flatMap(ctx.expect[Double](_)),
+      ).parTupled.map { (left, right) =>
+        EvaluatedJValue.JBoolean(src, left <= right)
+      }
+    case JBinaryOperator.Op_> =>
+      (
+        eval(ctx)(left).flatMap(ctx.expect[Double](_)),
+        eval(ctx)(right).flatMap(ctx.expect[Double](_)),
+      ).parTupled.map { (left, right) =>
+        EvaluatedJValue.JBoolean(src, left > right)
+      }
+    case JBinaryOperator.Op_>= =>
+      (
+        eval(ctx)(left).flatMap(ctx.expect[Double](_)),
+        eval(ctx)(right).flatMap(ctx.expect[Double](_)),
+      ).parTupled.map { (left, right) =>
+        EvaluatedJValue.JBoolean(src, left >= right)
+      }
+    case JBinaryOperator.Op_>> =>
+      (
+        eval(ctx)(left).flatMap(ctx.expect[Double](_)),
+        eval(ctx)(right).flatMap(ctx.expect[Double](_)),
+      ).parTupled.flatMap { (left, rightDouble) =>
+        val rhs = rightDouble.toLong
+        if rhs >= 0 then
+          val shamt = rhs % 64
+          EvaluatedJValue.JNum(src, (left.toLong >> shamt).toDouble).pure
+        else
+          ctx.error(right.src, s"shift amount cannot be negative, got $rhs")
+      }
+    case JBinaryOperator.Op_<< =>
+      (
+        eval(ctx)(left).flatMap(ctx.expect[Double](_)),
+        eval(ctx)(right).flatMap(ctx.expect[Double](_)),
+      ).parTupled.flatMap { (left, rightDouble) =>
+        val rhs = rightDouble.toLong
+        if rhs >= 0 then
+          val shamt = rhs % 64
+          EvaluatedJValue.JNum(src, (left.toLong << shamt).toDouble).pure
+        else
+          ctx.error(right.src, s"shift amount cannot be negative, got $rhs")
+      }
+    case JBinaryOperator.Op_in =>
+      (
+        eval(ctx)(left).flatMap(ctx.expect[String](_)),
+        eval(ctx)(right).flatMap(ctx.expect[EvaluatedJValue.JObject[F]](_)),
+      ).parTupled.map { (left, right) =>
+        EvaluatedJValue.JBoolean(src, right.lookupOpt(left).isDefined)
+      }
+    case JBinaryOperator.Op_== =>
+      for
+        pair <- (eval(ctx)(left), eval(ctx)(right)).parTupled
+        bool <- pair._1.structuralEquals(pair._2)
+      yield
+        EvaluatedJValue.JBoolean(src, bool)
+    case JBinaryOperator.Op_!= =>
+      for
+        pair <- (eval(ctx)(left), eval(ctx)(right)).parTupled
+        bool <- pair._1.structuralEquals(pair._2)
+      yield
+        EvaluatedJValue.JBoolean(src, !bool)
+    case JBinaryOperator.Op_&& =>
+      (
+        eval(ctx)(left).flatMap(ctx.expect[Boolean](_)),
+        eval(ctx)(right).flatMap(ctx.expect[Boolean](_)),
+      ).parTupled.map { (left, right) =>
+        EvaluatedJValue.JBoolean(src, left && right)
+      }
+    case JBinaryOperator.Op_|| =>
+      (
+        eval(ctx)(left).flatMap(ctx.expect[Boolean](_)),
+        eval(ctx)(right).flatMap(ctx.expect[Boolean](_)),
+      ).parTupled.map { (left, right) =>
+        EvaluatedJValue.JBoolean(src, left || right)
       }
 
   case JValue.JIf(src, rawCond, trueValue, elseValue) =>

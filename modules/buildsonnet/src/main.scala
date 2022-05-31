@@ -102,7 +102,7 @@ object Buildsonnet extends IOApp:
           given ConsoleLogger[IO] = ConsoleLogger.default[IO]("buildsonnet")
           ctxResource <- {
             given Logger[IO] = Slf4jLogger.getLogger[IO]
-            val initCtx = EvaluationContext.std[IO](workspaceDir)
+            val initCtx = Std.ctx[IO](workspaceDir)
             Std(initCtx).map { std =>
               initCtx.bind("std", LazyValue.strict(std))
             }

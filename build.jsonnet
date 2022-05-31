@@ -3,12 +3,15 @@ local scala213Version = "2.13.6";
 
 local deps = {
   'cats-core': std.scala.Dep("org.typelevel", "cats-core", "2.7.0"),
+  'alleycats-core': std.scala.Dep("org.typelevel", "alleycats-core", "2.7.0"),
   'cats-mtl': std.scala.Dep("org.typelevel", "cats-mtl", "1.2.1"),
   'cats-effect': std.scala.Dep("org.typelevel", "cats-effect", "3.3.8"),
   'cats-retry': std.scala.Dep("com.github.cb372", "cats-retry", "3.1.0"),
   'cats-parse': std.scala.Dep("org.typelevel", "cats-parse", "0.3.7"),
 
-  'log4cats-core': std.scala.Dep("org.typelevel", "log4cats-core", "2.3.0"),
+  'log4cats-core': std.scala.Dep("org.typelevel", "log4cats-core", "2.3.1"),
+  'log4cats-slf4j': std.scala.Dep("org.typelevel", "log4cats-slf4j", "2.3.1"),
+
 
   circe(name): std.scala.Dep("io.circe", name, "0.14.1"),
   'circe-core': $.circe('circe-core'),
@@ -55,6 +58,21 @@ local deps = {
 
   'bloop-launcher': std.scala.Dep("ch.epfl.scala", "bloop-launcher", "1.5.0", crossVersion='for3Use2_13'),
   'decline-effect': std.scala.Dep("com.monovore", "decline-effect", "2.2.0"),
+
+  doobie(name): std.scala.Dep("org.tpolecat", "doobie-" + name, "1.0.0-RC2"),
+  'doobie-core': $.doobie('core'),
+  'doobie-hikari': $.doobie('hikari'),
+
+  'sqlite-jdbc': std.java.Dep("org.xerial", "sqlite-jdbc", "3.36.0.3"),
+  'log4j-slf4j-impl': std.java.Dep('org.apache.logging.log4j', 'log4j-slf4j-impl', '2.17'),
+  'slf4j-simple': std.java.Dep('org.slf4j', 'slf4j-simple', '1.7.36'),
+
+  'coursier': std.scala.Dep("io.get-coursier", "coursier", "2.0.16", crossVersion="for3Use2_13"),
+  'coursier-cache': std.scala.Dep("io.get-coursier", "coursier-cache", "2.0.16", crossVersion="for3Use2_13"),
+  'coursier-jvm': std.scala.Dep("io.get-coursier", "coursier-jvm", "2.0.16", crossVersion="for3Use2_13"),
+  'ipcsocket': std.java.Dep("org.scala-sbt.ipcsocket", "ipcsocket", "1.4.0",),
+
+  'bloop-config': std.scala.Dep("ch.epfl.scala", "bloop-config", "1.5.0", crossVersion="for3Use2_13"),
 };
 
 {
@@ -99,6 +117,44 @@ local deps = {
     ],
   },
 
+  bloopgun: std.scala.Project {
+    name: "bloopgun",
+    sources: [
+      "bloop/bloopgun/src/main/scala",
+      std.write("bloop/bloopgun/generated_src/BloopgunInfo.scala", |||
+        package bloopgun.internal.build
+        
+        case object BloopgunInfo {
+          val version: String = "0.1.0-SNAPSHOT"
+        }
+      |||)
+    ],
+    scalaVersion: scala213Version,
+    libraries: [
+      std.scala.Dep("me.vican.jorge", "snailgun-cli", "0.4.0"),
+      std.java.Dep("org.zeroturnaround", "zt-exec", "1.11"),
+      std.java.Dep("org.slf4j", "slf4j-nop", "1.7.2"),
+      deps['coursier'],
+      deps['coursier-cache'],
+      std.scala.Dep("com.github.plokhotnyuk.jsoniter-scala", "jsoniter-scala-core", "2.4.0"),
+      std.scala.Dep("com.github.plokhotnyuk.jsoniter-scala", "jsoniter-scala-macros", "2.4.0"),
+      std.java.Dep("org.bouncycastle", "bcprov-jdk15on", "1.64"),
+      std.java.Dep("org.bouncycastle", "bcpkix-jdk15on", "1.64"),
+    ],
+  },
+
+  bloopLauncher: std.scala.Project {
+    name: "bloop-launcher",
+    dependencies: [$.bloopgun],
+    sources: ["bloop/launcher/src/main/scala"],
+    scalaVersion: scala213Version,
+    libraries: [
+      deps['coursier'],
+      deps['coursier-cache'],
+      deps['ipcsocket'],
+    ],
+  },
+
   bsp: std.scala.Project {
     name: 'bsp',
     sources: ['modules/bsp'],
@@ -107,9 +163,23 @@ local deps = {
       $.bsp4s,
       $.jsonrpc4cats,
       $.logger,
+      $.bloopLauncher
     ],
+  },
+
+  job: std.scala.Project {
+    name: 'job',
+    sources: ['modules/job'],
+    scalaVersion: scala3Version,
     libraries: [
-      deps['bloop-launcher'],
+      deps['doobie-core'],
+      deps['doobie-hikari'],
+      deps['sqlite-jdbc'],
+      deps['log4cats-core'],
+    ],
+    dependencies: [
+      $.logger,
+      $.evaluator,
     ],
   },
 
@@ -127,6 +197,9 @@ local deps = {
     name: 'evaluator',
     sources: ['modules/evaluator'],
     scalaVersion: scala3Version,
+    libraries: [
+      deps['alleycats-core'],
+    ],
     dependencies: [
       $.logger,
       $.ast,
@@ -142,16 +215,20 @@ local deps = {
       $.logger,
       $.bsp,
       $.evaluator,
+      $.job,
     ],
     libraries: [
       deps['decline-effect'],
+      deps['log4cats-slf4j'],
+      deps['slf4j-simple'],
+      deps['coursier-jvm'],
+      deps['bloop-config'],
     ],
     javaRuntimeOpts: [
       "-Dcats.effect.stackTracingMode=full",
       "-Dcats.effect.traceBufferSize=2048",
     ]
   },
-
 
   ecs: std.scala.Project {
     name: "ecs",
@@ -201,7 +278,7 @@ local deps = {
     scalaVersion: scala3Version,
     scalacOptions: ["-Xmax-inlines", "100"],
     libraries: [
-      std.scala.Dep("org.typelevel", "cats-parse", "0.3.y", crossVersion="for3Use2_13"),
+      std.scala.Dep("org.typelevel", "cats-parse", "0.3.7", crossVersion="for3Use2_13"),
       std.scala.Dep("io.get-coursier", "coursier", "2.0.16", crossVersion="for3Use2_13"),
       std.scala.Dep("io.get-coursier", "coursier-jvm", "2.0.16", crossVersion="for3Use2_13"),
       std.scala.Dep("io.get-coursier", "coursier-launcher", "2.0.16", crossVersion="for3Use2_13"),
@@ -243,7 +320,7 @@ local deps = {
     }),
 
   nativeImage(args):
-    local jvmHome = std.scala.jvm("graalvm-java11:21.2.0").name;
+    local jvmHome = std.scala.jvm("graalvm-java11:22.1.0").name;
     local workspaceDir = std.workspace.name;
     local nativeImageConfigDir = workspaceDir + "/native-image-agent-config-output-dir";
     std.runJob({

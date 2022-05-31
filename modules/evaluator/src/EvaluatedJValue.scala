@@ -1,7 +1,7 @@
 package buildsonnet.evaluator
 
 import buildsonnet.ast.{HasSource, Source}
-import cats.Applicative
+import cats.{Applicative, Monad, Parallel}
 import cats.effect.Sync
 import cats.syntax.all.given
 import scala.collection.mutable
@@ -11,6 +11,41 @@ sealed trait EvaluatedJValue[F[_]] extends HasSource:
   def isNull: Boolean = false
 
 object EvaluatedJValue:
+  extension [F[_]: Monad: Parallel](value: EvaluatedJValue[F])
+    def structuralEquals(other: EvaluatedJValue[F]): F[Boolean] =
+      (value, other) match
+      case (op1: JBoolean[F], op2: JBoolean[F]) => (op1.bool == op2.bool).pure
+      case (op1: JNull[F], op2: JNull[F]) => true.pure
+      case (op1: JString[F], op2: JString[F]) => (op1.string == op2.string).pure
+      case (op1: JNum[F], op2: JNum[F]) => (op1.double == op2.double).pure
+      case (op1: JArray[F], op2: JArray[F]) =>
+        if op1.elements.size == op2.elements.size then
+          op1.elements.zip(op2.elements).foldLeft(true.pure) {
+            case (result, (op1, op2)) => result.flatMap { res =>
+              if res then
+                op1.structuralEquals(op2)
+              else
+                result
+            }
+          }
+        else
+          false.pure
+      case (op1: JFunction[F], op2: JFunction[F]) => (op1 eq op2).pure
+      case (op1: JObject[F], op2: JObject[F]) =>
+        val members1 = op1.members
+        val members2 = op2.members
+        if members1.keys == members2.keys then
+          members1.keys.foldLeft(true.pure) {
+            case (result, key) => result.flatMap { res =>
+              if res then
+                (members1(key).value, members2(key).value).parTupled.flatMap(_.structuralEquals(_))
+              else
+                result
+            }
+          }
+        else false.pure
+      case (op1, op2) => false.pure
+
   def escape(s: String, builder: StringBuilder): Unit =
     var idx = 0
     val len = s.length

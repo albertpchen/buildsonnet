@@ -1,6 +1,6 @@
 package buildsonnet
 
-import cats.{Parallel, Traverse}
+import cats.{Parallel, MonadError, Traverse}
 import cats.effect.{Async, Deferred, Sync, Ref, Resource}
 import cats.effect.std.Dispatcher
 import cats.effect.syntax.all.given
@@ -8,7 +8,7 @@ import cats.syntax.all.given
 import cats.instances.all.given
 
 import buildsonnet.ast.{JParamList, JValue, Source, SourceFile}
-import buildsonnet.evaluator.{EvaluationContext, EvaluatedJValue, LazyValue, LazyObjectValue, eval}
+import buildsonnet.evaluator.{EvaluationContext, EvaluatedJValue, EvaluationError, LazyValue, LazyObjectValue, eval}
 import buildsonnet.evaluator.given Traverse[Iterable]
 import buildsonnet.logger.ConsoleLogger
 import buildsonnet.job.{JobCache, JobDescription, SQLiteJobCache, JobRunner}
@@ -60,7 +60,7 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
         while error.isEmpty && i < paramsDef.size do
           val (argName, default) = paramsDef(i)
           val isGivenNamedArg = argMap.contains(argName)
-          if positionalArgs.nonEmpty && isGivenNamedArg then
+          if currPosArgs.nonEmpty && isGivenNamedArg then
             error = Some(params.ctx.error(params.src, s"both positional and named arg provided for argument $argName"))
           else if currPosArgs.nonEmpty then
             locals(i) = currPosArgs.head
@@ -214,7 +214,10 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
     for
       scalaProject <- LazyObjectValue(true, Sync[F].defer {
         val ctxWithStd = initCtx.bind("std", LazyValue.strict(self))
-        eval(ctxWithStd)(JValue.reifyFile("../../parser/src/main/resources/bloop.jsonnet", "std.scala.Project"))
+        eval(ctxWithStd)(JValue.reifyFile(
+          "../resources/std.scala.Project.jsonnet",
+          "std.scala.Project"
+        ))
       })
     yield
       val members = Map(
@@ -470,7 +473,7 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
               ctx.expect[EvaluatedJValue.JString[F]](org),
               ctx.expect[EvaluatedJValue.JString[F]](name),
               ctx.expect[EvaluatedJValue.JString[F]](version),
-              ctx.expect[EvaluatedJValue.JString[F] | EvaluatedJValue.JNull[F]](version),
+              ctx.expect[EvaluatedJValue.JString[F] | EvaluatedJValue.JNull[F]](crossVersion),
             ).mapN {
               (org, name, version, crossVersion) => EvaluatedJValue.JObject.static(stdSrc, Map(
                 "org" -> org,
@@ -481,7 +484,7 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
             }
           },
           "Project" -> scalaProject,
-          "fetchDep" -> function2(Arg.deps, Arg.withSources(jfalse)) { (deps, withSources) =>
+          "fetchDeps" -> function2(Arg.deps, Arg.withSources(jfalse)) { (deps, withSources) =>
             import coursier.{Classifier, Fetch, Type}
             import coursier.cache.FileCache
             import coursier.cache.loggers.RefreshLogger
@@ -594,10 +597,48 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
 
 object Std:
   private val stdSrc = Source.Generated(SourceFile.std)
+  private case class CtxImpl[F[_]](
+    self: Option[EvaluatedJValue.JObject[F]],
+    `super`: Option[EvaluatedJValue.JObject[F]],
+    scopeArr: Array[(String, LazyValue[F])],
+    val workspaceDir: Path,
+  )(using MonadError[F, Throwable]) extends EvaluationContext[F]:
+    lazy val scope: Map[String, LazyValue[F]] = scopeArr.toMap
+    def error[T](src: Source, msg: String): F[T] =
+      EvaluationError(
+        SourceFile.empty, src, msg, List.empty).raiseError
+
+    def lookup(id: String): Option[LazyValue[F]] =
+      scope.get(id)
+
+    def bind(id: String, value: LazyValue[F]): EvaluationContext[F] =
+      this.copy(scopeArr = scopeArr :+ (id -> value))
+
+    def bind(locals: List[(String, LazyValue[F])]): EvaluationContext[F] =
+      this.copy(scopeArr = scopeArr :++ locals)
+
+    def withSelf(obj: EvaluatedJValue.JObject[F]): EvaluationContext[F] =
+      this.copy(self = Some(obj))
+
+    def withSuper(obj: Option[EvaluatedJValue.JObject[F]]): EvaluationContext[F] =
+      this.copy(`super` = obj)
+
+    def `import`(src: Source, file: String): F[EvaluatedJValue[F]] = ???
+    def importStr(src: Source, file: String): F[EvaluatedJValue.JString[F]] = ???
+
+
+  def ctx[F[_]](workspaceDir: Path)(using MonadError[F, Throwable]): EvaluationContext[F] =
+    CtxImpl(
+      None,
+      None,
+      Array("workspace" -> LazyValue.strict(EvaluatedJValue.JString[F](stdSrc, workspaceDir.toString))),
+      workspaceDir,
+    )
 
   def writeImpl[F[_]: Sync](path: Path, contents: String): F[Path] =
     Sync[F].delay {
       if !Files.exists(path) || !fileMatchesContents(path.toFile, contents) then
+        path.getParent.toFile.mkdirs
         Files.write(path, contents.getBytes())
       path
     }

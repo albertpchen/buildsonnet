@@ -9,7 +9,7 @@ import buildsonnet.logger.ConsoleLogger
 
 import java.nio.file.Path
 
-sealed trait EvaluationContext[F[_]]:
+trait EvaluationContext[F[_]]:
   def error[T](src: Source, msg: String): F[T]
   def lookup(id: String): Option[LazyValue[F]]
 
@@ -29,38 +29,6 @@ sealed trait EvaluationContext[F[_]]:
   def file: SourceFile = ???
 
 object EvaluationContext:
-  private case class Impl[F[_]](
-    self: Option[EvaluatedJValue.JObject[F]],
-    `super`: Option[EvaluatedJValue.JObject[F]],
-    scopeArr: Array[(String, LazyValue[F])],
-    val workspaceDir: Path,
-  )(using MonadError[F, Throwable]) extends EvaluationContext[F]:
-    lazy val scope: Map[String, LazyValue[F]] = scopeArr.toMap
-    def error[T](src: Source, msg: String): F[T] =
-      EvaluationError(
-        SourceFile.empty, src, msg, List.empty).raiseError
-
-    def lookup(id: String): Option[LazyValue[F]] =
-      scope.get(id)
-    
-    def bind(id: String, value: LazyValue[F]): EvaluationContext[F] =
-      this.copy(scopeArr = scopeArr :+ (id -> value))
-
-    def bind(locals: List[(String, LazyValue[F])]): EvaluationContext[F] =
-      this.copy(scopeArr = scopeArr :++ locals)
-
-    def withSelf(obj: EvaluatedJValue.JObject[F]): EvaluationContext[F] =
-      this.copy(self = Some(obj))
-
-    def withSuper(obj: Option[EvaluatedJValue.JObject[F]]): EvaluationContext[F] =
-      this.copy(`super` = obj)
-
-    def `import`(src: Source, file: String): F[EvaluatedJValue[F]] = ???
-    def importStr(src: Source, file: String): F[EvaluatedJValue.JString[F]] = ???
-
-  def std[F[_]](workspaceDir: Path)(using MonadError[F, Throwable]): EvaluationContext[F] =
-    Impl(None, None, Array.empty, workspaceDir)
-
   given theExpr[F[_]](using expr: EvaluatedJValue[F]): EvaluatedJValue[F] = expr
 
   inline def typeString[F[_], T]: String =
@@ -141,15 +109,16 @@ object EvaluationContext:
     def bindStrict(id: String, value: EvaluatedJValue[F]): EvaluationContext[F] =
       ctx.bind(id, LazyValue.strict(value))
     def bindStrict(locals: List[(String, EvaluatedJValue[F])]): EvaluationContext[F] =
-      ctx.bind(locals.map((key, value) => key -> LazyValue.strict(value)))
+      locals.foldLeft(ctx) { case (ctx, (key, value)) =>
+        ctx.bindStrict(key, value)
+      }
 
     def bindCode(id: String, value: JValue): F[EvaluationContext[F]] =
       LazyValue(eval(ctx)(value)).map(ctx.bind(id, _))
     def bindCode(locals: List[(String, JValue)]): F[EvaluationContext[F]] =
-      locals
-        .map((key, value) => LazyValue(eval(ctx)(value)).map(key -> _))
-        .sequence
-        .map(ctx.bind(_))
+      locals.foldLeft(ctx.pure) { case (ctx, (key, value)) =>
+        ctx.flatMap(_.bindCode(key, value))
+      }
 
     def prettyPrint(value: EvaluatedJValue[F]): F[String] = Sync[F].defer {
       val builder = new StringBuilder
