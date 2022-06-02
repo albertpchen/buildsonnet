@@ -108,7 +108,8 @@ final class ConsoleLogger[F[_]: Sync](
 ) {
   def error(msg: String): F[Unit] = print(msg, printError)
   def warn(msg: String): F[Unit] = print(msg, printWarning)
-  def info(msg: String): F[Unit] = print(msg, printInfo)
+  def stdout(msg: String): F[Unit] = print(msg, line => out.print(line + ConsoleLogger.lineSeparator))
+  def stderr(msg: String): F[Unit] = print(msg, line => err.print(line + ConsoleLogger.lineSeparator))
   def outStream: PrintStream = out.printStream
   def errStream: PrintStream = err.printStream
 
@@ -121,9 +122,6 @@ final class ConsoleLogger[F[_]: Sync](
     val lines = msg.splitLines
     val printFn = if colorOutput then fn else (str: String) => fn(ConsoleLogger.stripColors(str))
     lines.foldLeft(().pure[F])(_ *> printFn(_))
-
-  private def printInfo(line: String): F[Unit] =
-    out.print(line + ConsoleLogger.lineSeparator)
 
   private def colored(color: String, msg: String): String =
     if (colorOutput)

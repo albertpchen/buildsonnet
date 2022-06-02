@@ -41,17 +41,17 @@ def bspServices[F[_]: Sync: Logger: ConsoleLogger](workspace: String): Services[
               val id = report.target.uri.value
               val isNoOp = params.message.getOrElse("").startsWith("Start no-op compilation")
               if !isNoOp then
-                params.message.fold(().pure)(ConsoleLogger[F].info)
+                params.message.fold(().pure)(ConsoleLogger[F].stdout)
               else
                 ().pure
         case _ =>
-          params.message.fold(().pure)(ConsoleLogger[F].info)
+          params.message.fold(().pure)(ConsoleLogger[F].stdout)
       }
     }
-    .notification(endpoints.Build.taskProgress)(_.message.fold(().pure)(ConsoleLogger[F].info))
-    .notification(endpoints.Build.taskFinish)(_.message.fold(().pure)(ConsoleLogger[F].info))
-    .notification(endpoints.Build.showMessage)(params => ConsoleLogger[F].info(params.message))
-    .notification(endpoints.Build.logMessage)(params => ConsoleLogger[F].info(params.message))
+    .notification(endpoints.Build.taskProgress)(_.message.fold(().pure)(ConsoleLogger[F].stdout))
+    .notification(endpoints.Build.taskFinish)(_.message.fold(().pure)(ConsoleLogger[F].stdout))
+    .notification(endpoints.Build.showMessage)(params => ConsoleLogger[F].stdout(params.message))
+    .notification(endpoints.Build.logMessage)(params => ConsoleLogger[F].stdout(params.message))
     .notification(endpoints.Build.publishDiagnostics) { params =>
       val file = java.nio.file.Paths.get(workspace).relativize(params.textDocument.uri.toPath)
       params.diagnostics.map { diagnostic =>
@@ -62,7 +62,7 @@ def bspServices[F[_]: Sync: Logger: ConsoleLogger](workspace: String): Services[
           diagnostic.severity match
           case Some(bsp4s.DiagnosticSeverity.Error) => ConsoleLogger[F].error
           case Some(bsp4s.DiagnosticSeverity.Warning) => ConsoleLogger[F].warn
-          case _ => ConsoleLogger[F].info(_: String)
+          case _ => ConsoleLogger[F].stdout(_: String)
         import ConsoleLogger.prefixLines
         logFn(header) *>
           diagnostic.message.prefixLines("  ").foldLeft(().pure[F])(_ *> logFn(_)) *>

@@ -182,7 +182,7 @@ object JobRunner:
       case _ =>
         val cmdlineString = desc.cmdline.mkString(" ")
         for
-          _ <- ConsoleLogger[F].info(cmdlineString)
+          _ <- ConsoleLogger[F].stdout(cmdlineString)
           _ <- Logger[F].info(s"starting job: $cmdlineString")
           envVars = desc.envVars.fold(Seq.empty)(_.toSeq).map((k, v) => s"$k=$v").sorted.toArray
           process <- Sync[F].blocking {
@@ -199,7 +199,7 @@ object JobRunner:
                 val lines = new BufferedReader(new InputStreamReader(process.getInputStream)).lines()
                 val builder = new StringBuilder
                 lines.forEach { line =>
-                  dispatcher.unsafeRunTimed(ConsoleLogger[F].info(line), Duration.Inf)
+                  dispatcher.unsafeRunTimed(ConsoleLogger[F].stdout(line), Duration.Inf)
                   builder ++= line
                   builder ++= ConsoleLogger.lineSeparator
                 }
@@ -209,7 +209,7 @@ object JobRunner:
                 val lines = new BufferedReader(new InputStreamReader(process.getErrorStream)).lines()
                 val builder = new StringBuilder
                 lines.forEach { line =>
-                  dispatcher.unsafeRunTimed(ConsoleLogger[F].info(line), Duration.Inf)
+                  dispatcher.unsafeRunTimed(ConsoleLogger[F].stderr(line), Duration.Inf)
                   builder ++= line
                   builder ++= ConsoleLogger.lineSeparator
                 }

@@ -13,12 +13,12 @@ object CoursierParams:
   given [F[_]: cats.Monad: cats.Parallel]: JDecoder[F, CoursierParams] = JDecoder.derived
 
 case class CoursierDependency(
-  org: String,
+  organization: String,
   name: String,
   version: String,
 ):
   def toDependency: Dependency =
-    Dependency(Module(Organization(org), ModuleName(name)), version)
+    Dependency(Module(Organization(organization), ModuleName(name)), version)
 
 object CoursierDependency:
   given [F[_]: cats.Monad]: JDecoder[F, CoursierDependency] = JDecoder.derived

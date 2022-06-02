@@ -49,7 +49,13 @@ object JEncoder:
         k -> JEncoder[F, T].encode(ctx, src, v)
       }
       EvaluatedJValue.JObject.static(src, members)
-
+/*
+  given [F[_], T](using => JEncoder[F, T]): JEncoder[F, Option[T]] with
+    def encode(ctx: EvaluationContext[F], src: Source, t: Option[T]): EvaluatedJValue[F] =
+      t match
+      case None => EvaluatedJValue.JNull[F](src)
+      case Some(some) => JEncoder[F, T].encode(ctx, src, some)
+*/
   inline given [F[_]: Sync, T: Mirror.ProductOf]: JEncoder[F, T] = derived[F, T]
 
   inline def summonAll[F[_], T <: Tuple]: List[JEncoder[F, ?]] =
@@ -61,19 +67,35 @@ object JEncoder:
     inline erasedValue[T] match
       case _: EmptyTuple => Nil
       case _: (t *: ts) => constValue[t].toString :: getLabels[ts]
+  
+  transparent inline def encodeProduct[F[_], T <: Product](
+    ctx: EvaluationContext[F],
+    src: Source,
+    elements: Product,
+    idx: Int,
+  ): Map[String, EvaluatedJValue[F]] =
+    inline erasedValue[T] match
+      case _: EmptyTuple => Map.empty
+      case _: ((name, Option[head]) *: tail) =>
+        val field = constValue[name].toString
+        val head = elements.productElement(idx) match
+        case None => EvaluatedJValue.JNull[F](src)
+        case Some(some) => summonInline[JEncoder[F, head]].encode(ctx, src, some.asInstanceOf[head])
+        encodeProduct[F, tail](ctx, src, elements, idx + 1) + (field -> head)
+      case _: ((name, head) *: tail) =>
+        val field = constValue[name].toString
+        val head = summonInline[JEncoder[F, head]].encode(ctx, src, elements.productElement(idx).asInstanceOf[head])
+        encodeProduct[F, tail](ctx, src, elements, idx + 1) + (field -> head)
 
   def iterator[T](p: T) = p.asInstanceOf[Product].productIterator
 
   inline def derived[F[_]: Sync, T](using m: Mirror.ProductOf[T]): JEncoder[F, T] =
     new JEncoder[F, T]:
       def encode(ctx: EvaluationContext[F], src: Source, t: T) =
-        val values = iterator(t).zip(summonAll[F, m.MirroredElemTypes]).map { (t, _e) =>
-          val e = _e // need a stable path
-          e.encode(ctx, src, t.asInstanceOf[e._T])
-        }
-        EvaluatedJValue.JObject.static[F](
+        val members = encodeProduct[F, Tuple.Zip[m.MirroredElemLabels, m.MirroredElemTypes]](
+          ctx,
           src,
-          getLabels[m.MirroredElemLabels]
-            .zip(values)
-            .toMap
+          t.asInstanceOf[Product],
+          0,
         )
+        EvaluatedJValue.JObject.static[F](src, members)

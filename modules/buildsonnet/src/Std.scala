@@ -306,13 +306,13 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
             val lineNum = src match
             case r: Source.Range => ":" + file.getLineCol(r.start)._1
             case _ => ""
-            ConsoleLogger[F].info(s"TRACE: ${file.path}$lineNum: ${str}")
+            ConsoleLogger[F].stdout(s"TRACE: ${file.path}$lineNum: ${str}")
             rest
           }
         },
         "print" -> function2(Arg.str, Arg.rest(jnull)) { (rawStr, rest) =>
           ctx.singleLinePrint(rawStr).map { str =>
-            ConsoleLogger[F].info(str)
+            ConsoleLogger[F].stdout(str)
             if rest eq jnull then rawStr
             else rest
           }
@@ -419,7 +419,7 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
               ctx.expect[EvaluatedJValue.JString[F]](version),
             ).mapN {
               (org, name, version) => EvaluatedJValue.JObject.static(stdSrc, Map(
-                "org" -> org,
+                "organization" -> org,
                 "name" -> name,
                 "version" -> version,
                 "type" -> EvaluatedJValue.JString(src, "java"),
@@ -476,7 +476,7 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
               ctx.expect[EvaluatedJValue.JString[F] | EvaluatedJValue.JNull[F]](crossVersion),
             ).mapN {
               (org, name, version, crossVersion) => EvaluatedJValue.JObject.static(stdSrc, Map(
-                "org" -> org,
+                "organization" -> org,
                 "name" -> name,
                 "version" -> version,
                 "type" -> EvaluatedJValue.JString(src, "scala"),
@@ -484,6 +484,42 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
             }
           },
           "Project" -> scalaProject,
+          "resolveDeps" -> function2(Arg.deps, Arg.withSources(jfalse)) { (deps, withSources) =>
+            import coursier.{Classifier, Resolve, Type}
+            import coursier.cache.FileCache
+            import coursier.cache.loggers.RefreshLogger
+            import CoursierCatsInterop.given
+            (
+              ctx.decode[List[CoursierDependency]](deps),
+              ctx.expect[Boolean](withSources),
+            ).tupled.flatMap { (deps, withSources) =>
+              val logger = RefreshLogger.create(ConsoleLogger[F].outStream)
+              val cache = FileCache[F]()
+              val base =
+                Resolve[F](cache)
+                  .withDependencies(deps.map(_.toDependency))
+                  //.withClasspathOrder(true)
+              val withOptions =
+                if withSources then
+                  base
+                    //.addClassifiers(Classifier.sources)
+                    //.addArtifactTypes(Type.source)
+                else
+                  base
+              withOptions
+                .io
+                .map { resolution =>
+                  val dependencies = resolution.orderedDependencies.map { dependency =>
+                    Map(
+                      "name" -> dependency.module.name.value,
+                      "organization" -> dependency.module.orgName,
+                      "version" -> dependency.version,
+                    )
+                  }.toList
+                  ctx.encode(src, dependencies)
+                }
+            }
+          },
           "fetchDeps" -> function2(Arg.deps, Arg.withSources(jfalse)) { (deps, withSources) =>
             import coursier.{Classifier, Fetch, Type}
             import coursier.cache.FileCache
@@ -507,8 +543,21 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
                 else
                   base
               withOptions
-                .io
-                .map(files => ctx.encode(src, files.map(_.toPath.normalize.toString)))
+                .ioResult
+                .map { result =>
+                  val artifacts = result
+                    .detailedArtifacts
+                    .map { (dependency, publication, artifact, file) =>
+                      Map(
+                        "name" -> dependency.module.name.value,
+                        "organization" -> dependency.module.orgName,
+                        "version" -> dependency.version,
+                        "path" -> file.toString
+                      )
+                    }
+                    .toList
+                  ctx.encode(src, artifacts)
+                }
             }
           },
           "compile" -> function1(Arg.project) { (project) =>
@@ -516,10 +565,8 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
               project <- ctx.decode[BloopConfig.RecursiveProject](project)
               _ <- BloopConfig.write(ctx, project)
               bloopServer <- bloopServer
-              either <- bloopServer.compile(project.name)
-              result <- either match
-                case Right(_) => EvaluatedJValue.JNull[F](src).pure
-                case Left(msg) => ctx.error(src, msg)
+              response <- bloopServer.compile(project.name)
+              result <- response.foldValue(ctx.error(src, _))(_ => EvaluatedJValue.JNull[F](src).pure)
             yield
               result
           },
@@ -540,15 +587,37 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
               for
                 _ <- BloopConfig.write(ctx, project)
                 bloopServer <- bloopServer
-                either <- bloopServer.run(project.name, ch.epfl.scala.bsp.ScalaMainClass(
+                response <- bloopServer.run(project.name, ch.epfl.scala.bsp.ScalaMainClass(
                   `class` = main,
                   arguments = args,
                   environmentVariables = environmentVariables,
                   jvmOptions = jvmOptions,
                 ))
-                result <- either match
-                  case Right(_) => EvaluatedJValue.JNull[F](src).pure
-                  case Left(msg) => ctx.error(src, msg)
+                result <- response.foldValue(ctx.error(src, _))(_ => EvaluatedJValue.JNull[F](src).pure)
+              yield
+                result
+            }
+          },
+          "test" -> function4(
+            Arg.project,
+            Arg.args(jnull),
+            Arg.classes(jnull),
+            Arg.jvmOptions(jnull),
+          ) { (project, args, classes, jvmOptions) =>
+            (
+              ctx.decode[BloopConfig.RecursiveProject](project),
+              ctx.decode[Option[List[String]]](args),
+              ctx.decode[Option[List[ch.epfl.scala.bsp.ScalaTestClassesItem]]](classes),
+              ctx.decode[Option[List[String]]](jvmOptions),
+            ).tupled.flatMap { (project, args, classes, jvmOptions) =>
+              for
+                _ <- BloopConfig.write(ctx, project)
+                bloopServer <- bloopServer
+                response <- bloopServer.test(project.name, args, ch.epfl.scala.bsp.ScalaTestParams(
+                  testClasses = classes,
+                  jvmOptions = jvmOptions,
+                ))
+                result <- response.foldValue(ctx.error(src, _))(_ => EvaluatedJValue.JNull[F](src).pure)
               yield
                 result
             }
@@ -558,17 +627,16 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
               project <- ctx.decode[BloopConfig.RecursiveProject](project)
               _ <- BloopConfig.write(ctx, project)
               bloopServer <- bloopServer
-              either <- bloopServer.jvmRunEnvironment(project.name)
-              result <- either match
-                case Right(env) =>
-                  val classpath = env.items.head.classpath
-                  val arr = Array.ofDim[EvaluatedJValue.JString[F]](classpath.size)
-                  classpath.zipWithIndex.foreach { (item, i) =>
-                    val file = java.nio.file.Paths.get(new java.net.URI(item))
-                    arr(i) = EvaluatedJValue.JString(src, file.toString)
-                  }
-                  EvaluatedJValue.JArray(src, IArray.unsafeFromArray(arr)).pure
-                case Left(msg) => ctx.error(src, msg)
+              response <- bloopServer.jvmRunEnvironment(project.name)
+              result <- response.foldValue(ctx.error(src, _)) { env =>
+                val classpath = env.items.head.classpath
+                val arr = Array.ofDim[EvaluatedJValue.JString[F]](classpath.size)
+                classpath.zipWithIndex.foreach { (item, i) =>
+                  val file = java.nio.file.Paths.get(new java.net.URI(item))
+                  arr(i) = EvaluatedJValue.JString(src, file.toString)
+                }
+                EvaluatedJValue.JArray(src, IArray.unsafeFromArray(arr)).pure
+              }
             yield
               result
           },
@@ -577,16 +645,27 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
               project <- ctx.decode[BloopConfig.RecursiveProject](project)
               _ <- BloopConfig.write(ctx, project)
               bloopServer <- bloopServer
-              either <- bloopServer.mainClasses(project.name)
-              result <- either match
-                case Right(env) =>
-                  val classes = env.items.head.classes
-                  val arr = Array.ofDim[EvaluatedJValue.JString[F]](classes.size)
-                  classes.zipWithIndex.foreach { (item, i) =>
-                    arr(i) = EvaluatedJValue.JString(src, item.`class`)
-                  }
-                  EvaluatedJValue.JArray(src, IArray.unsafeFromArray(arr)).pure
-                case Left(msg) => ctx.error(src, msg)
+              response <- bloopServer.mainClasses(project.name)
+              result <- response.foldValue(ctx.error(src, _)) { env =>
+                val classes = env.items.head.classes
+                val arr = Array.ofDim[EvaluatedJValue.JString[F]](classes.size)
+                classes.zipWithIndex.foreach { (item, i) =>
+                  arr(i) = EvaluatedJValue.JString(src, item.`class`)
+                }
+                EvaluatedJValue.JArray(src, IArray.unsafeFromArray(arr)).pure
+              }
+            yield
+              result
+          },
+          "testClasses" -> function1(Arg.project) { project =>
+            for
+              project <- ctx.decode[BloopConfig.RecursiveProject](project)
+              _ <- BloopConfig.write(ctx, project)
+              bloopServer <- bloopServer
+              response <- bloopServer.testClasses(project.name)
+              result <- response.foldValue(ctx.error(src, _)) { env =>
+                ctx.encode(src, env).pure
+              }
             yield
               result
           },
@@ -597,7 +676,7 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
 
 object Std:
   private val stdSrc = Source.Generated(SourceFile.std)
-  private case class CtxImpl[F[_]](
+  private case class CtxImpl[F[_]: Logger](
     self: Option[EvaluatedJValue.JObject[F]],
     `super`: Option[EvaluatedJValue.JObject[F]],
     scopeArr: Array[(String, LazyValue[F])],
@@ -605,8 +684,8 @@ object Std:
   )(using MonadError[F, Throwable]) extends EvaluationContext[F]:
     lazy val scope: Map[String, LazyValue[F]] = scopeArr.toMap
     def error[T](src: Source, msg: String): F[T] =
-      EvaluationError(
-        SourceFile.empty, src, msg, List.empty).raiseError
+      val error = EvaluationError(SourceFile.empty, src, msg, List.empty)
+      Logger[F].error(error)(msg) *> error.raiseError
 
     def lookup(id: String): Option[LazyValue[F]] =
       scope.get(id)
@@ -627,7 +706,7 @@ object Std:
     def importStr(src: Source, file: String): F[EvaluatedJValue.JString[F]] = ???
 
 
-  def ctx[F[_]](workspaceDir: Path)(using MonadError[F, Throwable]): EvaluationContext[F] =
+  def ctx[F[_]: Logger](workspaceDir: Path)(using MonadError[F, Throwable]): EvaluationContext[F] =
     CtxImpl(
       None,
       None,

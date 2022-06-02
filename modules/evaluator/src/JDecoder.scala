@@ -106,6 +106,12 @@ object JDecoder:
       yield
         decoded.toMap
 
+  given optionDecoder[F[_]: Monad, T](using => JDecoder[F, T]): JDecoder[F, Option[T]] with
+    def decode(ctx: EvaluationContext[F], path: JDecoderPath, expr: EvaluatedJValue[F]): F[Option[T]] =
+      expr match
+      case _: EvaluatedJValue.JNull[F] => None.pure
+      case other => JDecoder[F, T].decode(ctx, path, other).map(Some(_))
+
   transparent inline def decodeProduct[F[_]: Monad, T <: Product]: JObjectDecoder[F, T] =
     inline erasedValue[T] match
       case _: EmptyTuple =>

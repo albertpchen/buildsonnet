@@ -10,7 +10,14 @@ import cats.syntax.all.given
 import ch.epfl.scala.{bsp => bsp4s}
 import ch.epfl.scala.bsp.endpoints
 
-import jsonrpc4cats.{LowLevelMessageWriter, RpcClient, RpcFailure, RpcSuccess, Services}
+import jsonrpc4cats.{
+  LowLevelMessageWriter,
+  RpcClient,
+  RpcFailure,
+  RpcResponse,
+  RpcSuccess,
+  Services,
+}
 
 import org.typelevel.log4cats.Logger
 
@@ -18,11 +25,12 @@ import scala.concurrent.duration.{FiniteDuration, given}
 
 
 sealed trait BloopServer[F[_]]:
-  def compile(targetId: String): F[Either[String, bsp4s.CompileResult]]
-  def jvmRunEnvironment(targetId: String): F[Either[String, bsp4s.JvmRunEnvironmentResult]]
-  def run(targetId: String, scalaMainClass: bsp4s.ScalaMainClass): F[Either[String, bsp4s.RunResult]]
-  def mainClasses(targetId: String): F[Either[String, bsp4s.ScalaMainClassesResult]]
-  // def test(targetId: String): F[Either[String, bsp4s.TestResult]]
+  def compile(targetId: String): F[RpcResponse[bsp4s.CompileResult]]
+  def jvmRunEnvironment(targetId: String): F[RpcResponse[bsp4s.JvmRunEnvironmentResult]]
+  def run(targetId: String, scalaMainClass: bsp4s.ScalaMainClass): F[RpcResponse[bsp4s.RunResult]]
+  def mainClasses(targetId: String): F[RpcResponse[bsp4s.ScalaMainClassesResult]]
+  def testClasses(targetId: String): F[RpcResponse[bsp4s.ScalaTestClassesResult]]
+  def test(targetId: String, arguments: Option[List[String]], testParams: bsp4s.ScalaTestParams): F[RpcResponse[bsp4s.TestResult]]
 
 object BloopServer:
   /** Initializes a bloop build server
@@ -92,71 +100,67 @@ object BloopServer:
 
   private def makeServer[F[_]: Monad: Logger](workspace: java.nio.file.Path, client: RpcClient[F]) =
     new BloopServer[F] {
-      def compile(targetId: String): F[Either[String, bsp4s.CompileResult]] =
+      def compile(targetId: String): F[RpcResponse[bsp4s.CompileResult]] =
         val params = bsp4s.CompileParams(
           List(bsp4s.BuildTargetIdentifier(bsp4s.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
             None,
             None,
         )
-        for
-          _ <- Logger[F].info("sending compile request")
-          response <- client.request(endpoints.BuildTarget.compile, params)
-        yield
-          response match
-            case RpcSuccess(value, _) => Right(value)
-            case RpcFailure(methodName, underlying) => Left(RpcFailure.toMsg(methodName, underlying))
+        Logger[F].info("sending compile request") *>
+          client.request(endpoints.BuildTarget.compile, params)
 
-      def jvmRunEnvironment(targetId: String): F[Either[String, bsp4s.JvmRunEnvironmentResult]] =
-        compile(targetId).flatMap {
-          case Left(msg) => Left(msg).pure
-          case Right(compileResult) =>
-            compileResult.statusCode match
-              case bsp4s.StatusCode.Ok =>
-                val params = bsp4s.JvmRunEnvironmentParams(
-                  List(bsp4s.BuildTargetIdentifier(bsp4s.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
-                  None
-                )
-                client.request(endpoints.BuildTarget.jvmRunEnvironment, params).map {
-                  case RpcSuccess(value, _) => Right(value)
-                  case RpcFailure(methodName, underlying) => Left(RpcFailure.toMsg(methodName, underlying))
-                }
-              case bsp4s.StatusCode.Error =>
-                Left(s"compilation for '$targetId' was cancelled").pure
-              case  bsp4s.StatusCode.Cancelled =>
-                Left(s"compilation for '$targetId' failed").pure
-        }
+      def jvmRunEnvironment(targetId: String): F[RpcResponse[bsp4s.JvmRunEnvironmentResult]] =
+        val params = bsp4s.JvmRunEnvironmentParams(
+          List(bsp4s.BuildTargetIdentifier(bsp4s.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
+          None
+        )
+        Logger[F].info("sending jvm run environment request") *>
+          client.request(endpoints.BuildTarget.jvmRunEnvironment, params)
 
-      def run(targetId: String, scalaMainClass: bsp4s.ScalaMainClass): F[Either[String, bsp4s.RunResult]] =
-        compile(targetId).flatMap {
-          case Left(msg) => Left(msg).pure
-          case Right(compileResult) =>
-            compileResult.statusCode match
-              case bsp4s.StatusCode.Ok =>
-                val params = bsp4s.RunParams(
-                  bsp4s.BuildTargetIdentifier(
-                    bsp4s.Uri(new java.net.URI(s"file://$workspace/?id=$targetId"))),
-                  originId = None,
-                  arguments = None,
-                  dataKind = Some(bsp4s.RunParamsDataKind.ScalaMainClass),
-                  data = Some(jsonrpc4cats.RawJson.toJson(scalaMainClass)),
-                )
-                client.request(endpoints.BuildTarget.run, params).map {
-                  case RpcSuccess(value, _) => Right(value)
-                  case RpcFailure(methodName, underlying) => Left(RpcFailure.toMsg(methodName, underlying))
-                }
-              case bsp4s.StatusCode.Error =>
-                Left(s"compilation for '$targetId' was cancelled").pure
-              case  bsp4s.StatusCode.Cancelled =>
-                Left(s"compilation for '$targetId' failed").pure
-        }
+      def run(
+        targetId: String,
+        scalaMainClass: bsp4s.ScalaMainClass,
+      ): F[RpcResponse[bsp4s.RunResult]] =
+        val params = bsp4s.RunParams(
+          bsp4s.BuildTargetIdentifier(
+            bsp4s.Uri(new java.net.URI(s"file://$workspace/?id=$targetId"))),
+          originId = None,
+          arguments = None,
+          dataKind = Some(bsp4s.RunParamsDataKind.ScalaMainClass),
+          data = Some(jsonrpc4cats.RawJson.toJson(scalaMainClass)),
+        )
+        Logger[F].info("sending run request") *>
+          client.request(endpoints.BuildTarget.run, params)
 
-      def mainClasses(targetId: String): F[Either[String, bsp4s.ScalaMainClassesResult]] =
+      def mainClasses(targetId: String): F[RpcResponse[bsp4s.ScalaMainClassesResult]] =
         val params = bsp4s.ScalaMainClassesParams(
           List(bsp4s.BuildTargetIdentifier(bsp4s.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
           originId = None,
         )
-        client.request(endpoints.BuildTarget.scalaMainClasses, params).map {
-          case RpcSuccess(value, _) => Right(value)
-          case RpcFailure(methodName, underlying) => Left(RpcFailure.toMsg(methodName, underlying))
-        }
+        Logger[F].info("sending main classes request") *>
+          client.request(endpoints.BuildTarget.scalaMainClasses, params)
+
+      def testClasses(targetId: String): F[RpcResponse[bsp4s.ScalaTestClassesResult]] =
+        val params = bsp4s.ScalaTestClassesParams(
+          List(bsp4s.BuildTargetIdentifier(bsp4s.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
+          originId = None,
+        )
+        Logger[F].info("sending test classes request") *>
+          client.request(endpoints.BuildTarget.scalaTestClasses, params)
+
+      def test(
+        targetId: String,
+        arguments: Option[List[String]],
+        testParams: bsp4s.ScalaTestParams,
+      ): F[RpcResponse[bsp4s.TestResult]] =
+        val params = bsp4s.TestParams(
+          List(bsp4s.BuildTargetIdentifier(
+            bsp4s.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
+          originId = None,
+          arguments = arguments,
+          dataKind = Some(bsp4s.TestParamsDataKind.ScalaTest),
+          data = Some(jsonrpc4cats.RawJson.toJson(testParams)),
+        )
+        Logger[F].info("sending test request") *>
+          client.request(endpoints.BuildTarget.test, params)
     }

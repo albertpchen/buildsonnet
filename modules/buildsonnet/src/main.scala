@@ -123,7 +123,7 @@ object Buildsonnet extends IOApp:
                   IO.raiseError(new CmdlineError(s"build command $buildCommand is not a function"))
                 case e => e.pure[IO]
               prettyResult <- ctx.prettyPrint(result)
-              _ <- ConsoleLogger[IO].info(prettyResult)
+              _ <- ConsoleLogger[IO].stdout(prettyResult)
             yield ()
           }
         yield ExitCode.Success

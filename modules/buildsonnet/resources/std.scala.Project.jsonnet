@@ -56,7 +56,7 @@ local getScalacConfig(project) =
         };
 
 {
-  withSources: false,
+  withSources: true,
   dependencies: [],
   libraries: [],
   platform: 'jvm',
@@ -83,12 +83,13 @@ local getScalacConfig(project) =
   bloopConfig: {
     assert scalacConfig != null: "scala version must start with one of [3.x.x, 2.13.x, 2.12.x, 2.11.x]",
     local bloopConfig = self,
+    local flattenedLibraryArtifacts = std.scala.fetchDeps(base.flattenedLibraries),
     name: base.name,
     directory: ".",
     workspaceDir: workspace,
     sources: base.sources,
     dependencies: [p.bloopConfig for p in base.dependencies],
-    classpath: base.dependencyClasspath + std.scala.fetchDeps(base.flattenedLibraries),
+    classpath: base.dependencyClasspath + [artifact.path for artifact in flattenedLibraryArtifacts],
     out: ".bloop/" + bloopConfig.name,
     classesDir: bloopConfig.out + "/classes",
     resources: std.get(base, "resources", default=[]),
@@ -97,7 +98,7 @@ local getScalacConfig(project) =
       name: "scala-compiler",
       version: base.scalaVersion,
       options: scalacConfig.args + std.get(base, 'scalacOptions', default=[]),
-      jars: scalacConfig.compilerJars,
+      jars: [artifact.path for artifact in scalacConfig.compilerJars],
       analysis: bloopConfig.out + "/inc_compile_3.zip",
       setup: {
         "order": "mixed",
@@ -110,7 +111,19 @@ local getScalacConfig(project) =
     },
     java: { options: [ ] },
     test: {
-      frameworks: [{ names: ["munit.Framework"] }],
+      frameworks: [
+        { names: [framework] } for framework in [
+          "org.scalacheck.ScalaCheckFramework",
+          "org.specs2.runner.Specs2Framework",
+          "org.specs2.runner.SpecsFramework",
+          "org.specs.runner.SpecsFramework",
+          "org.scalatest.tools.Framework",
+          "org.scalatest.tools.ScalaTestFramework",
+          "com.novocode.junit.JUnitFramework",
+          "weaver.framework.CatsEffect",
+          "munit.Framework",
+        ] + std.get(base, 'testFrameworks', default=[])
+      ],
       options: {
         excludes: [ ],
         arguments: [ ]
@@ -145,15 +158,15 @@ local getScalacConfig(project) =
     [if base.withSources then "resolution"]: {
       modules: [
         {
-          name: base.name,
-          organization: "",
-          version: "",
+          name: artifact.name,
+          organization: artifact.organization,
+          version: artifact.version,
           artifacts: [{
-            name: path,
-            classifier: "sources",
-            path: path,
-          } for path in std.scala.fetchDeps(base.flattenedLibraries, withSources=true)],
+            name: artifact.name,
+            path: artifact.path,
+          }],
         }
+        for artifact in std.scala.fetchDeps(base.flattenedLibraries, withSources=true)
       ]
     },
   },
@@ -199,4 +212,9 @@ local getScalacConfig(project) =
       },
       inputFiles: []
     }),
+  test(args)::
+    std.scala.test(
+      project=self.bloopConfig,
+      args=args,
+    ),
 }
