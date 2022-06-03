@@ -7,14 +7,14 @@ import cats.effect.syntax.all.given
 import cats.syntax.all.given
 import cats.instances.all.given
 
-import buildsonnet.ast.{JParamList, JValue, Source, SourceFile}
+import buildsonnet.ast.{JParamList, JValue, Parser, Source, SourceFile}
 import buildsonnet.evaluator.{EvaluationContext, EvaluatedJValue, EvaluationError, LazyValue, LazyObjectValue, eval}
 import buildsonnet.evaluator.given Traverse[Iterable]
 import buildsonnet.logger.ConsoleLogger
 import buildsonnet.job.{JobCache, JobDescription, SQLiteJobCache, JobRunner}
 import buildsonnet.bsp.{SocketConnection, BloopServer}
 
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, Path, Paths}
 
 import org.typelevel.log4cats.Logger
 
@@ -328,7 +328,7 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
             .flatMap { (pathName, contents) =>
               val path =
                 if pathName.startsWith("/") then
-                  java.nio.file.Paths.get(pathName).normalize
+                  Paths.get(pathName).normalize
                 else
                   ctx.workspaceDir.resolve(pathName).normalize
               val parent = path.getParent
@@ -351,7 +351,7 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
             import collection.JavaConverters.asScalaIteratorConverter
             val dirPath =
               if dirName.startsWith("/") then
-                java.nio.file.Paths.get(dirName).normalize
+                Paths.get(dirName).normalize
               else
                 ctx.workspaceDir.resolve(dirName).normalize
             if !java.nio.file.Files.exists(dirPath) then
@@ -632,7 +632,7 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
                 val classpath = env.items.head.classpath
                 val arr = Array.ofDim[EvaluatedJValue.JString[F]](classpath.size)
                 classpath.zipWithIndex.foreach { (item, i) =>
-                  val file = java.nio.file.Paths.get(new java.net.URI(item))
+                  val file = Paths.get(new java.net.URI(item))
                   arr(i) = EvaluatedJValue.JString(src, file.toString)
                 }
                 EvaluatedJValue.JArray(src, IArray.unsafeFromArray(arr)).pure
@@ -676,11 +676,14 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
 
 object Std:
   private val stdSrc = Source.Generated(SourceFile.std)
-  private case class CtxImpl[F[_]: Logger](
+  private case class CtxImpl[F[_]: Async: Parallel: ConsoleLogger: Logger](
+    file: SourceFile,
     self: Option[EvaluatedJValue.JObject[F]],
     `super`: Option[EvaluatedJValue.JObject[F]],
     scopeArr: Array[(String, LazyValue[F])],
     val workspaceDir: Path,
+    importCtx: CtxImpl[F],
+    importCache: Ref[F, Map[Path, EvaluatedJValue[F]]],
   )(using MonadError[F, Throwable]) extends EvaluationContext[F]:
     lazy val scope: Map[String, LazyValue[F]] = scopeArr.toMap
     def error[T](src: Source, msg: String): F[T] =
@@ -690,29 +693,97 @@ object Std:
     def lookup(id: String): Option[LazyValue[F]] =
       scope.get(id)
 
-    def bind(id: String, value: LazyValue[F]): EvaluationContext[F] =
+    def bind(id: String, value: LazyValue[F]): CtxImpl[F] =
       this.copy(scopeArr = scopeArr :+ (id -> value))
 
-    def bind(locals: List[(String, LazyValue[F])]): EvaluationContext[F] =
+    def bind(locals: List[(String, LazyValue[F])]): CtxImpl[F] =
       this.copy(scopeArr = scopeArr :++ locals)
 
-    def withSelf(obj: EvaluatedJValue.JObject[F]): EvaluationContext[F] =
+    def withSelf(obj: EvaluatedJValue.JObject[F]): CtxImpl[F] =
       this.copy(self = Some(obj))
 
-    def withSuper(obj: Option[EvaluatedJValue.JObject[F]]): EvaluationContext[F] =
+    def withSuper(obj: Option[EvaluatedJValue.JObject[F]]): CtxImpl[F] =
       this.copy(`super` = obj)
 
-    def `import`(src: Source, file: String): F[EvaluatedJValue[F]] = ???
-    def importStr(src: Source, file: String): F[EvaluatedJValue.JString[F]] = ???
+    def `import`(src: Source, filename: String): F[EvaluatedJValue[F]] =
+      val currFileParent = Paths.get(file.path).getParent
+      val importFile =
+        if currFileParent eq null then
+          Paths.get(filename)
+        else
+          currFileParent.resolve(filename)
+      for
+        _ <- if importFile == currFileParent then
+          error(src, s"file $importFile imports itself")
+        else
+          ().pure
+        cache <- importCache.get
+        result <- cache.get(importFile) match
+        case Some(cached) => cached.pure
+        case None =>
+          Sync[F].defer {
+            val source = scala.io.Source.fromFile(importFile.toFile).getLines.mkString("\n")
+            val srcFile = SourceFile(importFile.toString, source)
+            Parser(srcFile).parseFile.fold(
+              error => {
+                val offset = error.expected.map(_.offset).toList.max
+                val (line, col) = srcFile.getLineCol(offset)
+                this.error(src, s"syntax error at ${Console.UNDERLINED}${srcFile.path}${Console.RESET}:$line:$col")
+              },
+              ast => {
+                val file = SourceFile(importFile.toString, source)
+                eval(importCtx.copy(file = file))(ast).flatMap { value =>
+                  importCache.update(_ + (importFile -> value)).as(value)
+                }
+              },
+            )
+          }
+      yield
+        result
+
+    def importStr(src: Source, filename: String): F[EvaluatedJValue.JString[F]] =
+      for
+        importStrFile <- Sync[F].delay {
+          val currFile = Paths.get(file.path)
+          currFile.resolve(filename).normalize()
+        }
+        contents <- Sync[F].delay(scala.io.Source.fromFile(importStrFile.toFile).getLines.mkString("\n"))
+      yield
+        EvaluatedJValue.JString(src, contents)
 
 
-  def ctx[F[_]: Logger](workspaceDir: Path)(using MonadError[F, Throwable]): EvaluationContext[F] =
-    CtxImpl(
-      None,
-      None,
-      Array("workspace" -> LazyValue.strict(EvaluatedJValue.JString[F](stdSrc, workspaceDir.toString))),
-      workspaceDir,
-    )
+  def ctx[F[_]: Async: Parallel: ConsoleLogger: Logger](
+    workspaceDir: Path,
+    bloopPort: Int,
+    bloopVersion: String,
+  )(using MonadError[F, Throwable]): Resource[F, EvaluationContext[F]] =
+    Sync[[X] =>> Resource[F, X]].defer {
+      var importCtx: CtxImpl[F] = null
+      for
+        initCtx <- Resource.eval(ctxImpl[F](importCtx, workspaceDir))
+        result <- apply(initCtx, bloopPort, bloopVersion).flatMap { std =>
+          val ctx = initCtx.bind("std", LazyValue.strict(std))
+          Resource.eval(Sync[F].delay { importCtx = ctx }).as(ctx)
+        }
+      yield
+        result
+    }
+
+  private def ctxImpl[F[_]: Async: Parallel: ConsoleLogger: Logger](
+    importCtx: CtxImpl[F],
+    workspaceDir: Path,
+  )(using MonadError[F, Throwable]): F[CtxImpl[F]] =
+    Ref.of(Map.empty[Path, EvaluatedJValue[F]]).map { importCache =>
+      CtxImpl(
+        stdSrc.file,
+        None,
+        None,
+        Array("workspace" -> LazyValue.strict(EvaluatedJValue.JString[F](stdSrc, workspaceDir.toString))),
+        workspaceDir,
+        importCtx,
+        importCache,
+      )
+    }
 
   def writeImpl[F[_]: Sync](path: Path, contents: String): F[Path] =
     Sync[F].delay {
@@ -750,12 +821,14 @@ object Std:
 
   def apply[F[_]: Async: ConsoleLogger: Logger: Parallel](
     ctx: EvaluationContext[F],
+    bloopPort: Int,
+    bloopVersion: String,
   ): Resource[F, EvaluatedJValue.JObject[F]] =
     for
       jobCache <- SQLiteJobCache[F](ctx.workspaceDir)
       bloopServerEither <- lazyResource(SocketConnection.connectToLauncher[F](
-        bloopVersion = "1.5.0",
-        bloopPort = 8213,
+        bloopVersion = bloopVersion,
+        bloopPort = bloopPort,
         logStream = System.out,
       ).flatMap(BloopServer(ctx.workspaceDir, _, maxConcurrentServiceWorkers = 1)))
       bloopServer = bloopServerEither.flatMap {

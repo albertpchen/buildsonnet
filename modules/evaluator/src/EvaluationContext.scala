@@ -26,7 +26,7 @@ trait EvaluationContext[F[_]]:
   def importStr(src: Source, file: String): F[EvaluatedJValue.JString[F]]
 
   def workspaceDir: Path
-  def file: SourceFile = ???
+  def file: SourceFile
 
 object EvaluationContext:
   given theExpr[F[_]](using expr: EvaluatedJValue[F]): EvaluatedJValue[F] = expr

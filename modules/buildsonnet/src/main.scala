@@ -100,14 +100,8 @@ object Buildsonnet extends IOApp:
             .foldLeft(buildObject)(JValue.JGetField(Source.empty, _, _))
           workspaceDir = buildFile.getParent
           given ConsoleLogger[IO] = ConsoleLogger.default[IO]("buildsonnet")
-          ctxResource <- {
-            given Logger[IO] = Slf4jLogger.getLogger[IO]
-            val initCtx = Std.ctx[IO](workspaceDir)
-            Std(initCtx).map { std =>
-              initCtx.bind("std", LazyValue.strict(std))
-            }
-          }.pure[IO]
-          _ <- ctxResource.use { ctx =>
+          given Logger[IO] = Slf4jLogger.getLogger[IO]
+          _ <- Std.ctx[IO](workspaceDir, bloopPort, bloopVersion = "1.5.0").use { ctx =>
             for
               buildValue <- buildsonnet.evaluator.eval(ctx)(rootJValue)
               result <- buildValue match
