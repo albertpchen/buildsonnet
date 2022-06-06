@@ -175,6 +175,7 @@ local getScalacConfig(project) =
   classpathString:: std.join(":", [path for path in self.classpathPaths]),
   classpath:: std.print(self.classpathString),
   mainClasses:: std.print(std.scala.mainClasses(self.bloopConfig)),
+  testClasses:: std.scala.testClasses(self.bloopConfig),
   run(args)::
     if base.platform == 'jvm' then
       local len = std.length(args);

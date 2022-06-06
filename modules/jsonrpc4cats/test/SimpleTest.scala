@@ -17,8 +17,8 @@ import jsonrpc4cats.testprotocol.*
 import org.scalacheck.{Arbitrary, Gen}
 import org.typelevel.log4cats.{Logger => CatsLogger}
 
-import weaver.scalacheck.Checkers
 import weaver.{Expectations, SimpleIOSuite}
+import weaver.scalacheck.Checkers
 
 
 object SimpleTest extends SimpleIOSuite with Checkers:
