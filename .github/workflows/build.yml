@@ -1,5 +1,8 @@
 name: learn-github-actions
-on: [pull-request]
+on:
+  pull_request:
+    branches:    
+      - main
 jobs:
   build:
     runs-on: ${{ matrix.os }}
