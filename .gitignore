@@ -1,4 +1,8 @@
 **/target
+project/metals.sbt
+project/project
 .metals
 .bloop
 .bsp
+**/.buildsonnet.db
+**/build
