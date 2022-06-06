@@ -40,12 +40,9 @@ object EvaluationContext:
       case _: String => "string"
       case _: EvaluatedJValue.JNum[F] => "number"
       case _: Double => "double"
-      //case _: EvaluatedJValue.JJob[F] => "job"
-      //case _: EvaluatedJValue.JPath[F] => "path"
       case _: EvaluatedJValue.JArray[F] => "array"
       case _: EvaluatedJValue.JObject[F] => "object"
       case _: EvaluatedJValue.JFunction[F] => "function"
-      //case _: EvaluatedJValue.JFuture[F] => "future"
     }
     if types.size == 1 then
       types.head
@@ -62,12 +59,9 @@ object EvaluationContext:
     case _: EvaluatedJValue.JNull[F] => "null"
     case _: EvaluatedJValue.JString[F] => "string"
     case _: EvaluatedJValue.JNum[F] => "number"
-    //case _: EvaluatedJValue.JJob[F] => "job"
-    //case _: EvaluatedJValue.JPath[F] => "path"
     case _: EvaluatedJValue.JArray[F] => "array"
     case _: EvaluatedJValue.JObject[F] => "object"
     case _: EvaluatedJValue.JFunction[F] => "function"
-    //case _: EvaluatedJValue.JFuture[F] => "future"
 
   extension [F[_]: Monad](ctx: EvaluationContext[F])
     inline def decode[T: [X] =>> JDecoder[F, X]](expr: EvaluatedJValue[F]): F[T] =

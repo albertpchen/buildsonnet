@@ -18,21 +18,29 @@ object syntax:
         .asInstanceOf[FileTime]
 
     // TODO: return option instead? in case of non-existent path
-    def md5Hash: F[String] =
-      Sync[F].delay(md5HashUnsafe)
+    def md5Hash(charset: String): F[String] =
+      Sync[F].delay(md5HashUnsafe(charset))
 
-    def md5HashUnsafe: String =
-      val buffer = Array.ofDim[Byte](8192)
-      val md5 = MessageDigest.getInstance("MD5")
+    def md5HashUnsafe(charset: String): String =
+      val bytes = if path.toFile.isDirectory then
+        val md5 = MessageDigest.getInstance("MD5")
+        Files.walk(path)
+          .filter(Files.isRegularFile(_))
+          .forEach(path => md5.update(path.toString.getBytes(charset)))
+        md5.digest
+      else
+        val buffer = Array.ofDim[Byte](8192)
+        val md5 = MessageDigest.getInstance("MD5")
 
-      val dis = new DigestInputStream(Files.newInputStream(path), md5)
-      try
-        while dis.read(buffer) != -1 do ()
-        dis
-      finally
-        dis.close()
+        val dis = new DigestInputStream(Files.newInputStream(path), md5)
+        try
+          while dis.read(buffer) != -1 do ()
+          dis
+        finally
+          dis.close()
 
-      md5.digest.map("%02x".format(_)).mkString
+        md5.digest
+      bytes.map("%02x".format(_)).mkString
 
   extension (str: String)
     def md5Hash(charset: String): Array[Byte] =

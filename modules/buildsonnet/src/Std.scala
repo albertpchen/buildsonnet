@@ -7,6 +7,8 @@ import cats.effect.syntax.all.given
 import cats.syntax.all.given
 import cats.instances.all.given
 
+import ch.epfl.scala.{bsp => bsp4s}
+
 import buildsonnet.ast.{JParamList, JValue, Parser, Source, SourceFile}
 import buildsonnet.evaluator.{EvaluationContext, EvaluatedJValue, EvaluationError, LazyValue, LazyObjectValue, eval}
 import buildsonnet.evaluator.given Traverse[Iterable]
@@ -384,6 +386,11 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
             EvaluatedJValue.JBoolean(src, a.startsWith(b))
           }
         },
+        "endsWith" -> function2(Arg.a, Arg.b) { (a, b) =>
+          (ctx.expect[String](a), ctx.expect[String](b)).mapN { (a, b) =>
+            EvaluatedJValue.JBoolean(src, a.endsWith(b))
+          }
+        },
         "join" -> function2(Arg.sep, Arg.arr) { (sep, arr) =>
           (ctx.expect[String](sep), ctx.expect[EvaluatedJValue.JArray[F]](arr))
             .tupled
@@ -395,6 +402,12 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
                   .traverse(i => ctx.expect[String](arr.elements(i)))
                   .map(arr => EvaluatedJValue.JString(src, arr.mkString(sep)))
             }
+        },
+        "split" -> function2(Arg.str, Arg.c) { (str, c) =>
+          (ctx.expect[String](str), ctx.expect[String](c)).tupled.map { (str, c) =>
+            val arr = str.split(c).map(EvaluatedJValue.JString[F](src, _)).toArray
+            EvaluatedJValue.JArray(src, IArray.unsafeFromArray(arr))
+          }
         },
         "getenv" -> function1(Arg.varName) { (varName) =>
           ctx.expect[String](varName).flatMap { varName =>
@@ -627,6 +640,12 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
               project <- ctx.decode[BloopConfig.RecursiveProject](project)
               _ <- BloopConfig.write(ctx, project)
               bloopServer <- bloopServer
+              _ <- bloopServer.compile(project.name).flatMap(_.foldValue(ctx.error(src, _)) { compileResult =>
+                compileResult.statusCode match
+                  case bsp4s.StatusCode.Ok => ().pure
+                  case bsp4s.StatusCode.Error => ctx.error(src, s"compilation for '${project.name}' failed")
+                  case bsp4s.StatusCode.Cancelled => ctx.error(src, s"compilation for '${project.name}' was cancelled")
+              })
               response <- bloopServer.jvmRunEnvironment(project.name)
               result <- response.foldValue(ctx.error(src, _)) { env =>
                 val classpath = env.items.head.classpath
@@ -682,7 +701,7 @@ object Std:
     `super`: Option[EvaluatedJValue.JObject[F]],
     scopeArr: Array[(String, LazyValue[F])],
     val workspaceDir: Path,
-    importCtx: CtxImpl[F],
+    importCtx: F[CtxImpl[F]],
     importCache: Ref[F, Map[Path, EvaluatedJValue[F]]],
   )(using MonadError[F, Throwable]) extends EvaluationContext[F]:
     lazy val scope: Map[String, LazyValue[F]] = scopeArr.toMap
@@ -706,17 +725,21 @@ object Std:
       this.copy(`super` = obj)
 
     def `import`(src: Source, filename: String): F[EvaluatedJValue[F]] =
-      val currFileParent = Paths.get(file.path).getParent
-      val importFile =
-        if currFileParent eq null then
-          Paths.get(filename)
-        else
-          currFileParent.resolve(filename)
       for
-        _ <- if importFile == currFileParent then
-          error(src, s"file $importFile imports itself")
-        else
-          ().pure
+        importFile <- Sync[F].defer {
+          val currFileParent = workspaceDir.resolve(file.path).getParent
+          val importFile =
+            if currFileParent eq null then
+              Paths.get(filename)
+            else
+              currFileParent.resolve(filename)
+          if importFile == currFileParent then
+            error(src, s"file $importFile imports itself")
+          else if !importFile.toFile.exists then
+            error(src, s"imported file does not exist $importFile")
+          else
+            importFile.pure
+        }
         cache <- importCache.get
         result <- cache.get(importFile) match
         case Some(cached) => cached.pure
@@ -730,7 +753,7 @@ object Std:
                 val (line, col) = srcFile.getLineCol(offset)
                 this.error(src, s"syntax error at ${Console.UNDERLINED}${srcFile.path}${Console.RESET}:$line:$col")
               },
-              ast => {
+              ast => importCtx.flatMap { importCtx =>
                 val file = SourceFile(importFile.toString, source)
                 eval(importCtx.copy(file = file))(ast).flatMap { value =>
                   importCache.update(_ + (importFile -> value)).as(value)
@@ -756,11 +779,12 @@ object Std:
     workspaceDir: Path,
     bloopPort: Int,
     bloopVersion: String,
+    file: SourceFile,
   )(using MonadError[F, Throwable]): Resource[F, EvaluationContext[F]] =
     Sync[[X] =>> Resource[F, X]].defer {
       var importCtx: CtxImpl[F] = null
       for
-        initCtx <- Resource.eval(ctxImpl[F](importCtx, workspaceDir))
+        initCtx <- Resource.eval(ctxImpl[F](Sync[F].delay(importCtx), workspaceDir, file))
         result <- apply(initCtx, bloopPort, bloopVersion).flatMap { std =>
           val ctx = initCtx.bind("std", LazyValue.strict(std))
           Resource.eval(Sync[F].delay { importCtx = ctx }).as(ctx)
@@ -770,12 +794,13 @@ object Std:
     }
 
   private def ctxImpl[F[_]: Async: Parallel: ConsoleLogger: Logger](
-    importCtx: CtxImpl[F],
+    importCtx: F[CtxImpl[F]],
     workspaceDir: Path,
+    file: SourceFile,
   )(using MonadError[F, Throwable]): F[CtxImpl[F]] =
     Ref.of(Map.empty[Path, EvaluatedJValue[F]]).map { importCache =>
       CtxImpl(
-        stdSrc.file,
+        file,
         None,
         None,
         Array("workspace" -> LazyValue.strict(EvaluatedJValue.JString[F](stdSrc, workspaceDir.toString))),

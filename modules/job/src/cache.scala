@@ -165,10 +165,8 @@ object SQLiteJobCache:
           val nameHash = input.toString.md5Hash(charset)
           md5.update(nameHash)
           md5.update(contentHash.md5Hash(charset))
-          println(s"SLDFJLKJ: $contentHash")
         }
         val res = md5.digest.map("%02x".format(_)).mkString
-        println(s"INPUT SINGATURE $res")
         res
       }
     yield

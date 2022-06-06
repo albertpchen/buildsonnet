@@ -34,10 +34,21 @@ object Options:
     help = "the port number to start the bloop server on",
   ).withDefault(8212)
 
+  val logToConsole = Opts.flag(
+    "log-to-console",
+    help = "print logs to console",
+  ).orFalse
+
+  val logToFile = Opts.option[Path](
+    "log-to-file",
+    metavar = "file",
+    help = "write logs to file",
+  ).orNone
+
   val runCommand = Opts.subcommand(Command(
     name = "run",
     header = "run a build command defined in the root build.jsonnet file",
-  )((directory, bloopPort).tupled))
+  )((directory, bloopPort, logToConsole, logToFile).tupled))
 
 object Buildsonnet extends IOApp:
   override def run(args: List[String]): IO[ExitCode] =
@@ -65,7 +76,7 @@ object Buildsonnet extends IOApp:
   final case class CmdlineError(message: String) extends Exception(message)
 
   def main(interpreted: List[String], uninterpreted: List[String]): Opts[IO[ExitCode]] =
-    Options.runCommand.map { (directory, bloopPort) =>
+    Options.runCommand.map { (directory, bloopPort, logToConsole, logToFile) =>
       var buildFile: Path = null
       var currPath = directory.toAbsolutePath
       while currPath != null && buildFile == null do
@@ -82,8 +93,9 @@ object Buildsonnet extends IOApp:
           buildFile <-
             if buildFile == null then IO.raiseError(new CmdlineError("could not find build.jsonnet file in current directory or in any parent directory"))
             else buildFile.pure[IO]
+          workspaceDir = buildFile.getParent
           source = scala.io.Source.fromFile(buildFile.toFile).getLines.mkString("\n")
-          sourceFile = SourceFile(buildFile.toString, source)
+          sourceFile = SourceFile(workspaceDir.relativize(buildFile).toString, source)
           buildObject <- Parser(sourceFile).parseFile.fold(
             { error =>
               import cats.syntax.all.catsSyntaxOrder
@@ -98,28 +110,30 @@ object Buildsonnet extends IOApp:
           rootJValue = buildCommand
             .split('.')
             .foldLeft(buildObject)(JValue.JGetField(Source.empty, _, _))
-          workspaceDir = buildFile.getParent
           given ConsoleLogger[IO] = ConsoleLogger.default[IO]("buildsonnet")
-          given Logger[IO] = Slf4jLogger.getLogger[IO]
-          _ <- Std.ctx[IO](workspaceDir, bloopPort, bloopVersion = "1.5.0").use { ctx =>
+          _ <- {
             for
-              buildValue <- buildsonnet.evaluator.eval(ctx)(rootJValue)
-              result <- buildValue match
-                case fn: EvaluatedJValue.JFunction[IO] =>
-                  val params = EvaluatedJValue.JFunctionParameters[IO](
-                    fn.src,
-                    ctx,
-                    Seq(EvaluatedJValue.JArray(Source.empty, IArray.unsafeFromArray(buildArgs.map(EvaluatedJValue.JString(Source.empty, _)).toArray))),
-                    Seq.empty,
-                  )
-                  fn.fn(params)
-                case e if buildArgs.nonEmpty =>
-                  IO.raiseError(new CmdlineError(s"build command $buildCommand is not a function"))
-                case e => e.pure[IO]
-              prettyResult <- ctx.prettyPrint(result)
-              _ <- ConsoleLogger[IO].stdout(prettyResult)
-            yield ()
-          }
+              given Logger[IO] <- LoggerConfiguration(logToConsole, logToFile).logger[IO]
+              ctx <- Std.ctx[IO](workspaceDir, bloopPort, bloopVersion = "1.5.0", sourceFile)
+            yield
+              for
+                buildValue <- buildsonnet.evaluator.eval(ctx)(rootJValue)
+                result <- buildValue match
+                  case fn: EvaluatedJValue.JFunction[IO] =>
+                    val params = EvaluatedJValue.JFunctionParameters[IO](
+                      fn.src,
+                      ctx,
+                      Seq(EvaluatedJValue.JArray(Source.empty, IArray.unsafeFromArray(buildArgs.map(EvaluatedJValue.JString(Source.empty, _)).toArray))),
+                      Seq.empty,
+                    )
+                    fn.fn(params)
+                  case e if buildArgs.nonEmpty =>
+                    IO.raiseError(new CmdlineError(s"build command $buildCommand is not a function"))
+                  case e => e.pure[IO]
+                prettyResult <- ctx.prettyPrint(result)
+                _ <- ConsoleLogger[IO].stdout(prettyResult)
+              yield ()
+          }.use(identity)
         yield ExitCode.Success
       run.handleErrorWith {
         case CmdlineError(msg) =>

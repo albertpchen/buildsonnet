@@ -25,6 +25,7 @@ case class JobDescription(
   inputFiles: Seq[String],
   stdin: Option[String],
   directory: Option[String],
+  fail: Option[Boolean],
 )
 
 private[job] enum JobOutput:
@@ -59,6 +60,7 @@ trait JobCache[F[_]]:
   def insert(key: JobKey, value: JobValue): F[Unit]
 
 object JobRunner:
+  private val charset = "utf-8"
   private given fileTimeOrdering: math.Ordering[FileTime] = new math.Ordering[FileTime]:
     def compare(x: FileTime, y: FileTime): Int =
       x.compareTo(y)
@@ -94,10 +96,10 @@ object JobRunner:
       desc.outputFiles.find(_.startsWith("/")).fold(().pure) { output =>
         ctx.error(src, s"job output file may not be an absolute path, got $output")
       }
-    _ <-
-      desc.inputFiles.find(_.startsWith("/")).fold(().pure) { output =>
-        ctx.error(src, s"job output file may not be an absolute path, got $output")
-      }
+    // _ <-
+    //   desc.inputFiles.find(_.startsWith("/")).fold(().pure) { output =>
+    //     ctx.error(src, s"job input file may not be an absolute path, got $output")
+    //   }
     inputPaths <- Sync[F].defer {
       // TODO: handle InvalidPathException
       val paths = desc.inputFiles.map(ctx.workspaceDir.resolve)
@@ -129,7 +131,7 @@ object JobRunner:
       ).fold(ctx.error(src, s"could not resolve command \"${desc.cmdline.head}\""))(_.pure)
     }
     cmdline = (cmd +: desc.cmdline.tail).toArray
-    inputPathHashes <- inputPaths.traverse(_.md5Hash)
+    inputPathHashes <- inputPaths.traverse(_.md5Hash(charset))
     jobKey = JobKey(
       cmdline = cmdline,
       envVars = desc.envVars.fold(Seq.empty)(_.toList.sorted),
@@ -155,7 +157,7 @@ object JobRunner:
             if !path.exists then
               staleReason = s"output path does not exist: \"$path\" "
               true
-            else if path.md5HashUnsafe != hash then
+            else if path.md5HashUnsafe(charset) != hash then
               staleReason = s"output path hash is different from last recorded hash: \"$path\""
               true
             else
@@ -222,13 +224,13 @@ object JobRunner:
           _ <- Logger[F].info(s"finished job: $cmdlineString")
           missingFiles <- Sync[F].delay(outputPaths.filterNot(_.exists))
           job <-
-            if exitCode != 0 then
+            if exitCode != 0 && desc.fail.getOrElse(true) then
               ctx.error(src, s"$stderr\nnonzero exit code returned from job: $exitCode")
             else if missingFiles.nonEmpty then
               ctx.error(src, s"job did not produce expected output files: ${missingFiles.mkString(", ")}")
             else
               Job(stdout, stderr, outputPaths, exitCode).pure
-          outputPathHashes <- outputPaths.traverse(_.md5Hash)
+          outputPathHashes <- outputPaths.traverse(_.md5Hash(charset))
           jobValue = JobValue(outputPaths.zip(outputPathHashes), job.stdout, job.stderr, job.exitCode)
           _ <- Logger[F].info(s"inserting $jobValue into cache")
           _ <- cache.insert(jobKey, jobValue)

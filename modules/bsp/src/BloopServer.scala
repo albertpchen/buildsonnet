@@ -43,13 +43,14 @@ object BloopServer:
     maxConcurrentServiceWorkers: Int,
   ): Resource[F, Either[String, BloopServer[F]]] =
     for
+      services <- Resource.eval(bspServices[F](workspace.toString))
       client <- RpcClient.setupBytes(
         fs2.io.readInputStream(
           socketConnection.input,
           chunkSize = 8192,
           closeAfterUse = true,
         ),
-        bspServices[F](workspace.toString),
+        services,
         maxConcurrentServiceWorkers,
       )
       _ <- Resource.make(

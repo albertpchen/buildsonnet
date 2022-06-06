@@ -178,12 +178,14 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
           pairs.flatten
 
         def membersFn(params: EvaluatedJValue.JObjectImplParams[F]) =
-          val ctx = outerCtx.withSelf(params.self).withSuper(params.`super`)
           val impl = for
-            ctx <- ctx.bindCode(locals.map(local => local.name -> local.value))
+            ctx <- outerCtx
+              .withSelf(params.self)
+              .withSuper(params.`super`)
+              .bindCode(locals.map(local => local.name -> local.value))
             members <- pairs.flatMap(_.map { (key, value, forValue) =>
               val valueCtx = ctx.bindStrict(forVar, forValue)
-              LazyObjectValue(false, eval(ctx)(value)).map(key -> _)
+              LazyObjectValue(false, eval(valueCtx)(value)).map(key -> _)
             }.sequence)
           yield
             collection.Map.from(members)
@@ -204,7 +206,14 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
       case arr: EvaluatedJValue.JArray[F] =>
         ctx.expect[Double](rawIndex).flatMap { num =>
           if num.isValidInt then
-            val idx = num.toInt
+            val idx = {
+              val int = num.toInt
+              if int >= 0 then
+                int
+              else
+                val mod = int % arr.elements.size
+                if mod >= 0 then mod else mod + arr.elements.size
+            }
             if idx >= arr.elements.size then
               ctx.error(src, s"index $idx out of bounds for length ${arr.elements.size}")
             else
@@ -381,6 +390,22 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
         eval(ctx)(right).flatMap(ctx.expect[Boolean](_)),
       ).parTupled.map { (left, right) =>
         EvaluatedJValue.JBoolean(src, left || right)
+      }
+
+  case JValue.JUnaryOp(src, op, rawOperand) =>
+    op match
+    case JUnaryOperator.Op_! =>
+      ctx.expect[Boolean](rawOperand).map { operand =>
+        EvaluatedJValue.JBoolean(src, !operand)
+      }
+    case JUnaryOperator.Op_+ => ctx.expect[EvaluatedJValue.JNum[F]](rawOperand).widen
+    case JUnaryOperator.Op_- =>
+      ctx.expect[Double](rawOperand).map { operand =>
+        EvaluatedJValue.JNum(src, -operand)
+      }
+    case JUnaryOperator.Op_~  =>
+      ctx.expect[Double](rawOperand).map { operand =>
+        EvaluatedJValue.JNum(src, (~operand.toLong).toDouble)
       }
 
   case JValue.JIf(src, rawCond, trueValue, elseValue) =>

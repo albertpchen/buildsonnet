@@ -2,7 +2,6 @@ package jsonrpc4cats
 
 import cats.{Monad, MonadError}
 import cats.effect.{Async, Deferred, Sync, Spawn, Fiber, Ref, Resource}
-import cats.effect.instances.all.given
 import cats.effect.std.Supervisor
 import cats.effect.syntax.all.given
 import cats.syntax.all.given
@@ -37,7 +36,7 @@ object RpcServer:
     def cancel: F[Unit] =
       for 
         activeClientRequests <- activeClientRequests.getAndSet(Map.empty)
-        _ <- activeClientRequests.toList.parTraverse(_._2.cancel)
+        _ <- activeClientRequests.toList.traverse(_._2.cancel)
       yield ()
 
     val cancelNotification: Service[F] =
