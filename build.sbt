@@ -13,7 +13,7 @@ val Dependencies = new {
   val weaverCats = weaver("cats")
   val weaverScalacheck = weaver("scalacheck")
 
-  def jsoniter(name: String) = "com.github.plokhotnyuk.jsoniter-scala" %% s"jsoniter-scala-$name" % "2.13.8"
+  def jsoniter(name: String) = "com.github.plokhotnyuk.jsoniter-scala" %% s"jsoniter-scala-$name" % "2.13.29"
   val jsoniterCore = jsoniter("core")
   val jsoniterMacros = jsoniter("macros")
 
@@ -143,6 +143,14 @@ lazy val buildsonnet = project
   .dependsOn(logger, evaluator, ast, bsp, job)
   .settings(
     scalaVersion := scala3Version,
+    conflictWarning := {
+      if (scalaBinaryVersion.value == "3") {
+        // TODO
+        ConflictWarning("warn", Level.Warn, false)
+      } else {
+        conflictWarning.value
+      }
+    },
     Compile / scalaSource := baseDirectory.value / "src",
     Test / scalaSource := baseDirectory.value / "test",
     libraryDependencies ++= List(
