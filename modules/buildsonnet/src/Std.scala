@@ -854,7 +854,6 @@ object Std:
       bloopServerEither <- lazyResource(SocketConnection.connectToLauncher[F](
         bloopVersion = bloopVersion,
         bloopPort = bloopPort,
-        logStream = System.out,
       ).flatMap(BloopServer(ctx.workspaceDir, _, maxConcurrentServiceWorkers = 1)))
       bloopServer = bloopServerEither.flatMap {
         case Left(error) => ctx.error(stdSrc, error)
