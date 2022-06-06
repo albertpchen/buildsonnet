@@ -44,14 +44,14 @@ object Config:
         else if str.str == ModuleKindJS.ESModule.id then ModuleKindJS.ESModule
         else path.error(ctx, expr.src, "not a valid moduleKind")
       }
-  given JDecoder[SourcesGlobs] = JDecoder.derived[SourcesGlobs]
-  given JDecoder[Scala] = JDecoder.derived[Scala]
-  given JDecoder[Java] = JDecoder.derived[Java]
-  given JDecoder[Sbt] = JDecoder.derived[Sbt]
-  given JDecoder[Test] = JDecoder.derived[Test]
-  given JDecoder[Platform.Js] = JDecoder.derived[Platform.Js]
-  given JDecoder[Platform.Jvm] = JDecoder.derived[Platform.Jvm]
-  given JDecoder[Platform.Native] = JDecoder.derived[Platform.Native]
+  given JDecoder[SourcesGlobs] = JDecoder.derived
+  given JDecoder[Scala] = JDecoder.derived
+  given JDecoder[Java] = JDecoder.derived
+  given JDecoder[Sbt] = JDecoder.derived
+  given JDecoder[Test] = JDecoder.derived
+  given JDecoder[Platform.Js] = JDecoder.derived
+  given JDecoder[Platform.Jvm] = JDecoder.derived
+  given JDecoder[Platform.Native] = JDecoder.derived
   given JDecoder[Platform] with
     def decode(ctx: EvaluationContext, path: JDecoderPath, expr: EvaluatedJValue): Task[Platform] =
       path.expectType[EvaluatedJValue.JObject](ctx, expr).flatMap { obj =>
@@ -64,7 +64,7 @@ object Config:
             s"invalid platform name '${name.str}', expected ${Platform.Js.name}, ${Platform.Jvm.name}, or ${Platform.Native.name}")
         }
       }
-  given JDecoder[Resolution] = JDecoder.derived[Resolution]
+  given JDecoder[Resolution] = JDecoder.derived
 
   case class RecursiveProject(
     name: String,
@@ -86,7 +86,7 @@ object Config:
     resolution: Option[Resolution],
     tags: Option[List[String]]
   )
-  implicit val k: JDecoder[RecursiveProject] = JDecoder.derived[RecursiveProject]
+  given JDecoder[RecursiveProject] = JDecoder.derived
 
   private def convert(rproject: RecursiveProject): FlatProject =
     FlatProject(

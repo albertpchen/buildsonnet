@@ -53,7 +53,7 @@ def connectToLauncher(
   val launcher = new LauncherMain(
     launcherIn,
     launcherOut,
-    logStream,
+    System.out,
     java.nio.charset.StandardCharsets.UTF_8,
     bloop.bloopgun.core.Shell.default,
     userNailgunHost = None,

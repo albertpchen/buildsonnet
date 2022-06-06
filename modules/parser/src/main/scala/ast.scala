@@ -137,81 +137,39 @@ object SourceFile:
     val contents = ""
     def getLineCol(offset: Int) = (0, offset)
 
-  private class BinTree(
-    val index: Int,
-    val value: Int,
-    left: Option[BinTree],
-    right: Option[BinTree]
-  ):
-    def find(i: Int): BinTree =
-      if value < i then
-        if right.isEmpty then
-          this
-        else
-          val foundRight = right.get.find(i)
-          if foundRight.value < i then
-            if (i - value) < (i - foundRight.value) then
-              this
-            else
-              foundRight
-          else
-            this
-      else if value > i then
-        if left.isEmpty then
-          this
-        else
-          left.get.find(i)
-      else
-        this
-  private def makeBinTree(
-    ints: collection.IndexedSeq[Int],
-    begin: Int,
-    end: Int
-  ): BinTree =
-    val span = end - begin
-    if span == 1 then
-      new BinTree(begin, ints(begin), None, None)
-    else if span == 2 then
-      new BinTree(
-        begin,
-        ints(begin),
-        None,
-        Some(new BinTree(begin + 1, ints(begin + 1), None, None))
-      )
+  private def indexOfClosest(arr: Array[Int], i: Int, start: Int, end: Int): Int =
+    if start == arr.size - 1 || start == end then
+      return start
+    val mid = (end + start) / 2
+    if i >= arr(mid) && i <= arr(mid + 1) then
+      mid
+    else if arr(mid) > i then
+      indexOfClosest(arr, i, mid + 1, end)
     else
-      val halfSpan = (span - 1) / 2
-      val halfIndex = begin + halfSpan
-      val left = makeBinTree(ints, begin, halfIndex)
-      val right = makeBinTree(ints, halfIndex + 1, end)
-      new BinTree(
-        halfIndex,
-        ints(halfIndex),
-        Some(left),
-        Some(right),
-      )
+      indexOfClosest(arr, i, start, mid)
 
   def apply(file: String, contentsx: String): SourceFile =
-    val indices = collection.mutable.ArrayBuffer[Int]()
-    indices += -1
+    val indicesBuilder = collection.mutable.ArrayBuilder.ofInt()
+    indicesBuilder += -1
     for
       i <- 0 until contentsx.size
     do
       if contentsx(i) == '\n' then
-        indices += i
+        indicesBuilder += i
+    val indices = indicesBuilder.result
     if indices.size <= 1 then
       new SourceFile:
         val path = file
         val contents = contentsx
         def getLineCol(offset: Int) = (0, offset)
     else
-      val binTree = makeBinTree(indices, 0, indices.size)
       new SourceFile:
         val path = file
         val contents = contentsx
         def getLineCol(offset: Int) =
-          val closest = binTree.find(offset)
-          val col = offset - closest.value
-          (closest.index + 1, col)
+          val closestIndex = indexOfClosest(indices, offset, 0, indices.size)
+          val col = offset - indices(closestIndex)
+          (closestIndex + 1, col)
 
 trait HasSourceFile:
   def file: SourceFile

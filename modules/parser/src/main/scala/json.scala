@@ -328,28 +328,26 @@ final class Parser(file: SourceFile):
     }
   }
 
-  expr = {
-    (exprAtom.<*(__) ~ (op.surroundedBy(__) ~ exprAtom).rep0).map { (head, tail) =>
-      val tailSize = tail.size
-      var exprs = tail
-      def climb(curr: JValue, minPrec: Int): JValue =
-        var result = curr
-        while
-          if exprs.isEmpty then
-            false
-          else
-            val (op, expr) = exprs.head
-            val cond = exprs.head._1.precedence >= minPrec
-            if cond then
-              val nextPrec = if op.isLeftAssociative then minPrec + 1 else minPrec
-              exprs = exprs.tail
-              val rhs = climb(expr, nextPrec)
-              result = JBinaryOp(result.src.merge(rhs.src), result, op, rhs)
-            cond
-        do ()
-        result
-      climb(head, 0)
-    }
+  expr = (exprAtom.<*(__) ~ (op.surroundedBy(__) ~ exprAtom).rep0).map { (head, tail) =>
+    val tailSize = tail.size
+    var exprs = tail
+    def climb(curr: JValue, minPrec: Int): JValue =
+      var result = curr
+      while
+        if exprs.isEmpty then
+          false
+        else
+          val (op, expr) = exprs.head
+          val cond = exprs.head._1.precedence >= minPrec
+          if cond then
+            val nextPrec = if op.isLeftAssociative then minPrec + 1 else minPrec
+            exprs = exprs.tail
+            val rhs = climb(expr, nextPrec)
+            result = JBinaryOp(result.src.merge(rhs.src), result, op, rhs)
+          cond
+      do ()
+      result
+    climb(head, 0)
   }
   private val parserFile = __ *> expr <* __
 
