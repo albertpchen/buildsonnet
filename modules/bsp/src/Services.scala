@@ -27,37 +27,35 @@ object CustomBuildEndpoints:
       JsonCodecMaker.makeWithRequiredCollectionFields
 
 def bspServices[F[_]: Sync: Logger: ConsoleLogger](workspace: String): F[Services[F]] =
-  for
-    compilations <- Ref.of(Map.empty[String, Deferred[F, Unit]])
-  yield
-    Services
-      .empty[F]
-      .notification(endpoints.Build.taskStart) { params =>
-        params.dataKind match {
-          case Some(bsp4s.TaskDataKind.CompileTask) =>
-            val report = RawJson.parseJsonTo[CustomBuildEndpoints.CompileReport](params.data.get)
-            val id = report.toOption.get.target.uri.value
-            report match
-              case Left(error) =>
-                Logger[F].warn(s"unable to decode compile task data $params: $error").void
-              case Right(report) =>
-                val id = report.target.uri.value
-                val isNoOp = params.message.getOrElse("").startsWith("Start no-op compilation")
-                if !isNoOp then
-                  params.message.fold(().pure)(ConsoleLogger[F].stdout)
-                else
-                  ().pure
-          case _ =>
-            params.message.fold(().pure)(ConsoleLogger[F].stdout)
-        }
+  for compilations <- Ref.of(Map.empty[String, Deferred[F, Unit]])
+  yield Services
+    .empty[F]
+    .notification(endpoints.Build.taskStart) { params =>
+      params.dataKind match {
+      case Some(bsp4s.TaskDataKind.CompileTask) =>
+        val report = RawJson.parseJsonTo[CustomBuildEndpoints.CompileReport](params.data.get)
+        val id = report.toOption.get.target.uri.value
+        report match
+        case Left(error) =>
+          Logger[F].warn(s"unable to decode compile task data $params: $error").void
+        case Right(report) =>
+          val id = report.target.uri.value
+          val isNoOp = params.message.getOrElse("").startsWith("Start no-op compilation")
+          if !isNoOp then params.message.fold(().pure)(ConsoleLogger[F].stdout)
+          else ().pure
+      case _ =>
+        params.message.fold(().pure)(ConsoleLogger[F].stdout)
       }
-      .notification(endpoints.Build.taskProgress)(_.message.fold(().pure)(ConsoleLogger[F].stdout))
-      .notification(endpoints.Build.taskFinish)(_.message.fold(().pure)(ConsoleLogger[F].stdout))
-      .notification(endpoints.Build.showMessage)(params => ConsoleLogger[F].stdout(params.message))
-      .notification(endpoints.Build.logMessage)(params => ConsoleLogger[F].stdout(params.message))
-      .notification(endpoints.Build.publishDiagnostics) { params =>
-        val file = java.nio.file.Paths.get(workspace).relativize(params.textDocument.uri.toPath)
-        params.diagnostics.map { diagnostic =>
+    }
+    .notification(endpoints.Build.taskProgress)(_.message.fold(().pure)(ConsoleLogger[F].stdout))
+    .notification(endpoints.Build.taskFinish)(_.message.fold(().pure)(ConsoleLogger[F].stdout))
+    .notification(endpoints.Build.showMessage)(params => ConsoleLogger[F].stdout(params.message))
+    .notification(endpoints.Build.logMessage)(params => ConsoleLogger[F].stdout(params.message))
+    .notification(endpoints.Build.publishDiagnostics) { params =>
+      val file = java.nio.file.Paths.get(workspace).relativize(params.textDocument.uri.toPath)
+      params
+        .diagnostics
+        .map { diagnostic =>
           val startLine = diagnostic.range.start.line + 1
           val startCol = diagnostic.range.start.character + 1
           val header = s"${Console.UNDERLINED}$file${Console.RESET}:$startLine:$startCol"
@@ -70,5 +68,7 @@ def bspServices[F[_]: Sync: Logger: ConsoleLogger](workspace: String): F[Service
           logFn(header) *>
             diagnostic.message.prefixLines("  ").foldLeft(().pure[F])(_ *> logFn(_)) *>
             logFn("")
-        }.sequence.void
-      }
+        }
+        .sequence
+        .void
+    }

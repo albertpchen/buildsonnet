@@ -12,10 +12,8 @@ final class StackEntry(
     case src: Source.Range =>
       val (startLine, startCol) = src.file.getLineCol(src.start)
       val (endLine, endCol) = src.file.getLineCol(src.end)
-      if startLine == endLine then
-        s"${src.file.path}:$startLine:$startCol-$endCol"
-      else
-        s"${src.file.path}:($startLine:$startCol)-($endLine:$endCol)"
+      if startLine == endLine then s"${src.file.path}:$startLine:$startCol-$endCol"
+      else s"${src.file.path}:($startLine:$startCol)-($endLine:$endCol)"
     if message.isEmpty then srcString else s"$srcString $message"
 
 object StackEntry:

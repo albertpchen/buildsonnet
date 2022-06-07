@@ -1,29 +1,23 @@
 package jsonrpc4cats
 package testprotocol
 
-import com.github.plokhotnyuk.jsoniter_scala.core.{
-  JsonReader,
-  JsonWriter,
-  JsonValueCodec,
-}
+import com.github.plokhotnyuk.jsoniter_scala.core.{JsonReader, JsonWriter, JsonValueCodec}
 
 import org.scalacheck.Gen
 
 import scala.deriving.Mirror
 import scala.compiletime.summonInline
 
-
 final case class TestParam[A](id: Int, value: A)
 
 object TestParam:
   def makeCodec[A](codecA: JsonValueCodec[A]): JsonValueCodec[TestParam[A]] = {
     def fieldName(i: Int): String = i match
-      case 0 => "id"
-      case 1 => "value"
+    case 0 => "id"
+    case 1 => "value"
 
     def d0(in: JsonReader, defaultValue: TestParam[A]): TestParam[A] =
-      if !in.isNextToken('{') then
-        in.readNullOrTokenError[TestParam[A]](defaultValue, '{')
+      if !in.isNextToken('{') then in.readNullOrTokenError[TestParam[A]](defaultValue, '{')
       else
         var id: Int = 0
         var value: A | Null = null
@@ -42,8 +36,7 @@ object TestParam:
               value = codecA.decodeValue(in, value.asInstanceOf[A])
             else in.skip()
 
-          if !in.isCurrentToken('}') then
-            in.objectEndOrCommaError()
+          if !in.isCurrentToken('}') then in.objectEndOrCommaError()
 
         if ((mask & 3) != 0) then
           in.requiredFieldError(fieldName(Integer.numberOfTrailingZeros(mask & 3)))
@@ -65,13 +58,12 @@ object TestParam:
     }
   }
 
-
 case class OpenConnectionParams(
-  num: Int
+  num: Int,
 )
 
 case class OpenConnectionReturn(
-  num: Int
+  num: Int,
 )
 
 case class CompileParams(
@@ -111,7 +103,7 @@ object ExpectNotification:
     val endpoint = Endpoint[TestParam[A], B](_endpoint.method)(
       using
       TestParam.makeCodec(_endpoint.codecA),
-      _endpoint.codecB
+      _endpoint.codecB,
     )
     val notification = expectedNotification
   }
@@ -133,19 +125,19 @@ object ExpectRequest:
     val endpoint = Endpoint[TestParam[A], B](_endpoint.method)(
       using
       TestParam.makeCodec(_endpoint.codecA),
-      _endpoint.codecB
+      _endpoint.codecB,
     )
     val request = expectedRequest
     val response = expectedResponse
   }
 
 inline def genExpectNotification[A](endpoint: Endpoint[A, Unit]): Gen[ExpectNotification] =
-  GenDerivers.deriveGen[A](using summonInline[Mirror.Of[A]])
+  GenDerivers
+    .deriveGen[A](using summonInline[Mirror.Of[A]])
     .map(ExpectNotification(endpoint, _))
 
 inline def genExpectRequest[A, B](endpoint: Endpoint[A, B]): Gen[ExpectRequest] =
   for
     request <- GenDerivers.deriveGen[A](using summonInline[Mirror.Of[A]])
     response <- GenDerivers.deriveGen[B](using summonInline[Mirror.Of[B]])
-  yield
-    ExpectRequest(endpoint, request, response)
+  yield ExpectRequest(endpoint, request, response)

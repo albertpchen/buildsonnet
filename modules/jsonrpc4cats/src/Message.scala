@@ -1,6 +1,5 @@
 package jsonrpc4cats
 
-
 import com.github.plokhotnyuk.jsoniter_scala.macros.{JsonCodecMaker, CodecMakerConfig}
 import com.github.plokhotnyuk.jsoniter_scala.core.{
   writeToString,
@@ -17,26 +16,25 @@ import java.nio.channels.{Channels, WritableByteChannel}
 sealed trait Message {
   def jsonrpc: String
 
-  /**
-   * Every message contains a set of HTTP-like headers, but these headers are
-   * defined outside of the JSON-RPC protocol specification and are transmitted
-   * at the transport level. That is, it is up to the message readers and
-   * writers to decide how these headers are trasmitted over the network.
-   *
-   * For example, if JSON-RPC is being transmitted over HTTP/2, the message
-   * reader and writer implementation can use the HTTP/2 headers to transport
-   * the message headers. Howevrer, if JSON-RPC messages are transmitted over a
-   * socket such as WebSockets or a pipe or file channel, then these headers can
-   * be transmitted with the base protocol defined in the Language Server Protocol
-   * <a href="https://microsoft.github.io/language-server-protocol/specifications/specification-3-14/">here</a>.
-   *
-   * This last strategy is the one implemented in this library by default as it
-   * is the most flexible regardless of the transport used for JSON-RPC messages.
-   *
-   * Note that because of this, headers are never serialized into the JSON wire
-   * format and the serializers/deserializers here defined will remove any
-   * headers before writing and before reading JSON-RPC messages.
-   */
+  /** Every message contains a set of HTTP-like headers, but these headers are defined outside of
+    * the JSON-RPC protocol specification and are transmitted at the transport level. That is, it is
+    * up to the message readers and writers to decide how these headers are trasmitted over the
+    * network.
+    *
+    * For example, if JSON-RPC is being transmitted over HTTP/2, the message reader and writer
+    * implementation can use the HTTP/2 headers to transport the message headers. Howevrer, if
+    * JSON-RPC messages are transmitted over a socket such as WebSockets or a pipe or file channel,
+    * then these headers can be transmitted with the base protocol defined in the Language Server
+    * Protocol <a
+    * href="https://microsoft.github.io/language-server-protocol/specifications/specification-3-14/">here</a>.
+    *
+    * This last strategy is the one implemented in this library by default as it is the most
+    * flexible regardless of the transport used for JSON-RPC messages.
+    *
+    * Note that because of this, headers are never serialized into the JSON wire format and the
+    * serializers/deserializers here defined will remove any headers before writing and before
+    * reading JSON-RPC messages.
+    */
   def headers: Map[String, String]
 }
 
@@ -82,7 +80,7 @@ object Message {
                 jsonrpc = in.readString(jsonrpc)
                 if (jsonrpc != "2.0") {
                   in.decodeError(
-                    s"Expected JSON-RPC version 2.0 message, obtained version $jsonrpc"
+                    s"Expected JSON-RPC version 2.0 message, obtained version $jsonrpc",
                   )
                 }
               } else {
@@ -95,11 +93,11 @@ object Message {
             }
           }
           p match {
-            case 12 | 28 => Request(method, params, id, Map.empty, jsonrpc)
-            case 22 => Response.Error(error, id, jsonrpc)
-            case 26 => Response.Success(result, id, jsonrpc)
-            case 13 | 29 => Notification(method, params, Map.empty, jsonrpc)
-            case _ => default
+          case 12 | 28 => Request(method, params, id, Map.empty, jsonrpc)
+          case 22 => Response.Error(error, id, jsonrpc)
+          case 26 => Response.Success(result, id, jsonrpc)
+          case 13 | 29 => Notification(method, params, Map.empty, jsonrpc)
+          case _ => default
           }
         } else in.readNullOrTokenError(default, '{')
       if (msg == default) {
@@ -110,10 +108,10 @@ object Message {
 
     def encodeValue(msg: Message, out: JsonWriter): Unit = {
       msg match {
-        case r: Request => Request.requestCodec.encodeValue(r.copy(headers = Map.empty), out)
-        case r: Notification =>
-          Notification.notificationCodec.encodeValue(r.copy(headers = Map.empty), out)
-        case r: Response => Response.responseCodec.encodeValue(r, out)
+      case r: Request => Request.requestCodec.encodeValue(r.copy(headers = Map.empty), out)
+      case r: Notification =>
+        Notification.notificationCodec.encodeValue(r.copy(headers = Map.empty), out)
+      case r: Response => Response.responseCodec.encodeValue(r, out)
       }
     }
 
@@ -130,12 +128,12 @@ object Message {
 }
 
 final case class Request(
-    method: String,
-    params: Option[RawJson],
-    id: RequestId,
-    /** @inheritdoc */
-    headers: Map[String, String],
-    jsonrpc: String = "2.0"
+  method: String,
+  params: Option[RawJson],
+  id: RequestId,
+  /** @inheritdoc */
+  headers: Map[String, String],
+  jsonrpc: String = "2.0",
 ) extends Message {
   def toError(code: ErrorCode, message: String): Response =
     Response.error(ErrorObject(code, message, None), id)
@@ -147,11 +145,11 @@ object Request {
 }
 
 final case class Notification(
-    method: String,
-    params: Option[RawJson],
-    /** @inheritdoc */
-    headers: Map[String, String],
-    jsonrpc: String = "2.0"
+  method: String,
+  params: Option[RawJson],
+  /** @inheritdoc */
+  headers: Map[String, String],
+  jsonrpc: String = "2.0",
 ) extends Message
 
 object Notification {
@@ -165,19 +163,19 @@ sealed trait Response extends Message {
 
 object Response {
   final case class Success(
-      result: RawJson,
-      id: RequestId,
-      jsonrpc: String = "2.0",
-      /** @inheritdoc */
-      headers: Map[String, String] = Map.empty
+    result: RawJson,
+    id: RequestId,
+    jsonrpc: String = "2.0",
+    /** @inheritdoc */
+    headers: Map[String, String] = Map.empty,
   ) extends Response
 
   final case class Error(
-      error: ErrorObject,
-      id: RequestId,
-      jsonrpc: String = "2.0",
-      /** @inheritdoc */
-      headers: Map[String, String] = Map.empty
+    error: ErrorObject,
+    id: RequestId,
+    jsonrpc: String = "2.0",
+    /** @inheritdoc */
+    headers: Map[String, String] = Map.empty,
   ) extends RuntimeException(errorToMsg(id, error, headers))
       with Response
 
@@ -198,21 +196,21 @@ object Response {
     def nullValue: Response = null
     def encodeValue(x: Response, out: JsonWriter): Unit = {
       x match {
-        case r: Response.Success => successCodec.encodeValue(r.copy(headers = Map.empty), out)
-        case r: Response.Error => errorCodec.encodeValue(r.copy(headers = Map.empty), out)
+      case r: Response.Success => successCodec.encodeValue(r.copy(headers = Map.empty), out)
+      case r: Response.Error => errorCodec.encodeValue(r.copy(headers = Map.empty), out)
       }
     }
 
     def decodeValue(in: JsonReader, default: Response): Response = {
       val json = RawJson.codec.decodeValue(in, RawJson.codec.nullValue)
       RawJson.parseJsonTo[Success](json) match {
+      case Right(msg) => msg.copy(headers = Map.empty)
+      case Left(err) =>
+        RawJson.parseJsonTo[Error](json) match {
         case Right(msg) => msg.copy(headers = Map.empty)
         case Left(err) =>
-          RawJson.parseJsonTo[Error](json) match {
-            case Right(msg) => msg.copy(headers = Map.empty)
-            case Left(err) =>
-              in.decodeError("Failed to decode JSON-RPC message, missing 'result' or 'error'")
-          }
+          in.decodeError("Failed to decode JSON-RPC message, missing 'result' or 'error'")
+        }
       }
     }
   }
@@ -241,7 +239,7 @@ object Response {
   def invalidRequest(message: String): Response.Error = {
     Error(
       ErrorObject(ErrorCode.InvalidRequest, message, scala.None),
-      RequestId.Null
+      RequestId.Null,
     )
   }
 

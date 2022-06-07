@@ -36,14 +36,18 @@ object LoggerConfiguration:
       val ctx = LoggerFactory.getILoggerFactory().asInstanceOf[LoggerContext]
       new BuildsonnetConfigurator(config).configureResource(ctx)
 
-private class BuildsonnetConfigurator[F[_]: Sync](config: LoggerConfiguration) extends ContextAwareBase, Configurator:
+private class BuildsonnetConfigurator[F[_]: Sync](config: LoggerConfiguration)
+    extends ContextAwareBase,
+      Configurator:
   def configure(ctx: LoggerContext): Unit = ???
 
   def configureResource(ctx: LoggerContext): Resource[F, Logger[F]] =
     if config.logToFile.isEmpty && !config.logToConsole then
-      Resource.make(Sync[F].delay {
-        ctx.reset()
-      })(_ => Sync[F].delay(ctx.stop())).as(Slf4jLogger.getLogger[F])
+      Resource
+        .make(Sync[F].delay {
+          ctx.reset()
+        })(_ => Sync[F].delay(ctx.stop()))
+        .as(Slf4jLogger.getLogger[F])
     else
       val resource = Resource.make[F, List[() => Unit]](Sync[F].delay {
         addInfo("Setting up buildsonnet configuration.")

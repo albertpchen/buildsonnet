@@ -19,21 +19,20 @@ object ConsoleLogger:
     "/bin/posh",
     "/bin/tcsh",
     "/bin/zsh",
-    "/bin/fish"
+    "/bin/fish",
   )
 
   val lineSeparator: String = Option(System.getenv("SHELL")) match
-    case Some(currentShell) if validShells.exists(sh => currentShell.contains(sh)) => "\n"
-    case _ => System.getProperty("line.separator", "\n")
+  case Some(currentShell) if validShells.exists(sh => currentShell.contains(sh)) => "\n"
+  case _ => System.getProperty("line.separator", "\n")
 
-  /**
-   * Regular expression that reliably splits Strings into lines.
-   *
-   * Effective for all commonly encountered line endings:
-   *  - "\n"
-   *  - "\r\n"
-   *  - "\r"
-   */
+  /** Regular expression that reliably splits Strings into lines.
+    *
+    * Effective for all commonly encountered line endings:
+    *   - "\n"
+    *   - "\r\n"
+    *   - "\r"
+    */
   def END_OF_LINE_MATCHER = "\r\n|\n"
 
   extension (str: String)
@@ -50,21 +49,21 @@ object ConsoleLogger:
 
   private lazy val colorsRegex = "\u001b\\[[0-9;]*m".r
 
-  /**
-   * Remove the ANSI colors from `str`.
-   *
-   * Other ANSI escapes codes are left untouched.
-   */
+  /** Remove the ANSI colors from `str`.
+    *
+    * Other ANSI escapes codes are left untouched.
+    */
   private def stripColors(str: String): String =
     colorsRegex.replaceAllIn(str, "")
 
-  /**
-   * Instantiates a new `BloopLogger` that writes to stdout and stderr.
-   *
-   * @param name The name of the logger.
-   * @return A `BloopLogger` writing to stdout and stderr. Calling this method is equivalent to
-   *         calling `at(name, System.out, System.err)`.
-   */
+  /** Instantiates a new `BloopLogger` that writes to stdout and stderr.
+    *
+    * @param name
+    *   The name of the logger.
+    * @return
+    *   A `BloopLogger` writing to stdout and stderr. Calling this method is equivalent to calling
+    *   `at(name, System.out, System.err)`.
+    */
   def default[F[_]: Sync](name: String): ConsoleLogger[F] =
     val isVerbose = true
     new ConsoleLogger[F](
@@ -90,26 +89,31 @@ object Printer:
     val printStream = stream
   }
 
-/**
- * Creates a logger that writes to the given streams.
- *
- * @param name        The name of this logger.
- * @param out         The stream to use to write `INFO` and `WARN` level messages.
- * @param err         The stream to use to write `FATAL`, `ERROR`, `DEBUG` and `TRACE` level messages.
- * @param colorOutput Print with or without color.
- */
+/** Creates a logger that writes to the given streams.
+  *
+  * @param name
+  *   The name of this logger.
+  * @param out
+  *   The stream to use to write `INFO` and `WARN` level messages.
+  * @param err
+  *   The stream to use to write `FATAL`, `ERROR`, `DEBUG` and `TRACE` level messages.
+  * @param colorOutput
+  *   Print with or without color.
+  */
 final class ConsoleLogger[F[_]: Sync](
-    val name: String,
-    out: Printer[F],
-    err: Printer[F],
-    private val debugCount: Int,
-    colorOutput: Boolean,
-    originId: Option[String],
+  val name: String,
+  out: Printer[F],
+  err: Printer[F],
+  private val debugCount: Int,
+  colorOutput: Boolean,
+  originId: Option[String],
 ) {
   def error(msg: String): F[Unit] = print(msg, printError)
   def warn(msg: String): F[Unit] = print(msg, printWarning)
-  def stdout(msg: String): F[Unit] = print(msg, line => out.print(line + ConsoleLogger.lineSeparator))
-  def stderr(msg: String): F[Unit] = print(msg, line => err.print(line + ConsoleLogger.lineSeparator))
+  def stdout(msg: String): F[Unit] =
+    print(msg, line => out.print(line + ConsoleLogger.lineSeparator))
+  def stderr(msg: String): F[Unit] =
+    print(msg, line => err.print(line + ConsoleLogger.lineSeparator))
   def outStream: PrintStream = out.printStream
   def errStream: PrintStream = err.printStream
 

@@ -19,9 +19,11 @@ given Traverse[Iterable] with
   override def foldMap[A, B](fa: Iterable[A])(f: A => B)(implicit B: Monoid[B]): B =
     B.combineAll(fa.iterator.map(f))
 
-  override def reduceLeftOption[A](fa: Iterable[A])(f: (A, A) => A): Option[A] = fa.reduceLeftOption(f)
+  override def reduceLeftOption[A](fa: Iterable[A])(f: (A, A) => A): Option[A] =
+    fa.reduceLeftOption(f)
 
-  override def collectFirst[A, B](fa: Iterable[A])(pf: PartialFunction[A, B]): Option[B] = fa.collectFirst(pf)
+  override def collectFirst[A, B](fa: Iterable[A])(pf: PartialFunction[A, B]): Option[B] =
+    fa.collectFirst(pf)
 
   override def fold[A](fa: Iterable[A])(implicit A: Monoid[A]): A = fa.fold(A.empty)(A.combine)
 
@@ -42,18 +44,19 @@ given Traverse[Iterable] with
   import cats.kernel.instances.StaticMethods.wrapMutableIndexedSeq
 
   private def toImIndexedSeq[A](fa: Iterable[A]): IndexedSeq[A] = fa match {
-    case iseq: IndexedSeq[A] => iseq
-    case _ =>
-      val as = collection.mutable.ArrayBuffer[A]()
-      as ++= fa
-      wrapMutableIndexedSeq(as)
+  case iseq: IndexedSeq[A] => iseq
+  case _ =>
+    val as = collection.mutable.ArrayBuffer[A]()
+    as ++= fa
+    wrapMutableIndexedSeq(as)
   }
 
   // Adapted from List and Vector instances.
-  override def traverse[G[_], A, B](fa: Iterable[A])(f: A => G[B])(implicit G: Applicative[G]): G[Iterable[B]] =
+  override def traverse[G[_], A, B](
+    fa: Iterable[A],
+  )(f: A => G[B])(implicit G: Applicative[G]): G[Iterable[B]] =
     if (fa.isEmpty) G.pure(Iterable.empty)
     else G.map(Chain.traverseViaChain(toImIndexedSeq(fa))(f))(_.toVector)
-
 
 def eval[F[_]: Async: ConsoleLogger: Parallel](
   ctx: EvaluationContext[F],
@@ -78,8 +81,7 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
           Sync[F].delay(res(i) = e)
         }
       }
-    yield
-      EvaluatedJValue.JArray(src, IArray.unsafeFromArray(res))
+    yield EvaluatedJValue.JArray(src, IArray.unsafeFromArray(res))
   case JValue.JLocal(_, name, value, result) =>
     ctx.bindCode(name, value).flatMap(eval(_)(result))
   case JValue.JId(src, name) =>
@@ -93,31 +95,27 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
       value <- obj
         .lookupOpt(field)
         .fold(ctx.error(src, s"object does not have field $field"))(_.value)
-    yield
-      value
+    yield value
   case JValue.JObject(src, rawMembers) =>
     val pairs =
-      rawMembers.collect {
-        case JObjMember.JField(src, rawKey, plus, isHidden, rawValue) =>
-          for
-            rawKey <- eval(ctx)(rawKey)
-            key <- ctx.expectFieldName(rawKey)
-          yield
-            key match
-            case _: EvaluatedJValue.JNull[F] => None
-            case expr: EvaluatedJValue.JString[F] =>
-              val key = expr.string
-              val value =
-                if plus then
-                  JValue.JBinaryOp(
-                    src,
-                    JValue.JGetField(src, JValue.JSuper(src), key),
-                    JBinaryOperator.Op_+,
-                    rawValue
-                  )
-                else
-                  rawValue
-              Some((key, isHidden, value))
+      rawMembers.collect { case JObjMember.JField(src, rawKey, plus, isHidden, rawValue) =>
+        for
+          rawKey <- eval(ctx)(rawKey)
+          key <- ctx.expectFieldName(rawKey)
+        yield key match
+        case _: EvaluatedJValue.JNull[F] => None
+        case expr: EvaluatedJValue.JString[F] =>
+          val key = expr.string
+          val value =
+            if plus then
+              JValue.JBinaryOp(
+                src,
+                JValue.JGetField(src, JValue.JSuper(src), key),
+                JBinaryOperator.Op_+,
+                rawValue,
+              )
+            else rawValue
+          Some((key, isHidden, value))
       }.parSequence
     var obj: EvaluatedJValue.JObject[F] = null
     ctx
@@ -126,29 +124,25 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
       .flatMap { outerCtx =>
         def membersFn(params: EvaluatedJValue.JObjectImplParams[F]) =
           val ctx = outerCtx.withSelf(params.self).withSuper(params.`super`)
-          val asserts = rawMembers.collect {
-            case JObjMember.JAssert(src, rawCond, rawMsg) =>
-              val cond = eval(ctx)(rawCond).flatMap(ctx.expect[Boolean](_))
-              val msgOpt = rawMsg.fold(Option.empty[String].pure) { msg =>
-                eval(ctx)(msg).flatMap(ctx.expect[String](_).map(Some(_)))
-              }
-              (cond, msgOpt).parTupled.flatMap { (cond, msgOpt) =>
-                if cond then
-                  ().pure
-                else
-                  ctx.error[Unit](src, msgOpt.getOrElse("object assertion failed"))
-              }
+          val asserts = rawMembers.collect { case JObjMember.JAssert(src, rawCond, rawMsg) =>
+            val cond = eval(ctx)(rawCond).flatMap(ctx.expect[Boolean](_))
+            val msgOpt = rawMsg.fold(Option.empty[String].pure) { msg =>
+              eval(ctx)(msg).flatMap(ctx.expect[String](_).map(Some(_)))
+            }
+            (cond, msgOpt).parTupled.flatMap { (cond, msgOpt) =>
+              if cond then ().pure
+              else ctx.error[Unit](src, msgOpt.getOrElse("object assertion failed"))
+            }
           }.sequence
           val impl =
             for
-              ctx <- ctx.bindCode(rawMembers.collect {
-                case local: JObjMember.JLocal => local.name -> local.value
+              ctx <- ctx.bindCode(rawMembers.collect { case local: JObjMember.JLocal =>
+                local.name -> local.value
               })
               members <- pairs.flatMap(_.collect { case Some((key, isHidden, value)) =>
                 LazyObjectValue[F](isHidden, eval(ctx)(value)).map(key -> _)
               }.sequence)
-            yield
-              collection.Map.from(members)
+            yield collection.Map.from(members)
           EvaluatedJValue.JObjectImpl[F](impl, asserts.void)
 
         EvaluatedJValue.JObject(jvalue.src, membersFn).flatMap { result =>
@@ -165,17 +159,19 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
         val pairs = for
           jvalue <- eval(ctx)(inExpr)
           arr <- ctx.expect[EvaluatedJValue.JArray[F]](jvalue)
-          pairs <- arr.elements.map { elem =>
-            for
-              rawKey <- eval(ctx.bindStrict(forVar, elem))(rawKey)
-              key <- ctx.expectFieldName(rawKey)
-            yield
-              key match
+          pairs <- arr
+            .elements
+            .map { elem =>
+              for
+                rawKey <- eval(ctx.bindStrict(forVar, elem))(rawKey)
+                key <- ctx.expectFieldName(rawKey)
+              yield key match
               case _: EvaluatedJValue.JNull[F] => None
               case key: EvaluatedJValue.JString[F] => Some((key.string, value, elem))
-          }.toList.sequence
-        yield
-          pairs.flatten
+            }
+            .toList
+            .sequence
+        yield pairs.flatten
 
         def membersFn(params: EvaluatedJValue.JObjectImplParams[F]) =
           val impl = for
@@ -187,8 +183,7 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
               val valueCtx = ctx.bindStrict(forVar, forValue)
               LazyObjectValue(false, eval(valueCtx)(value)).map(key -> _)
             }.sequence)
-          yield
-            collection.Map.from(members)
+          yield collection.Map.from(members)
           EvaluatedJValue.JObjectImpl[F](impl, ().pure)
         EvaluatedJValue.JObject(jvalue.src, membersFn).flatMap { result =>
           Sync[F].delay { obj = result }.as(result)
@@ -208,18 +203,15 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
           if num.isValidInt then
             val idx = {
               val int = num.toInt
-              if int >= 0 then
-                int
+              if int >= 0 then int
               else
                 val mod = int % arr.elements.size
                 if mod >= 0 then mod else mod + arr.elements.size
             }
             if idx >= arr.elements.size then
               ctx.error(src, s"index $idx out of bounds for length ${arr.elements.size}")
-            else
-              arr.elements(idx).pure
-          else
-            ctx.error(src, s"array index was not integer: $num")
+            else arr.elements(idx).pure
+          else ctx.error(src, s"array index was not integer: $num")
         }
     }
 
@@ -231,32 +223,30 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
         val none = Option.empty[Int].pure
         (
           ctx.expect[Double](rawIndex).flatMap { rawIdx =>
-            if rawIdx.isValidInt then
-              rawIdx.toInt.pure
-            else
-              ctx.error(src, s"array index was not integer: $rawIdx")
+            if rawIdx.isValidInt then rawIdx.toInt.pure
+            else ctx.error(src, s"array index was not integer: $rawIdx")
           },
           rawEndIndex.fold(none)(num => ctx.expect[Double](num).map(n => Some(n.toInt))),
           rawStride.fold(none)(num => ctx.expect[Double](num).map(n => Some(n.toInt))),
         ).parMapN { (idx, endIdxOpt, strideOpt) =>
-          //arr.slice(src, ctx, index.double.toInt, endIndex, stride)
+          // arr.slice(src, ctx, index.double.toInt, endIndex, stride)
           val endIdx = endIdxOpt.getOrElse(arr.elements.size)
           val stride = strideOpt.getOrElse(1)
           for
-            _ <- if idx < 0 || endIdx < 0 || stride < 0 then
-              ctx.error(src, s"negative index, end, or stride are not allowed")
-            else
-              ().pure
+            _ <-
+              if idx < 0 || endIdx < 0 || stride < 0 then
+                ctx.error(src, s"negative index, end, or stride are not allowed")
+              else ().pure
             size = arr.elements.size
             _ <- if size <= idx then ctx.error(src, s"index out of bounds $idx") else ().pure
-            result <- if idx >= endIdx then
-              EvaluatedJValue.JArray[F](src, IArray.empty).pure
-            else
-              val elements = for
-                i <- idx until endIdx by stride
-                if i < size
-              yield arr.elements(i)
-              EvaluatedJValue.JArray(src, IArray.unsafeFromArray(elements.toArray)).pure
+            result <-
+              if idx >= endIdx then EvaluatedJValue.JArray[F](src, IArray.empty).pure
+              else
+                val elements = for
+                  i <- idx until endIdx by stride
+                  if i < size
+                yield arr.elements(i)
+                EvaluatedJValue.JArray(src, IArray.unsafeFromArray(elements.toArray)).pure
           yield result
         }.flatten
     }
@@ -265,11 +255,8 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
     op match
     case JBinaryOperator.Op_+ =>
       type PlusOperand =
-        EvaluatedJValue.JString[F] |
-        EvaluatedJValue.JNum[F] |
-        EvaluatedJValue.JObject[F] |
-        EvaluatedJValue.JBoolean[F] |
-        EvaluatedJValue.JArray[F]
+        EvaluatedJValue.JString[F] | EvaluatedJValue.JNum[F] | EvaluatedJValue.JObject[F] |
+          EvaluatedJValue.JBoolean[F] | EvaluatedJValue.JArray[F]
       (
         eval(ctx)(left).flatMap(ctx.expect[PlusOperand](_)),
         eval(ctx)(right).flatMap(ctx.expect[PlusOperand](_)),
@@ -283,7 +270,10 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
         case (op1: EvaluatedJValue.JArray[F], op2: EvaluatedJValue.JArray[F]) =>
           EvaluatedJValue.JArray(src, op1.elements ++ op2.elements).pure
         case (op1, op2) =>
-          ctx.error(src, s"$op1, $op2, invalid operand types, expected two numbers, arrays, or objects, or one string")
+          ctx.error(
+            src,
+            s"$op1, $op2, invalid operand types, expected two numbers, arrays, or objects, or one string",
+          )
       }
     case JBinaryOperator.Op_- =>
       (
@@ -343,8 +333,7 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
         if rhs >= 0 then
           val shamt = rhs % 64
           EvaluatedJValue.JNum(src, (left.toLong >> shamt).toDouble).pure
-        else
-          ctx.error(right.src, s"shift amount cannot be negative, got $rhs")
+        else ctx.error(right.src, s"shift amount cannot be negative, got $rhs")
       }
     case JBinaryOperator.Op_<< =>
       (
@@ -355,8 +344,7 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
         if rhs >= 0 then
           val shamt = rhs % 64
           EvaluatedJValue.JNum(src, (left.toLong << shamt).toDouble).pure
-        else
-          ctx.error(right.src, s"shift amount cannot be negative, got $rhs")
+        else ctx.error(right.src, s"shift amount cannot be negative, got $rhs")
       }
     case JBinaryOperator.Op_in =>
       (
@@ -369,14 +357,12 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
       for
         pair <- (eval(ctx)(left), eval(ctx)(right)).parTupled
         bool <- pair._1.structuralEquals(pair._2)
-      yield
-        EvaluatedJValue.JBoolean(src, bool)
+      yield EvaluatedJValue.JBoolean(src, bool)
     case JBinaryOperator.Op_!= =>
       for
         pair <- (eval(ctx)(left), eval(ctx)(right)).parTupled
         bool <- pair._1.structuralEquals(pair._2)
-      yield
-        EvaluatedJValue.JBoolean(src, !bool)
+      yield EvaluatedJValue.JBoolean(src, !bool)
     case JBinaryOperator.Op_&& =>
       (
         eval(ctx)(left).flatMap(ctx.expect[Boolean](_)),
@@ -403,17 +389,15 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
       ctx.expect[Double](rawOperand).map { operand =>
         EvaluatedJValue.JNum(src, -operand)
       }
-    case JUnaryOperator.Op_~  =>
+    case JUnaryOperator.Op_~ =>
       ctx.expect[Double](rawOperand).map { operand =>
         EvaluatedJValue.JNum(src, (~operand.toLong).toDouble)
       }
 
   case JValue.JIf(src, rawCond, trueValue, elseValue) =>
     ctx.expect[Boolean](rawCond).flatMap { cond =>
-      if cond then
-        eval(ctx)(trueValue)
-      else
-        elseValue.fold(EvaluatedJValue.JNull(src).pure)(eval(ctx))
+      if cond then eval(ctx)(trueValue)
+      else elseValue.fold(EvaluatedJValue.JNull(src).pure)(eval(ctx))
     }
 
   case JValue.JError(src, rawExpr) =>
@@ -426,10 +410,8 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
       ctx.expect[String](msg).map(Some(_))
     }
     (ctx.expect[Boolean](rawCond), msg).parMapN { (cond, msgOpt) =>
-      if !cond then
-        ctx.error(src, msgOpt.getOrElse(s"assertion failed"))
-      else
-        eval(ctx)(expr)
+      if !cond then ctx.error(src, msgOpt.getOrElse(s"assertion failed"))
+      else eval(ctx)(expr)
     }.flatten
 
   case JValue.JArrayComprehension(src, forVar, forExpr, inExpr, condOpt) =>
@@ -442,17 +424,19 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
             val e = array.elements(i)
             val forCtx = ctx.bindStrict(forVar, e)
             forCtx.expect[Boolean](cond).flatMap { cond =>
-              if cond then Sync[F].delay {
-                res(i) = None
-              } else eval(forCtx)(forExpr).flatMap { e =>
+              if cond then
                 Sync[F].delay {
-                  res(i) = Some(e)
+                  res(i) = None
                 }
-              }
+              else
+                eval(forCtx)(forExpr).flatMap { e =>
+                  Sync[F].delay {
+                    res(i) = Some(e)
+                  }
+                }
             }
           }
-        yield
-          EvaluatedJValue.JArray(src, IArray.unsafeFromArray(res.flatten))
+        yield EvaluatedJValue.JArray(src, IArray.unsafeFromArray(res.flatten))
       }
     else
       ctx.expect[EvaluatedJValue.JArray[F]](inExpr).flatMap { array =>
@@ -465,23 +449,22 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
               Sync[F].delay(res(i) = e)
             }
           }
-        yield
-          EvaluatedJValue.JArray(src, IArray.unsafeFromArray(res))
+        yield EvaluatedJValue.JArray(src, IArray.unsafeFromArray(res))
       }
   case JValue.JImport(src, file) => ctx.`import`(src, file)
   case JValue.JImportStr(src, file) => ctx.importStr(src, file).widen
   case JValue.JFunction(src, paramsDef, body) =>
     def applyArgs(defCtx: EvaluationContext[F], fnSrc: Source)(
-      params: EvaluatedJValue.JFunctionParameters[F]
+      params: EvaluatedJValue.JFunctionParameters[F],
     ): F[EvaluatedJValue[F]] =
       val positionalArgs = params.positionalArgs
       val namedArgs = params.namedArgs
       val numGivenArgs = positionalArgs.size + namedArgs.size
       for
-        _ <- if numGivenArgs > paramsDef.size then
-          params.ctx.error(params.src, "to many arguments for function")
-        else
-          ().pure
+        _ <-
+          if numGivenArgs > paramsDef.size then
+            params.ctx.error(params.src, "to many arguments for function")
+          else ().pure
         argMap = namedArgs.toMap
         result <- {
           var currPosArgs = positionalArgs
@@ -492,7 +475,14 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
             val (argName, default) = paramsDef(i)
             val isGivenNamedArg = argMap.contains(argName)
             if positionalArgs.nonEmpty && isGivenNamedArg then
-              error = Some(params.ctx.error(params.src, s"both positional and named arg provided for argument $argName"))
+              error = Some(
+                params
+                  .ctx
+                  .error(
+                    params.src,
+                    s"both positional and named arg provided for argument $argName",
+                  ),
+              )
             else if currPosArgs.nonEmpty then
               locals(i) = (argName -> LazyValue.strict(currPosArgs.head)).pure
               currPosArgs = currPosArgs.tail
@@ -500,17 +490,15 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
               locals(i) = (argName -> LazyValue.strict(argMap(argName))).pure
             else if default.isDefined then
               locals(i) = LazyValue(eval(defCtx)(default.get)).map(argName -> _)
-            else
-              error = Some(params.ctx.error(params.src, s"missing argument $argName"))
+            else error = Some(params.ctx.error(params.src, s"missing argument $argName"))
             i += 1
           error.fold(
             locals.toList.sequence.flatMap { locals =>
               eval(ctx.bind(locals))(body)
-            }
+            },
           )(e => e)
         }
-      yield
-        result
+      yield result
     EvaluatedJValue.JFunction(src, paramsDef.size, applyArgs(ctx, src)).pure
   case JValue.JApply(src, loc, positionalArgs, namedArgs) =>
     ctx.expect[EvaluatedJValue.JFunction[F]](loc).flatMap { fn =>
@@ -518,11 +506,13 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
         positionalArgs.parTraverse(eval(ctx)),
         namedArgs.parTraverse((n, a) => eval(ctx)(a).map(n -> _)),
       ).parTupled.flatMap { (positionalArgs, namedArgs) =>
-        fn.fn(EvaluatedJValue.JFunctionParameters(
-          src,
-          ctx,
-          positionalArgs,
-          namedArgs,
-        ))
+        fn.fn(
+          EvaluatedJValue.JFunctionParameters(
+            src,
+            ctx,
+            positionalArgs,
+            namedArgs,
+          ),
+        )
       }
     }

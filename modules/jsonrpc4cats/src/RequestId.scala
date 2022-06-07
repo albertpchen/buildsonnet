@@ -38,11 +38,11 @@ object RequestId:
 
     def encodeValue(x: RequestId, out: JsonWriter): Unit = {
       x match {
-        case Null => out.writeNull()
-        case Number(n) =>
-          if (n % 1 == 0) out.writeVal(n.toLong)
-          else out.writeVal(n)
-        case String(s) => out.writeVal(s)
+      case Null => out.writeNull()
+      case Number(n) =>
+        if (n % 1 == 0) out.writeVal(n.toLong)
+        else out.writeVal(n)
+      case String(s) => out.writeVal(s)
       }
     }
   }

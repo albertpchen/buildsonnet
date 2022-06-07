@@ -23,7 +23,7 @@ case object ErrorCode {
     MethodNotFound,
     InvalidParams,
     InternalError,
-    RequestCancelled
+    RequestCancelled,
   )
 
   given errorCodeCodec: JsonValueCodec[ErrorCode] = new JsonValueCodec[ErrorCode] {
@@ -35,4 +35,3 @@ case object ErrorCode {
     }
   }
 }
-

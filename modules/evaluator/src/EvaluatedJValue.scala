@@ -20,27 +20,23 @@ object EvaluatedJValue:
       case (op1: JNum[F], op2: JNum[F]) => (op1.double == op2.double).pure
       case (op1: JArray[F], op2: JArray[F]) =>
         if op1.elements.size == op2.elements.size then
-          op1.elements.zip(op2.elements).foldLeft(true.pure) {
-            case (result, (op1, op2)) => result.flatMap { res =>
-              if res then
-                op1.structuralEquals(op2)
-              else
-                result
+          op1.elements.zip(op2.elements).foldLeft(true.pure) { case (result, (op1, op2)) =>
+            result.flatMap { res =>
+              if res then op1.structuralEquals(op2)
+              else result
             }
           }
-        else
-          false.pure
+        else false.pure
       case (op1: JFunction[F], op2: JFunction[F]) => (op1 eq op2).pure
       case (op1: JObject[F], op2: JObject[F]) =>
         val members1 = op1.members
         val members2 = op2.members
         if members1.keys == members2.keys then
-          members1.keys.foldLeft(true.pure) {
-            case (result, key) => result.flatMap { res =>
+          members1.keys.foldLeft(true.pure) { case (result, key) =>
+            result.flatMap { res =>
               if res then
                 (members1(key).value, members2(key).value).parTupled.flatMap(_.structuralEquals(_))
-              else
-                result
+              else result
             }
           }
         else false.pure
@@ -51,21 +47,19 @@ object EvaluatedJValue:
     val len = s.length
     while idx < len do
       (s(idx): @annotation.switch) match
-        case '"'  => builder ++= "\\\""
-        case '\\' => builder ++= "\\\\"
-        case '\b' => builder ++= "\\b"
-        case '\f' => builder ++= "\\f"
-        case '\n' => builder ++= "\\n"
-        case '\r' => builder ++= "\\r"
-        case '\t' => builder ++= "\\t"
-        case c =>
-          val shouldEscape = (c >= '\u0000' && c <= '\u001f')
+      case '"' => builder ++= "\\\""
+      case '\\' => builder ++= "\\\\"
+      case '\b' => builder ++= "\\b"
+      case '\f' => builder ++= "\\f"
+      case '\n' => builder ++= "\\n"
+      case '\r' => builder ++= "\\r"
+      case '\t' => builder ++= "\\t"
+      case c =>
+        val shouldEscape = (c >= '\u0000' && c <= '\u001f')
           || (c >= '\u0080' && c < '\u00a0')
           || (c >= '\u2000' && c < '\u2100')
-          if shouldEscape then
-            builder ++= "\\u%04x".format(c: Int)
-          else
-            builder ++= c.toString
+        if shouldEscape then builder ++= "\\u%04x".format(c: Int)
+        else builder ++= c.toString
       idx += 1
 
   case class JBoolean[F[_]](src: Source, bool: Boolean) extends EvaluatedJValue[F]
@@ -74,7 +68,8 @@ object EvaluatedJValue:
   }
   case class JString[F[_]](src: Source, string: String) extends EvaluatedJValue[F]
   case class JNum[F[_]](src: Source, double: Double) extends EvaluatedJValue[F]
-  case class JArray[F[_]](src: Source, elements: IArray[EvaluatedJValue[F]]) extends EvaluatedJValue[F]
+  case class JArray[F[_]](src: Source, elements: IArray[EvaluatedJValue[F]])
+      extends EvaluatedJValue[F]
 
   case class JFunctionParameters[F[_]](
     src: Source,
@@ -85,7 +80,8 @@ object EvaluatedJValue:
   case class JFunction[F[_]](
     src: Source,
     numParams: Int,
-    fn: JFunctionParameters[F] => F[EvaluatedJValue[F]]) extends EvaluatedJValue[F]
+    fn: JFunctionParameters[F] => F[EvaluatedJValue[F]],
+  ) extends EvaluatedJValue[F]
 
   sealed trait JObject[F[_]] extends EvaluatedJValue[F]:
     def mixin(src: Source, child: JObject[F]): F[JObject[F]]
@@ -114,7 +110,10 @@ object EvaluatedJValue:
       final def mixin(src: Source, child: JObject[F]): F[JObject[F]] =
         JObject.mixin(src, this, child).widen
 
-      def withSelfSuper(newSuper: Option[JObject[F]], newSelf: JObject[F]): F[(JObjectLeaf[F], JObjectImpl[F])] =
+      def withSelfSuper(
+        newSuper: Option[JObject[F]],
+        newSelf: JObject[F],
+      ): F[(JObjectLeaf[F], JObjectImpl[F])] =
         Sync[F].defer {
           val obj = JObjectLeaf[F](src, newSuper, newSelf, null, implFn)
           val impl = implFn(JObjectImplParams(newSuper, newSelf))
@@ -130,10 +129,9 @@ object EvaluatedJValue:
       def lookupOpt(field: String): Option[LazyObjectValue[F]] =
         members.get(field)
 
-
     private class JObjectChain[F[_]: Sync](
       val src: Source,
-      var leaves: Array[JObjectLeaf[F]]
+      var leaves: Array[JObjectLeaf[F]],
     ) extends JObject[F]:
       final def mixin(src: Source, child: JObject[F]): F[JObject[F]] =
         JObject.mixin(src, this, child).widen
@@ -153,15 +151,19 @@ object EvaluatedJValue:
 
     private def mixin[F[_]: Sync](src: Source, p: JObject[F], c: JObject[F]): F[JObjectChain[F]] =
       val (parent, children) = (p, c) match
-        case (parent: JObjectLeaf[F], child: JObjectLeaf[F]) => (parent, Array(child))
-        case (parent: JObjectLeaf[F], child: JObjectChain[F]) => (parent, child.leaves)
-        case (parent: JObjectChain[F], child: JObjectLeaf[F]) => (parent.leaves(0), parent.leaves.drop(1) :+ child)
-        case (parent: JObjectChain[F], child: JObjectChain[F]) => (parent.leaves(0), parent.leaves.drop(1) ++ child.leaves)
+      case (parent: JObjectLeaf[F], child: JObjectLeaf[F]) => (parent, Array(child))
+      case (parent: JObjectLeaf[F], child: JObjectChain[F]) => (parent, child.leaves)
+      case (parent: JObjectChain[F], child: JObjectLeaf[F]) =>
+        (parent.leaves(0), parent.leaves.drop(1) :+ child)
+      case (parent: JObjectChain[F], child: JObjectChain[F]) =>
+        (parent.leaves(0), parent.leaves.drop(1) ++ child.leaves)
       for
         obj <- Sync[F].delay(new JObjectChain[F](src, Array.fill(children.size + 1)(null)))
         parentPair <- parent.withSelf(obj)
         (parent, parentImpl) = parentPair
-        childAsserts <- Range(0, children.size).foldLeft(Sync[F].delay { obj.leaves(0) = parent; ().pure }) { (prevAsserts, i) =>
+        childAsserts <- Range(0, children.size).foldLeft(Sync[F].delay {
+          obj.leaves(0) = parent; ().pure
+        }) { (prevAsserts, i) =>
           val child = children(i)
           for
             prevAsserts <- prevAsserts
@@ -172,15 +174,13 @@ object EvaluatedJValue:
             prevAsserts *> childImpl.asserts
         }
         _ <- parentImpl.asserts *> childAsserts
-      yield
-        obj
+      yield obj
 
     def apply[F[_]: Sync](
       src: Source,
       implFn: JObjectImplParams[F] => JObjectImpl[F],
     ): F[JObject[F]] =
-      for
-        obj <- Sync[F].defer {
+      for obj <- Sync[F].defer {
           val obj = JObjectLeaf[F](src, None, null, null, implFn)
           obj.self = obj
           val impl = implFn(JObjectImplParams(None, obj))
@@ -189,8 +189,7 @@ object EvaluatedJValue:
             impl.asserts.as(obj)
           }
         }
-      yield
-        obj
+      yield obj
 
     def static[F[_]: Sync](
       src: Source,

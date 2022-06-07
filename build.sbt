@@ -13,11 +13,13 @@ val Dependencies = new {
   val weaverCats = weaver("cats")
   val weaverScalacheck = weaver("scalacheck")
 
-  def jsoniter(name: String) = "com.github.plokhotnyuk.jsoniter-scala" %% s"jsoniter-scala-$name" % "2.13.29"
+  def jsoniter(name: String) =
+    "com.github.plokhotnyuk.jsoniter-scala" %% s"jsoniter-scala-$name" % "2.13.29"
   val jsoniterCore = jsoniter("core")
   val jsoniterMacros = jsoniter("macros")
 
-  val bloopLauncher = ("ch.epfl.scala" %% "bloop-launcher" % "1.5.0").cross(CrossVersion.for3Use2_13)
+  val bloopLauncher =
+    ("ch.epfl.scala" %% "bloop-launcher" % "1.5.0").cross(CrossVersion.for3Use2_13)
   val declineEffect = "com.monovore" %% "decline-effect" % "2.2.0"
 
   def doobie(name: String) = "org.tpolecat" %% s"doobie-$name" % "1.0.0-RC2"
@@ -28,7 +30,8 @@ val Dependencies = new {
   val logback = "ch.qos.logback" % "logback-classic" % "1.2.11"
 
   val coursier = ("io.get-coursier" %% "coursier" % "2.0.16").cross(CrossVersion.for3Use2_13)
-  val coursierCache = ("io.get-coursier" %% "coursier-cache" % "2.0.16").cross(CrossVersion.for3Use2_13)
+  val coursierCache =
+    ("io.get-coursier" %% "coursier-cache" % "2.0.16").cross(CrossVersion.for3Use2_13)
   val coursierJvm = ("io.get-coursier" %% "coursier-jvm" % "2.0.16").cross(CrossVersion.for3Use2_13)
   val coursierLauncher = "io.get-coursier" %% "coursier-launcher" % "2.0.16"
   val ipcsocket = "org.scala-sbt.ipcsocket" % "ipcsocket" % "1.4.0"
@@ -89,7 +92,7 @@ lazy val bloopLauncher: Project = project
     libraryDependencies ++= List(
       Dependencies.ipcsocket,
       Dependencies.bloopgun,
-    )
+    ),
   )
 
 lazy val bsp = project

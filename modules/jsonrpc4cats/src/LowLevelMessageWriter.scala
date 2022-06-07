@@ -19,7 +19,6 @@ import org.typelevel.log4cats.Logger
 import scala.collection.mutable
 import scala.concurrent.Future
 
-
 object LowLevelMessageWriter {
   def write(message: LowLevelMessage): ByteBuffer =
     val out = new ByteArrayOutputStream()
@@ -32,7 +31,7 @@ object LowLevelMessageWriter {
   private def writeToByteBuffer(
     message: LowLevelMessage,
     out: ByteArrayOutputStream,
-    headerOut: PrintWriter
+    headerOut: PrintWriter,
   ): ByteBuffer =
     message.header.foreach { (key, value) =>
       headerOut.write(key)
@@ -47,19 +46,20 @@ object LowLevelMessageWriter {
     val buffer = ByteBuffer.wrap(out.toByteArray, 0, out.size())
     buffer
 
-
   private def pull[F[_]: Sync: Logger](stream: Stream[F, Message]): Pull[F, Byte, Unit] =
     stream.pull.uncons1.flatMap {
       case None => Pull.done
       case Some((head, tail)) =>
         val protocolMsg = LowLevelMessage.fromMsg(head)
-        Pull.eval(Logger[F].info(
-          s"""
-             |  --> header: ${protocolMsg.header.mkString(", ")}
-             |  --> content: ${new String(protocolMsg.content, StandardCharsets.UTF_8)}
-           """.stripMargin
-        )) >> Pull.output(Chunk.byteBuffer(write(protocolMsg))) >>
-        pull(tail)
+        Pull.eval(
+          Logger[F].info(
+            s"""
+               |  --> header: ${protocolMsg.header.mkString(", ")}
+               |  --> content: ${new String(protocolMsg.content, StandardCharsets.UTF_8)}
+           """.stripMargin,
+          ),
+        ) >> Pull.output(Chunk.byteBuffer(write(protocolMsg))) >>
+          pull(tail)
     }
 
   def toByteStream[F[_]: Sync: Logger](stream: Stream[F, Message]): Stream[F, Byte] =

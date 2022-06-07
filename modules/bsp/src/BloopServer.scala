@@ -23,14 +23,17 @@ import org.typelevel.log4cats.Logger
 
 import scala.concurrent.duration.{FiniteDuration, given}
 
-
 sealed trait BloopServer[F[_]]:
   def compile(targetId: String): F[RpcResponse[bsp4s.CompileResult]]
   def jvmRunEnvironment(targetId: String): F[RpcResponse[bsp4s.JvmRunEnvironmentResult]]
   def run(targetId: String, scalaMainClass: bsp4s.ScalaMainClass): F[RpcResponse[bsp4s.RunResult]]
   def mainClasses(targetId: String): F[RpcResponse[bsp4s.ScalaMainClassesResult]]
   def testClasses(targetId: String): F[RpcResponse[bsp4s.ScalaTestClassesResult]]
-  def test(targetId: String, arguments: Option[List[String]], testParams: bsp4s.ScalaTestParams): F[RpcResponse[bsp4s.TestResult]]
+  def test(
+    targetId: String,
+    arguments: Option[List[String]],
+    testParams: bsp4s.ScalaTestParams,
+  ): F[RpcResponse[bsp4s.TestResult]]
 
 object BloopServer:
   /** Initializes a bloop build server
@@ -45,11 +48,13 @@ object BloopServer:
     for
       services <- Resource.eval(bspServices[F](workspace.toString))
       client <- RpcClient.setupBytes(
-        fs2.io.readInputStream(
-          socketConnection.input,
-          chunkSize = 8192,
-          closeAfterUse = true,
-        ),
+        fs2
+          .io
+          .readInputStream(
+            socketConnection.input,
+            chunkSize = 8192,
+            closeAfterUse = true,
+          ),
         services,
         maxConcurrentServiceWorkers,
       )
@@ -59,7 +64,7 @@ object BloopServer:
           .through(fs2.io.writeOutputStream(socketConnection.output))
           .compile
           .drain
-          .start
+          .start,
       )(_.cancel)
       server <- Resource.make[F, Either[String, BloopServer[F]]] {
         val initParams = bsp4s.InitializeBuildParams(
@@ -68,23 +73,26 @@ object BloopServer:
           bspVersion = "2.0.0", // BSP version
           rootUri = bsp4s.Uri(workspace.toUri),
           capabilities = bsp4s.BuildClientCapabilities(List("scala")),
-          data = None
+          data = None,
         )
         def retry(backoff: FiniteDuration, numRetries: Int): F[Either[String, BloopServer[F]]] =
           Logger[F].info(s"Sending bsp initilize request") *>
-          client.request(endpoints.Build.initialize, initParams).flatMap {
-            case RpcFailure(_, error) =>
-              if numRetries <= 0 then
-                Logger[F].error(s"failed to initialized bloop bsp (${error.getMessage}), giving up") *>
-                  Left(error.getMessage).pure
-              else
-                Logger[F].info(s"failed to initialized bloop bsp ($error), retrying in $backoff seconds") *>
-                  Async[F].sleep(backoff) *> retry(backoff * 2, numRetries - 1)
-            case RpcSuccess(_, _) =>
-              Logger[F].info(s"successfully initialized bloop bsp") *>
-                client.notify(endpoints.Build.initialized, bsp4s.InitializedBuildParams()) *>
-                Right(makeServer(workspace, client)).pure
-          }
+            client.request(endpoints.Build.initialize, initParams).flatMap {
+              case RpcFailure(_, error) =>
+                if numRetries <= 0 then
+                  Logger[F]
+                    .error(s"failed to initialized bloop bsp (${error.getMessage}), giving up") *>
+                    Left(error.getMessage).pure
+                else
+                  Logger[F].info(
+                    s"failed to initialized bloop bsp ($error), retrying in $backoff seconds",
+                  ) *>
+                    Async[F].sleep(backoff) *> retry(backoff * 2, numRetries - 1)
+              case RpcSuccess(_, _) =>
+                Logger[F].info(s"successfully initialized bloop bsp") *>
+                  client.notify(endpoints.Build.initialized, bsp4s.InitializedBuildParams()) *>
+                  Right(makeServer(workspace, client)).pure
+            }
         Logger[F].info(s"Attempting to connect to bloop build server") *>
           retry(1.seconds, 5)
       } {
@@ -96,24 +104,31 @@ object BloopServer:
             _ <- Logger[F].info(s"Shut down connection with bloop server")
           yield ()
       }
-    yield
-      server
+    yield server
 
   private def makeServer[F[_]: Monad: Logger](workspace: java.nio.file.Path, client: RpcClient[F]) =
     new BloopServer[F] {
       def compile(targetId: String): F[RpcResponse[bsp4s.CompileResult]] =
         val params = bsp4s.CompileParams(
-          List(bsp4s.BuildTargetIdentifier(bsp4s.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
-            None,
-            None,
+          List(
+            bsp4s.BuildTargetIdentifier(
+              bsp4s.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")),
+            ),
+          ),
+          None,
+          None,
         )
         Logger[F].info("sending compile request") *>
           client.request(endpoints.BuildTarget.compile, params)
 
       def jvmRunEnvironment(targetId: String): F[RpcResponse[bsp4s.JvmRunEnvironmentResult]] =
         val params = bsp4s.JvmRunEnvironmentParams(
-          List(bsp4s.BuildTargetIdentifier(bsp4s.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
-          None
+          List(
+            bsp4s.BuildTargetIdentifier(
+              bsp4s.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")),
+            ),
+          ),
+          None,
         )
         Logger[F].info("sending jvm run environment request") *>
           client.request(endpoints.BuildTarget.jvmRunEnvironment, params)
@@ -124,7 +139,8 @@ object BloopServer:
       ): F[RpcResponse[bsp4s.RunResult]] =
         val params = bsp4s.RunParams(
           bsp4s.BuildTargetIdentifier(
-            bsp4s.Uri(new java.net.URI(s"file://$workspace/?id=$targetId"))),
+            bsp4s.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")),
+          ),
           originId = None,
           arguments = None,
           dataKind = Some(bsp4s.RunParamsDataKind.ScalaMainClass),
@@ -135,7 +151,11 @@ object BloopServer:
 
       def mainClasses(targetId: String): F[RpcResponse[bsp4s.ScalaMainClassesResult]] =
         val params = bsp4s.ScalaMainClassesParams(
-          List(bsp4s.BuildTargetIdentifier(bsp4s.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
+          List(
+            bsp4s.BuildTargetIdentifier(
+              bsp4s.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")),
+            ),
+          ),
           originId = None,
         )
         Logger[F].info("sending main classes request") *>
@@ -143,7 +163,11 @@ object BloopServer:
 
       def testClasses(targetId: String): F[RpcResponse[bsp4s.ScalaTestClassesResult]] =
         val params = bsp4s.ScalaTestClassesParams(
-          List(bsp4s.BuildTargetIdentifier(bsp4s.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
+          List(
+            bsp4s.BuildTargetIdentifier(
+              bsp4s.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")),
+            ),
+          ),
           originId = None,
         )
         Logger[F].info("sending test classes request") *>
@@ -155,8 +179,11 @@ object BloopServer:
         testParams: bsp4s.ScalaTestParams,
       ): F[RpcResponse[bsp4s.TestResult]] =
         val params = bsp4s.TestParams(
-          List(bsp4s.BuildTargetIdentifier(
-            bsp4s.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")))),
+          List(
+            bsp4s.BuildTargetIdentifier(
+              bsp4s.Uri(new java.net.URI(s"file://$workspace/?id=$targetId")),
+            ),
+          ),
           originId = None,
           arguments = arguments,
           dataKind = Some(bsp4s.TestParamsDataKind.ScalaTest),
