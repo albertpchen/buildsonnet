@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macOS-latest]
+        os: [ubuntu-latest, macOS-latest]
         jdk: [graalvm-ce-java11@21.1.0]
 
     name: Test ${{ matrix.os }} -- ${{ matrix.jdk }}
@@ -23,9 +23,9 @@ jobs:
           java-version: ${{ matrix.jdk }}
 
       - name: native-image
-        run: 'sbt ''run run -- nativeImage'''
+        run: 'sbt ''run run --log-to-console -- nativeImage'''
         shell: bash
 
       - name: run-native-image
-        run: ./bin/buildsonnet run -- nativeImage
+        run: ./bin/buildsonnet run --log-to-console -- nativeImage
         shell: bash
