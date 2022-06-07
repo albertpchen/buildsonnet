@@ -142,7 +142,6 @@ lazy val job = project
 
 lazy val buildsonnet = project
   .in(file("modules/buildsonnet"))
-  .enablePlugins(NativeImagePlugin)
   .dependsOn(logger, evaluator, ast, bsp, job)
   .settings(
     scalaVersion := scala3Version,

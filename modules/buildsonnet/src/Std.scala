@@ -278,7 +278,7 @@ private class Std[F[_]: Async: ConsoleLogger: Logger: Parallel] private (
           ctx
             .expect[
               EvaluatedJValue.JArray[F] | EvaluatedJValue.JString[F] | EvaluatedJValue.JObject[F] |
-                EvaluatedJValue.JFunction[F],
+                EvaluatedJValue.JFunction[F]
             ](x)
             .map {
               case e: EvaluatedJValue.JArray[F] => EvaluatedJValue.JNum[F](src, e.elements.size)
@@ -901,7 +901,8 @@ object Std:
         None,
         None,
         Array(
-          "workspace" -> LazyValue.strict(EvaluatedJValue.JString[F](stdSrc, workspaceDir.toString)),
+          "workspace" -> LazyValue
+            .strict(EvaluatedJValue.JString[F](stdSrc, workspaceDir.toString)),
         ),
         workspaceDir,
         importCtx,
