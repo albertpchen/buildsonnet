@@ -147,6 +147,12 @@ local BaseProject(name) = ScalaProject {
         HOME: std.getenv("HOME"),
       },
     }).outputs;
+    local binDir = std.runJob({
+      cmdline: ["mkdir", "-p", "build/bin"],
+      inputFiles: [],
+      outputFiles: ["build/bin"],
+      envVars: { PATH: std.getenv("PATH") },
+    }).outputs;
     local nativeImage = std.runJob({
       cmdline: [
         // "nix-shell", "--command",
@@ -170,7 +176,7 @@ local BaseProject(name) = ScalaProject {
           "buildsonnet.Buildsonnet", "build/bin/buildsonnet",
         //]),
       ],
-      inputFiles: $.buildsonnet.classpathPaths + configFiles,
+      inputFiles: $.buildsonnet.classpathPaths + configFiles + binDir,
       // envVars: {
       //   [var]: std.getenv(var) for var in ["PATH"]
       // },
