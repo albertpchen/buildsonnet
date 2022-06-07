@@ -21,7 +21,7 @@ sealed trait DefaultValue[T]:
   def value: T
 
 object DefaultValue:
-  private def apply[T](t: T): DefaultValue[T] =
+  private[ecs] def apply[T](t: T): DefaultValue[T] =
     new DefaultValue[T]:
       def value = t
 
@@ -33,12 +33,13 @@ object DefaultValue:
 
 import scala.language.dynamics
 object Component extends Dynamic:
-  def selectDynamic[V: DefaultValue](name: String): Component[name.type, V] = Component()
+  def selectDynamic[V](name: String): Component[name.type, V] = Component()
 
 
 opaque type Id = Int
 object Id:
   private[ecs] def apply(id: Int): Id = id
+  given DefaultValue[Id] = DefaultValue(0)
 
   extension(id: Id)
     private[ecs] def toInt: Int = id
@@ -148,6 +149,57 @@ object System:
         prettyPrintImp(builder)
         builder.toString
 
+/*
+private class StringTrie(
+  val firsts: Array[Char],
+  val children: Array[StringTrie],
+  val word: Boolean
+)
+
+abstract class ParserContext:
+  protected def consumeWhile(chars: Int, cond: Char => Boolean): Array[Char]
+  protected def consumeWhileDiscard(chars: Int, cond: Char => Boolean): Unit
+
+  protected def consume(n: Int): Array[Char]
+  protected def consumeDiscard(n: Int): Unit
+
+  protected def str(str: String): Unit
+  protected def strIgnore(str: String): Unit
+
+  protected def strIn(trie: StringTrie): String
+
+  protected def fail(): Nothing
+
+  protected def oneOf[A](parsers: List[Parser[A]]): A
+  protected def end(n: Int): Unit
+
+  protected def repeat[A](parser: Parser[A]): IArray[A]
+  protected def repeatDiscard(parser: Parser[?]): Unit
+  protected def not(parser: Parser[?]): Unit
+  protected def peek(parser: Parser[?]): Unit
+
+  protected def index(): Int
+
+object ParserContext:
+  def product[A, B](p0: Parser[A], p1: Parser[B]): Parser[(A, B)] = ???
+  def backtrack[A](p: Parser[A]): Parser[A] = ???
+
+  def whitespace: Parser[Unit] =
+    oneOf(List(
+      charIn(" \t\r\n"),
+      Parser {
+        char('#')
+        charsWhile(_ != '\n')
+      },
+      Parser {
+        str("/" + "*")
+      }
+    ))
+
+
+type Parser[T] = ParserContext ?=> T
+*/
+
 @main
 def test: Unit =
   val name = Component.name[String]
@@ -166,6 +218,18 @@ def test: Unit =
 
   println(system.prettyPrint + '\n')
 
+  class A:
+    val a: Int => Int = i => {
+      println(s"a: $i")
+      if i > 0 then b(i - 1) else 0
+    }
+
+    val b: Int => Int = i => {
+      println(s"b: $i")
+      if i > 0 then a(i - 1) else 0
+    }
+
+  A().a(10)
 
 sealed trait Box[+A, E]
 

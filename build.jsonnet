@@ -1,170 +1,190 @@
-local scala3Version = "3.0.2";
+local deps = import 'dependencies.jsonnet';
+local ScalaProject = import 'modules/buildsonnet/resources/std.scala.Project.jsonnet';
+
+local scala3Version = (import 'versions.json').scala3;
 local scala213Version = "2.13.6";
+
+local BaseProject(name) = ScalaProject {
+  name: name,
+  sources: ['modules/' + name + '/src'],
+  scalaVersion: scala3Version,
+  local outer = self,
+  test: ScalaProject {
+    name: name + '-test',
+    dependencies: [outer],
+    sources: ['modules/' + name + '/test'],
+    scalaVersion: scala3Version,
+  }
+};
+
 {
-  ecs: std.scala.Project {
-    name: "ecs",
-    sources: ["modules/ecs/src"],
-    scalaVersion: scala3Version,
+  jsonrpc4cats: BaseProject('jsonrpc4cats') {
+    libraries: [
+      deps['cats-effect'],
+      deps['log4cats-core'],
+      deps['jsoniter-core'],
+      deps['jsoniter-macros'],
+      deps['fs2-core'],
+      deps['fs2-io'],
+    ]
   },
 
-  bloopgun: std.scala.Project {
-    name: "bloopgun",
-    sources: [
-      "bloop/bloopgun/src/main/scala",
-      std.write("bloop/bloopgun/generated_src/BloopgunInfo.scala", |||
-        package bloopgun.internal.build
-        
-        case object BloopgunInfo {
-          val version: String = "0.1.0-SNAPSHOT"
-        }
-      |||)
+  jsonrpc4catsTest: $.jsonrpc4cats.test {
+    libraries: [
+      deps['weaver-cats'],
+      deps['weaver-scalacheck'],
+    ]
+  },
+
+  bsp4s: BaseProject('bsp4s') {
+    sources: ['build-server-protocol/bsp4s/src/main/scala'],
+    dependencies: [$.jsonrpc4cats],
+  },
+
+  logger: BaseProject('logger') {
+    libraries: [
+      deps['cats-effect'],
     ],
+  },
+
+  bloopLauncher: BaseProject('bloop-launcher') {
+    sources: ["bloop/launcher-core/src/main/scala"],
     scalaVersion: scala213Version,
     libraries: [
-      std.scala.Dep("me.vican.jorge", "snailgun-cli", "0.4.0"),
-      std.java.Dep("org.zeroturnaround", "zt-exec", "1.11"),
-      std.java.Dep("org.slf4j", "slf4j-nop", "1.7.2"),
-      std.scala.Dep("io.get-coursier", "coursier", "2.0.16"),
-      std.scala.Dep("io.get-coursier", "coursier-cache", "2.0.16"),
-      std.scala.Dep("com.github.plokhotnyuk.jsoniter-scala", "jsoniter-scala-core", "2.4.0"),
-      std.scala.Dep("com.github.plokhotnyuk.jsoniter-scala", "jsoniter-scala-macros", "2.4.0"),
-      std.java.Dep("org.bouncycastle", "bcprov-jdk15on", "1.64"),
-      std.java.Dep("org.bouncycastle", "bcpkix-jdk15on", "1.64"),
+      deps['coursier'],
+      deps['coursier-cache'],
+      deps['ipcsocket'],
+      deps['bloopgun'],
     ],
   },
 
-  bloopLauncher: std.scala.Project {
-    name: "bloop-launcher",
-    dependencies: [$.bloopgun],
-    sources: ["bloop/launcher/src/main/scala"],
-    scalaVersion: scala213Version,
+  bsp: BaseProject('bsp') {
+    dependencies: [
+      $.bsp4s,
+      $.jsonrpc4cats,
+      $.logger,
+      $.bloopLauncher
+    ],
+  },
+
+  job: BaseProject('job') {
     libraries: [
-      std.scala.Dep("io.get-coursier", "coursier", "2.0.16"),
-      std.scala.Dep("io.get-coursier", "coursier-cache", "2.0.16"),
-      std.java.Dep("org.scala-sbt.ipcsocket", "ipcsocket", "1.4.0",),
+      deps['doobie-core'],
+      deps['doobie-hikari'],
+      deps['sqlite-jdbc'],
+      deps['log4cats-core'],
+    ],
+    dependencies: [
+      $.logger,
+      $.evaluator,
     ],
   },
 
-  parser213: std.scala.Project {
-    name: "parser213",
-    sources: ["modules/parser213/src/main/scala"],
-    scalaVersion: scala213Version,
+  ast: BaseProject('ast') {
     libraries: [
-      std.scala.Dep("ch.epfl.scala", "bsp4s", "2.0.0"),
+      deps['cats-parse'],
+    ]
+  },
+
+  evaluator: BaseProject('evaluator') {
+    dependencies: [
+      $.logger,
+      $.ast,
     ],
   },
 
-  js: std.scala.Project {
-    name: "js",
-    platform: "js",
-    scalaVersion: "3.0.2",
-    scalaJsVersion: "1.7.1",
-    sources: ["modules/js/src"],
-    withSources: true,
-    mode: 'debug',
-    mainClass: 'tutorial.webapp.hello',
-    nodePath: '/nix/store/s1cc19ypzs09mnhzlyrvl6ml44nkx7yy-nodejs-14.18.0/bin/node',
+  buildsonnet: BaseProject('buildsonnet') {
+    dependencies: [
+      $.ast,
+      $.logger,
+      $.bsp,
+      $.evaluator,
+      $.job,
+    ],
     libraries: [
-      // std.scala.Dep("org.scala-js", "scalajs-dom", "2.0.0",),
-      // available for 2.12, 2.13, 3.0
-      std.scala.Dep("co.fs2", "fs2-core", "3.1.6"),
-
-      // optional I/O library
-      std.scala.Dep("co.fs2", "fs2-io", "3.1.6"),
-
-      // // optional reactive streams interop
-      // std.scala.Dep("co.fs2", "fs2-reactive-streams", "3.2.0"),
-
-      // // optional scodec interop
-      // std.scala.Dep("co.fs2", "fs2-scodec", "3.1.6"),
+      deps['decline-effect'],
+      deps['log4cats-slf4j'],
+      deps['logback'],
+      deps['coursier-jvm'],
+      deps['bloop-config'],
     ],
+    javaRuntimeOpts: [
+      "-Dcats.effect.stackTracingMode=full",
+      "-Dcats.effect.traceBufferSize=2048",
+    ]
   },
-  parser: std.scala.Project {
-    name: "parser",
-    withSources: true,
-    dependencies: [$.bloopLauncher, $.parser213],
-    sources: ["modules/parser/src/main/scala"],
-    scalaVersion: scala3Version,
-    scalacOptions: ["-Xmax-inlines", "100"],
-    libraries: [
-      std.scala.Dep("org.typelevel", "cats-parse", "0.3.4", crossVersion="for3Use2_13"),
-      std.scala.Dep("io.get-coursier", "coursier", "2.0.16", crossVersion="for3Use2_13"),
-      std.scala.Dep("io.get-coursier", "coursier-jvm", "2.0.16", crossVersion="for3Use2_13"),
-      std.scala.Dep("io.get-coursier", "coursier-launcher", "2.0.16", crossVersion="for3Use2_13"),
-      std.scala.Dep("com.typesafe.slick", "slick", "3.3.3", crossVersion="for3Use2_13"),
-      std.java.Dep("org.xerial", "sqlite-jdbc", "3.36.0.3"),
-      std.scala.Dep("ch.epfl.scala", "bsp4s", "2.0.0", crossVersion="for3Use2_13"),
-      std.scala.Dep("ch.epfl.scala", "bloop-config", "1.4.9", crossVersion="for3Use2_13"),
-      std.scala.Dep("com.lihaoyi", "sourcecode", "0.2.7"),
-    ],
-    runtimeJvmHome: std.getenv("HOME") + "/.cache/coursier/jvm/graalvm-java11@21.2.0/",
-    runtimeJavaOpts: [
-      // "-agentpath:/path/to/libasyncProfiler.so=start,event=cpu,file=profile.html",
-      // "-agentlib:native-image-agent=config-output-dir=" + std.workspace.name + "/native-image-agent-config-output-dir"
-    ],
-  },
-
-  glob(args):
-    local syntax = if std.length(args) >= 3 then args[2] else "glob";
-    local paths = std.paths(args[0], args[1], syntax);
-    std.print([path.name for path in paths]),
-
-  help(args):
-    local jvmHome = std.scala.jvm("graalvm-java11:21.2.0").name;
-    std.runJob({
-      cmdline: [jvmHome + "/bin/native-image", "--help"],
-      inputFiles: [],
-    }),
-
-  cpp(args):
-    local paths = std.paths("modules/cpp/src", "**.cpp");
-    std.runJob({
-      cmdline: [std.getenv("CXX"), "-std=c++17", "-o", "HelloWorld"] + args + [path.name for path in paths],
-      inputFiles: paths,
-      outputFiles: ["HelloWorld"],
-      envVars: {
-        PATH: std.getenv("PATH"),
-        LIBRARY_PATH: std.getenv("LIBRARY_PATH"),
-      }
-    }),
 
   nativeImage(args):
-    local jvmHome = std.scala.jvm("graalvm-java11:21.2.0").name;
-    local workspaceDir = std.workspace.name;
-    local nativeImageConfigDir = workspaceDir + "/native-image-agent-config-output-dir";
-    std.runJob({
-      cmdline: [
-        jvmHome + "/bin/native-image",
-        "-cp", $.parser.classpathString
-      ] + [
-        "--no-server",
-        "--enable-http",
-        "--enable-https",
-        "-H:EnableURLProtocols=http,https",
-        "--enable-all-security-services",
-        "--no-fallback",
-        "--allow-incomplete-classpath",
-        "-H:+ReportExceptionStackTraces",
-
-        "-H:+PrintClassInitialization",
-        "--report-unsupported-elements-at-runtime",
-
-        "-H:ReflectionConfigurationFiles=" + workspaceDir + "/native-image-reflect-config.json",
-        "-H:ResourceConfigurationFiles=" + workspaceDir + "/native-image-resource-config.json",
-
-        "-H:ReflectionConfigurationFiles=" + nativeImageConfigDir + "/reflect-config.json",
-        "-H:ResourceConfigurationFiles=" + nativeImageConfigDir + "/resource-config.json",
-        "-H:JNIConfigurationFiles=" + nativeImageConfigDir + "/jni-config.json",
-
-        "--initialize-at-run-time=scribe.Logger$",
-        "--initialize-at-run-time=scribe.LoggerId$",
-      ] + args,
-      inputFiles: std.scala.classpath($.parser.bloopConfig),
+    local jvmHome = std.java.fetchJvm("graalvm-java11:22.1.0");
+    local configDir = workspace + '/' + 'build/native-image-config';
+    local installNativeImage = std.runJob({
+      cmdline: [jvmHome + "/bin/gu", "install", "native-image"],
+      inputFiles: [],
       envVars: {
         PATH: std.getenv("PATH"),
-        LIBRARY_PATH: std.getenv("LIBRARY_PATH"),
-      }
-    }),
+      },
+    });
+    local configFiles = std.runJob({
+      cmdline: [
+        jvmHome + "/bin/java",
+        "-agentlib:native-image-agent=config-output-dir=" + configDir,
+        "-cp", $.buildsonnet.classpathString,
+        "buildsonnet.Buildsonnet", "run", "-C", "native-image-project", "--", "run",
+      ],
+      inputFiles: [
+        "native-image-project/build.jsonnet",
+        "native-image-project/deps.jsonnet",
+      ] + std.find("native-image-project/modules", "**.scala") + installNativeImage.outputs,
+      outputFiles: [
+        configDir + "/reflect-config.json",
+        configDir + "/resource-config.json",
+        configDir + "/jni-config.json",
+        configDir + "/proxy-config.json",
+      ],
+      envVars: {
+        JAVA_HOME: jvmHome,
+        PATH: std.getenv("PATH"),
+        HOME: std.getenv("HOME"),
+      },
+    }).outputs;
+    local binDir = std.runJob({
+      cmdline: ["mkdir", "-p", "build/bin"],
+      inputFiles: [],
+      outputFiles: ["build/bin"],
+      envVars: { PATH: std.getenv("PATH") },
+    }).outputs;
+    local nativeImage = std.runJob({
+      cmdline: [
+        // "nix-shell", "--command",
+        // std.join(" ", [
+          jvmHome + "/bin/native-image",
+          "-cp", $.buildsonnet.classpathString,
+          "--enable-http",
+          "--enable-https",
+          "-H:EnableURLProtocols=http,https",
+          "--no-fallback",
+          "-H:+ReportExceptionStackTraces",
+          "-H:+PrintClassInitialization",
+          "-H:-CheckToolchain",
+          "--report-unsupported-elements-at-runtime",
+
+          "-H:ReflectionConfigurationFiles=" + configDir + "/reflect-config.json",
+          "-H:ResourceConfigurationFiles=" + configDir + "/resource-config.json",
+          "-H:JNIConfigurationFiles=" + configDir + "/jni-config.json",
+          "-H:DynamicProxyConfigurationFiles=" + configDir + "/proxy-config.json",
+
+          "buildsonnet.Buildsonnet", "build/bin/buildsonnet",
+        //]),
+      ],
+      inputFiles: $.buildsonnet.classpathPaths + configFiles + binDir,
+      // envVars: {
+      //   [var]: std.getenv(var) for var in ["PATH"]
+      // },
+      outputFiles: ["build/bin/buildsonnet"],
+      fail: false,
+    });
+    nativeImage.exitCode,
+
   mdoc(args):
     local classpath = std.join(":", [path.name for path in std.scala.cs([std.scala.Dep("org.scalameta", "mdoc_3", "2.2.24")])]);
     local cmdline = [

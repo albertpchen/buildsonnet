@@ -1,3 +1,6 @@
 [submodule "bloop"]
 	path = bloop
 	url = git@github.com:albertpchen/bloop.git
+[submodule "build-server-protocol"]
+	path = build-server-protocol
+	url = https://github.com/build-server-protocol/build-server-protocol.git

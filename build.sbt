@@ -1,154 +1,170 @@
-val scala3Version = "3.0.2"
-val scala213Version = "2.13.6"
-
 val Dependencies = new {
-  val coursierVersion = "2.0.16"
-  val coursier = "io.get-coursier" %% "coursier" % coursierVersion
-  val coursierJvm = "io.get-coursier" %% "coursier-jvm" % coursierVersion
-  val coursierCache = "io.get-coursier" %% "coursier-cache" % coursierVersion
-  val coursierLauncher = "io.get-coursier" %% "coursier-launcher" % coursierVersion
+  val catsCore = "org.typelevel" %% "cats-core" % "2.7.0"
+  val catsEffect = "org.typelevel" %% "cats-effect" % "3.3.8"
+  val catsParse = "org.typelevel" %% "cats-parse" % "0.3.7"
 
-  val snailgunVersion = "0.4.0"
-  val snailgun = ("me.vican.jorge" %% "snailgun-cli" % snailgunVersion)
+  val log4catsCore = "org.typelevel" %% "log4cats-core" % "2.3.1"
+  val log4catsSlf4j = "org.typelevel" %% "log4cats-slf4j" % "2.3.1"
 
-  val jsoniterVersion = "2.4.0"
-  val jsoniterCore =
-    "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-core" % jsoniterVersion
-  val jsoniterMacros =
-    "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-macros" % jsoniterVersion
+  val fs2Core = "co.fs2" %% "fs2-core" % "3.2.7"
+  val fs2Io = "co.fs2" %% "fs2-io" % "3.2.7"
 
-  val slf4jNop = "org.slf4j" % "slf4j-nop" % "1.7.2"
+  def weaver(name: String) = "com.disneystreaming" %% s"weaver-$name" % "0.7.11" % Test
+  val weaverCats = weaver("cats")
+  val weaverScalacheck = weaver("scalacheck")
 
-  val ztExecVersion = "1.11"
-  val ztExec = "org.zeroturnaround" % "zt-exec" % ztExecVersion
+  def jsoniter(name: String) = "com.github.plokhotnyuk.jsoniter-scala" %% s"jsoniter-scala-$name" % "2.13.29"
+  val jsoniterCore = jsoniter("core")
+  val jsoniterMacros = jsoniter("macros")
+
+  val bloopLauncher = ("ch.epfl.scala" %% "bloop-launcher" % "1.5.0").cross(CrossVersion.for3Use2_13)
+  val declineEffect = "com.monovore" %% "decline-effect" % "2.2.0"
+
+  def doobie(name: String) = "org.tpolecat" %% s"doobie-$name" % "1.0.0-RC2"
+  val doobieCore = doobie("core")
+  val doobieHikari = doobie("hikari")
+
+  val sqliteJdbc = "org.xerial" % "sqlite-jdbc" % "3.36.0.3"
+  val logback = "ch.qos.logback" % "logback-classic" % "1.2.11"
+
+  val coursier = ("io.get-coursier" %% "coursier" % "2.0.16").cross(CrossVersion.for3Use2_13)
+  val coursierCache = ("io.get-coursier" %% "coursier-cache" % "2.0.16").cross(CrossVersion.for3Use2_13)
+  val coursierJvm = ("io.get-coursier" %% "coursier-jvm" % "2.0.16").cross(CrossVersion.for3Use2_13)
+  val coursierLauncher = "io.get-coursier" %% "coursier-launcher" % "2.0.16"
+  val ipcsocket = "org.scala-sbt.ipcsocket" % "ipcsocket" % "1.4.0"
+
+  val bloopConfig = ("ch.epfl.scala" %% "bloop-config" % "1.5.0").cross(CrossVersion.for3Use2_13)
+  val bloopgun = ("ch.epfl.scala" %% "bloopgun" % "1.5.0").cross(CrossVersion.for3Use2_13)
 }
 
+val scala3Version = "3.2.0-RC1-bin-20220602-42b5941-NIGHTLY"
+val scala213Version = "2.13.6"
+
 lazy val root = project.in(file("."))
-lazy val ecs = project
-  .in(file("modules/ecs"))
+
+lazy val jsonrpc4cats = project
+  .in(file("modules/jsonrpc4cats"))
   .settings(
-    run / fork := true,
+    scalaVersion := scala3Version,
     Compile / scalaSource := baseDirectory.value / "src",
-    version := "0.1.0",
+    Test / scalaSource := baseDirectory.value / "test",
+    libraryDependencies ++= List(
+      Dependencies.catsEffect,
+      Dependencies.log4catsCore,
+      Dependencies.jsoniterCore,
+      Dependencies.jsoniterMacros,
+      Dependencies.fs2Core,
+      Dependencies.fs2Io,
+      Dependencies.weaverCats,
+      Dependencies.weaverScalacheck,
+    ),
+    testFrameworks += new TestFramework("weaver.framework.CatsEffect"),
+  )
+
+lazy val bsp4s = project
+  .in(file("build-server-protocol/bsp4s"))
+  .dependsOn(jsonrpc4cats)
+  .settings(
     scalaVersion := scala3Version,
   )
 
-lazy val bloopgun: Project = project
-  .in(file("bloop/bloopgun"))
-  .enablePlugins(BuildInfoPlugin)
+lazy val logger = project
+  .in(file("modules/logger"))
   .settings(
-    name := "bloopgun-core",
-    scalaVersion := scala213Version,
-    buildInfoPackage := "bloopgun.internal.build",
-    buildInfoKeys := List(Keys.version),
-    buildInfoObject := "BloopgunInfo",
+    scalaVersion := scala3Version,
+    Compile / scalaSource := baseDirectory.value / "src",
+    Test / scalaSource := baseDirectory.value / "test",
     libraryDependencies ++= List(
-      //Dependencies.configDirectories,
-      Dependencies.snailgun,
-      // Use zt-exec instead of nuprocess because it doesn't require JNA (good for graalvm)
-      Dependencies.ztExec,
-      Dependencies.slf4jNop,
-      Dependencies.coursier,
-      Dependencies.coursierCache,
-      Dependencies.jsoniterCore,
-      Dependencies.jsoniterMacros % Provided,
-      // Necessary to compile to native (see https://github.com/coursier/coursier/blob/0bf1c4f364ceff76892751a51361a41dfc478b8d/build.sbt#L376)
-      "org.bouncycastle" % "bcprov-jdk15on" % "1.64",
-      "org.bouncycastle" % "bcpkix-jdk15on" % "1.64"
+      Dependencies.catsEffect,
     ),
   )
 
 lazy val bloopLauncher: Project = project
-  .in(file("bloop/launcher"))
+  .in(file("bloop/launcher-core"))
   .disablePlugins(ScriptedPlugin)
-  .dependsOn(bloopgun)
   .settings(
     name := "bloop-launcher-core",
     scalaVersion := scala213Version,
     crossVersion := CrossVersion.constant(scala3Version),
     libraryDependencies ++= List(
-      "org.scala-sbt.ipcsocket" % "ipcsocket" % "1.4.0",
-      Dependencies.coursier,
-      Dependencies.coursierCache
+      Dependencies.ipcsocket,
+      Dependencies.bloopgun,
     )
   )
 
-lazy val parser213 = project
-  .in(file("modules/parser213"))
+lazy val bsp = project
+  .in(file("modules/bsp"))
+  .dependsOn(bsp4s, jsonrpc4cats, logger, bloopLauncher)
   .settings(
-    run / fork := true,
-    version := "0.1.0",
-    scalaVersion := scala213Version,
-    libraryDependencies ++= Seq(
-      ("ch.epfl.scala" %% "bsp4s" % "2.0.0").cross(CrossVersion.for3Use2_13),
-    ),
-  )
-
-// project for JVM build (default)
-lazy val parser = project
-  .in(file("modules/parser"))
-  .enablePlugins(NativeImagePlugin)
-  .dependsOn(bloopLauncher, parser213)
-  .settings(
-    run / fork := true,
-    version := "0.1.0",
     scalaVersion := scala3Version,
-    scalacOptions ++= List("-Xmax-inlines", "1000000000"),
-    javaOptions ++= Seq(
-      /// "-agentlib:native-image-agent=config-output-dir=" + (root / baseDirectory).value.getAbsolutePath + "/native-image-agent-config-output-dir"
-    ),
-    libraryDependencies ++= Seq(
-      "org.typelevel" %% "shapeless3-deriving" % "3.0.3",
-      ("org.typelevel" %% "cats-parse" % "0.3.4").cross(CrossVersion.for3Use2_13),
-      "org.scalameta" %%% "munit" % "0.7.26" % Test,
-      Dependencies.coursier.cross(CrossVersion.for3Use2_13),
-      Dependencies.coursierJvm.cross(CrossVersion.for3Use2_13),
-      Dependencies.coursierLauncher.cross(CrossVersion.for3Use2_13),
-      ("com.typesafe.slick" %% "slick" % "3.3.3").cross(CrossVersion.for3Use2_13),
-      "org.slf4j" % "slf4j-nop" % "1.6.4",
-      "org.xerial" % "sqlite-jdbc" % "3.36.0.3",
-      ("ch.epfl.scala" %% "bsp4s" % "2.0.0").cross(CrossVersion.for3Use2_13),
-      ("ch.epfl.scala" %% "bloop-config" % "1.4.9").cross(CrossVersion.for3Use2_13),
-      ("com.lihaoyi" %% "sourcecode" % "0.2.7"),
-    ),
-    nativeImageOptions ++= {
-      val workspaceDir = (root / baseDirectory).value.getAbsolutePath
-      val nativeImageConfigDir = workspaceDir + "/native-image-agent-config-output-dir"
-      List(
-        //"-H:TempDirectory=" + nativeImageOutput.value.getAbsolutePath,
-        "--no-server",
-        "--enable-http",
-        "--enable-https",
-        "-H:EnableURLProtocols=http,https",
-        "--enable-all-security-services",
-        "--no-fallback",
-        "--allow-incomplete-classpath",
-        "-H:+ReportExceptionStackTraces",
-        
-        "-H:+PrintClassInitialization",
-        "--report-unsupported-elements-at-runtime",
-
-        "-H:ReflectionConfigurationFiles=" + workspaceDir + "/native-image-reflect-config.json",
-        "-H:ResourceConfigurationFiles=" + workspaceDir + "/native-image-resource-config.json",
-
-        "-H:ReflectionConfigurationFiles=" + nativeImageConfigDir + "/reflect-config.json",
-        "-H:ResourceConfigurationFiles=" + nativeImageConfigDir + "/resource-config.json",
-        "-H:JNIConfigurationFiles=" + nativeImageConfigDir + "/jni-config.json",
-
-        "--initialize-at-build-time=scala.Symbol",
-        "--initialize-at-build-time=scala.Function1",
-        "--initialize-at-build-time=scala.Function2",
-        "--initialize-at-build-time=scala.runtime.StructuralCallSite",
-        "--initialize-at-build-time=scala.runtime.EmptyMethodCache",
-        // "--initialize-at-build-time",
-
-        "--initialize-at-run-time=scribe.Logger$",
-        "--initialize-at-run-time=scribe.LoggerId$",
-        // "--enable-url-protocols=https",
-      )
-    },
-    nativeImageVersion := "21.2.0",
-    testFrameworks += new TestFramework("munit.Framework"),
+    Compile / scalaSource := baseDirectory.value / "src",
+    Test / scalaSource := baseDirectory.value / "test",
   )
 
-onLoad in Global ~= (_ andThen ("project parser" :: _))
+lazy val ast = project
+  .in(file("modules/ast"))
+  .settings(
+    scalaVersion := scala3Version,
+    Compile / scalaSource := baseDirectory.value / "src",
+    Test / scalaSource := baseDirectory.value / "test",
+    libraryDependencies ++= List(
+      Dependencies.catsCore,
+      Dependencies.catsParse,
+    ),
+  )
+
+lazy val evaluator = project
+  .in(file("modules/evaluator"))
+  .dependsOn(ast, logger)
+  .settings(
+    scalaVersion := scala3Version,
+    Compile / scalaSource := baseDirectory.value / "src",
+    Test / scalaSource := baseDirectory.value / "test",
+  )
+
+lazy val job = project
+  .in(file("modules/job"))
+  .dependsOn(logger, evaluator)
+  .settings(
+    scalaVersion := scala3Version,
+    Compile / scalaSource := baseDirectory.value / "src",
+    Test / scalaSource := baseDirectory.value / "test",
+    libraryDependencies ++= List(
+      Dependencies.doobieCore,
+      Dependencies.doobieHikari,
+      Dependencies.sqliteJdbc,
+      Dependencies.log4catsCore,
+    ),
+  )
+
+lazy val buildsonnet = project
+  .in(file("modules/buildsonnet"))
+  .enablePlugins(NativeImagePlugin)
+  .dependsOn(logger, evaluator, ast, bsp, job)
+  .settings(
+    scalaVersion := scala3Version,
+    conflictWarning := {
+      if (scalaBinaryVersion.value == "3") {
+        // TODO
+        ConflictWarning("warn", Level.Warn, false)
+      } else {
+        conflictWarning.value
+      }
+    },
+    Compile / scalaSource := baseDirectory.value / "src",
+    Test / scalaSource := baseDirectory.value / "test",
+    libraryDependencies ++= List(
+      Dependencies.declineEffect,
+      Dependencies.log4catsSlf4j,
+      Dependencies.logback,
+      Dependencies.coursierJvm,
+      Dependencies.bloopConfig,
+    ),
+    fork := true,
+    run / javaOptions ++= List(
+      "-Dcats.effect.stackTracingMode=full",
+      "-Dcats.effect.traceBufferSize=2048",
+    ),
+  )
+
+onLoad in Global ~= (_ andThen ("project buildsonnet" :: _))
