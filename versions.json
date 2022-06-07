@@ -1,0 +1,5 @@
+{
+  "scala3": "3.2.0-RC1-bin-20220602-42b5941-NIGHTLY",
+  "cats-effect": "3.3.11",
+  "cats-core": "2.7.0"
+}

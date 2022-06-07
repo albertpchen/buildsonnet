@@ -1,7 +1,7 @@
 local deps = import 'dependencies.jsonnet';
 local ScalaProject = import 'modules/buildsonnet/resources/std.scala.Project.jsonnet';
 
-local scala3Version = "3.2.0-RC1-bin-20220602-42b5941-NIGHTLY";
+local scala3Version = (import 'versions.json').scala3;
 local scala213Version = "2.13.6";
 
 local BaseProject(name) = ScalaProject {

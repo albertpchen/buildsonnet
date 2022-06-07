@@ -1,5 +1,6 @@
+local bootstrapVersions = import 'versions.json';
 {
-  'cats-effect': std.scala.Dep("org.typelevel", "cats-effect", "3.3.8"),
+  'cats-effect': std.scala.Dep("org.typelevel", "cats-effect", bootstrapVersions['cats-effect']),
   'cats-parse': std.scala.Dep("org.typelevel", "cats-parse", "0.3.7"),
 
   log4cats(name): std.scala.Dep("org.typelevel", "log4cats-" + name, "2.3.1"),

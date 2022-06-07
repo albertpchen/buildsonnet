@@ -1,4 +1,4 @@
-name: build-buildsonnet
+name: bootstrap
 on:
   pull_request:
     branches:    
@@ -21,6 +21,10 @@ jobs:
       - uses: olafurpg/setup-scala@v12
         with:
           java-version: ${{ matrix.jdk }}
+
+      - name: bootstrap
+        run: bash bootstrap.bash
+        shell: bash
 
       - name: native-image
         run: 'sbt ''run run --log-to-console -- nativeImage'''
