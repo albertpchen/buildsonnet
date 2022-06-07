@@ -24,7 +24,8 @@ object syntax:
     def md5HashUnsafe(charset: String): String =
       val bytes = if path.toFile.isDirectory then
         val md5 = MessageDigest.getInstance("MD5")
-        Files.walk(path)
+        Files
+          .walk(path)
           .filter(Files.isRegularFile(_))
           .forEach(path => md5.update(path.toString.getBytes(charset)))
         md5.digest
@@ -36,8 +37,7 @@ object syntax:
         try
           while dis.read(buffer) != -1 do ()
           dis
-        finally
-          dis.close()
+        finally dis.close()
 
         md5.digest
       bytes.map("%02x".format(_)).mkString

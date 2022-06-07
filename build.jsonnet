@@ -155,31 +155,25 @@ local BaseProject(name) = ScalaProject {
     }).outputs;
     local nativeImage = std.runJob({
       cmdline: [
-        // "nix-shell", "--command",
-        // std.join(" ", [
-          jvmHome + "/bin/native-image",
-          "-cp", $.buildsonnet.classpathString,
-          "--enable-http",
-          "--enable-https",
-          "-H:EnableURLProtocols=http,https",
-          "--no-fallback",
-          "-H:+ReportExceptionStackTraces",
-          "-H:+PrintClassInitialization",
-          "-H:-CheckToolchain",
-          "--report-unsupported-elements-at-runtime",
+        jvmHome + "/bin/native-image",
+        "-cp", $.buildsonnet.classpathString,
+        "--enable-http",
+        "--enable-https",
+        "-H:EnableURLProtocols=http,https",
+        "--no-fallback",
+        "-H:+ReportExceptionStackTraces",
+        "-H:+PrintClassInitialization",
+        "-H:-CheckToolchain",
+        "--report-unsupported-elements-at-runtime",
 
-          "-H:ReflectionConfigurationFiles=" + configDir + "/reflect-config.json",
-          "-H:ResourceConfigurationFiles=" + configDir + "/resource-config.json",
-          "-H:JNIConfigurationFiles=" + configDir + "/jni-config.json",
-          "-H:DynamicProxyConfigurationFiles=" + configDir + "/proxy-config.json",
+        "-H:ReflectionConfigurationFiles=" + configDir + "/reflect-config.json",
+        "-H:ResourceConfigurationFiles=" + configDir + "/resource-config.json",
+        "-H:JNIConfigurationFiles=" + configDir + "/jni-config.json",
+        "-H:DynamicProxyConfigurationFiles=" + configDir + "/proxy-config.json",
 
-          "buildsonnet.Buildsonnet", "build/bin/buildsonnet",
-        //]),
+        "buildsonnet.Buildsonnet", "build/bin/buildsonnet",
       ],
       inputFiles: $.buildsonnet.classpathPaths + configFiles + binDir,
-      // envVars: {
-      //   [var]: std.getenv(var) for var in ["PATH"]
-      // },
       outputFiles: ["build/bin/buildsonnet"],
       fail: false,
     });

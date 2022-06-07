@@ -46,14 +46,18 @@ object SocketConnection:
             val os = Channels.newOutputStream(pipe.sink())
 
             val fiber = dispatcher.unsafeRunSync(
-              Async[F].blocking(
-                fs2.io.readInputStream(is.pure, chunkSize = 8192, closeAfterUse = true)
-                  .through(fs2.text.utf8.decode)
-                  .through(fs2.text.lines)
-                  .foreach(line => Logger[F].info(line))
-                  .compile
-                  .drain
-              ).start
+              Async[F]
+                .blocking(
+                  fs2
+                    .io
+                    .readInputStream(is.pure, chunkSize = 8192, closeAfterUse = true)
+                    .through(fs2.text.utf8.decode)
+                    .through(fs2.text.lines)
+                    .foreach(line => Logger[F].info(line))
+                    .compile
+                    .drain,
+                )
+                .start,
             )
             (java.io.PrintStream(os, true), fiber)
           }
@@ -66,7 +70,7 @@ object SocketConnection:
             bloop.bloopgun.core.Shell.default,
             userNailgunHost = None,
             userNailgunPort = Some(bloopPort),
-            serverStarted
+            serverStarted,
           )
 
           val job = dispatcher.unsafeRunSync(
@@ -74,19 +78,20 @@ object SocketConnection:
               launcher.runLauncher(
                 bloopVersion,
                 skipBspConnection = false,
-                Nil
+                Nil,
               )
-            }.start
+            }.start,
           )
 
-          serverStarted.future.map { _ =>
-            SocketConnection(clientOut.pure, clientIn.pure)(Sync[F].defer {
-              clientOut.flush()
-              clientOut.close()
-              logStreamFiber.cancel *> job.cancel
-            })
-          }(ec)
+          serverStarted
+            .future
+            .map { _ =>
+              SocketConnection(clientOut.pure, clientIn.pure)(Sync[F].defer {
+                clientOut.flush()
+                clientOut.close()
+                logStreamFiber.cancel *> job.cancel
+              })
+            }(ec)
         })
-      yield
-        connection
+      yield connection
     })(_.cancel)

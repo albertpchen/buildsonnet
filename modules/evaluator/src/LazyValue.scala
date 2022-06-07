@@ -14,10 +14,7 @@ object LazyValue:
   def apply[F[_]: Concurrent: Ref.Make](code: F[EvaluatedJValue[F]]): F[LazyValue[F]] =
     code.memoize
 
-  extension [F[_]](lazyVal: LazyValue[F])
-    def value: F[EvaluatedJValue[F]] = lazyVal
-
-
+  extension [F[_]](lazyVal: LazyValue[F]) def value: F[EvaluatedJValue[F]] = lazyVal
 
 final class LazyObjectValue[F[_]] private (
   val isHidden: Boolean,
@@ -25,7 +22,10 @@ final class LazyObjectValue[F[_]] private (
 )
 
 object LazyObjectValue:
-  def apply[F[_]: Concurrent: Monad: Ref.Make](isHidden: Boolean, code: F[EvaluatedJValue[F]]): F[LazyObjectValue[F]] =
+  def apply[F[_]: Concurrent: Monad: Ref.Make](
+    isHidden: Boolean,
+    code: F[EvaluatedJValue[F]],
+  ): F[LazyObjectValue[F]] =
     LazyValue[F](code).map(lazyVal => new LazyObjectValue(isHidden, lazyVal.value))
 
   def strict[F[_]: Applicative](isHidden: Boolean, value: EvaluatedJValue[F]): LazyObjectValue[F] =

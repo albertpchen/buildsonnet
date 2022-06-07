@@ -24,5 +24,3 @@ def weaverLogToCatsLogger[F[_]](wl: WeaverLog[F]): CatsLogger[F] = new CatsLogge
 
   override def trace(message: => String): F[Unit] = wl.debug(message)
 }
-
-

@@ -6,7 +6,7 @@ import coursier.{Dependency, Fetch, Module, ModuleName, Organization}
 import cats.instances.all.given
 
 case class CoursierParams(
-  deps: List[CoursierDependency]
+  deps: List[CoursierDependency],
 )
 
 object CoursierParams:
@@ -30,14 +30,14 @@ import java.util.concurrent.ExecutorService
 
 object CoursierCatsInterop:
   given [F[_]](using M: cats.Monad[F]): Monad[F] with
-    def point[A](a: A)                       = M.pure(a)
+    def point[A](a: A) = M.pure(a)
     def bind[A, B](elem: F[A])(f: A => F[B]) = M.flatMap(elem)(f)
 
   given [F[_], F0[_]](using N: cats.Monad[F], cs: cats.Parallel.Aux[F, F0]): Gather[F] with
-    def point[A](a: A)                       = N.pure(a)
+    def point[A](a: A) = N.pure(a)
     def bind[A, B](elem: F[A])(f: A => F[B]) = N.flatMap(elem)(f)
     def gather[A](elems: Seq[F[A]]) =
-        N.map(_root_.cats.Parallel.parSequence(elems.toVector))(_.toSeq)
+      N.map(_root_.cats.Parallel.parSequence(elems.toVector))(_.toSeq)
 
   given [F[_]](using S: cats.effect.Async[F], G: Gather[F]): Sync[F] with
     def delay[A](a: => A): F[A] = S.delay(a)
@@ -47,9 +47,9 @@ object CoursierCatsInterop:
     def point[A](a: A): F[A] = G.point(a)
     def schedule[A](pool: ExecutorService)(f: => A): F[A] = {
       val ec0 = pool match
-        case eces: ExecutionContextExecutorService => eces
-        // FIXME Is this instantiation costly? Cache it?
-        case _ => ExecutionContext.fromExecutorService(pool)
+      case eces: ExecutionContextExecutorService => eces
+      // FIXME Is this instantiation costly? Cache it?
+      case _ => ExecutionContext.fromExecutorService(pool)
       S.evalOn(S.delay(f), ec0)
     }
     def bind[A, B](elem: F[A])(f: A => F[B]) = S.flatMap(elem)(f)

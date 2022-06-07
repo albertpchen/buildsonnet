@@ -27,7 +27,7 @@ object SQLiteJobCache:
     stdin: String,
     stdout: String,
     stderr: String,
-    exit_code: Int
+    exit_code: Int,
   )
 
   private case class JobQueryParams(
@@ -158,8 +158,7 @@ object SQLiteJobCache:
     strings.toSeq
 
   private def getQueryParams[F[_]: Sync](key: JobKey): F[JobQueryParams] =
-    for
-      input_signature <- Sync[F].delay {
+    for input_signature <- Sync[F].delay {
         val md5 = MessageDigest.getInstance("MD5")
         key.inputFiles.foreach { (input, contentHash) =>
           val nameHash = input.toString.md5Hash(charset)
@@ -169,14 +168,13 @@ object SQLiteJobCache:
         val res = md5.digest.map("%02x".format(_)).mkString
         res
       }
-    yield
-      JobQueryParams(
-        stringsToByteArray(key.cmdline),
-        stringsToByteArray(key.envVars.flatMap((a, b) => Seq(a, b))),
-        key.directory.toString,
-        key.stdin,
-        input_signature,
-      )
+    yield JobQueryParams(
+      stringsToByteArray(key.cmdline),
+      stringsToByteArray(key.envVars.flatMap((a, b) => Seq(a, b))),
+      key.directory.toString,
+      key.stdin,
+      input_signature,
+    )
 
   def apply[F[_]: Async: Logger](workspaceDir: Path): Resource[F, JobCache[F]] =
     for
@@ -191,80 +189,74 @@ object SQLiteJobCache:
       )
       _ <- Resource.eval((createJobs.run *> createPaths).transact(transactor))
       lock <- Resource.eval(Semaphore(1))
-    yield
-      new JobCache[F] {
-        def getJobRow(params: JobQueryParams) =
-          for
-            jobRows <- queryJobs(params).to[List]
-            jobRowOpt = if jobRows.isEmpty then None else Some(jobRows.maxBy(_.job_id))
-            outputPaths <- jobRowOpt.fold(List.empty.pure[ConnectionIO]) { jobRow =>
-              queryPaths(jobRow.job_id)
-            }
-            _ <- if jobRows.size > 1 then
+    yield new JobCache[F] {
+      def getJobRow(params: JobQueryParams) =
+        for
+          jobRows <- queryJobs(params).to[List]
+          jobRowOpt = if jobRows.isEmpty then None else Some(jobRows.maxBy(_.job_id))
+          outputPaths <- jobRowOpt.fold(List.empty.pure[ConnectionIO]) { jobRow =>
+            queryPaths(jobRow.job_id)
+          }
+          _ <-
+            if jobRows.size > 1 then
               jobRows.traverse { jobRow =>
-                if jobRow.job_id != jobRowOpt.get.job_id then
-                  deleteJobs(jobRow.job_id).void
-                else
-                  ().pure[ConnectionIO]
+                if jobRow.job_id != jobRowOpt.get.job_id then deleteJobs(jobRow.job_id).void
+                else ().pure[ConnectionIO]
               }
             else ().pure[ConnectionIO]
-          yield
-            jobRowOpt
+        yield jobRowOpt
 
-        def get(key: JobKey): F[Option[JobValue]] =
-          Resource.make(lock.acquire)(_ => lock.release).use { _ =>
-            val transaction =
-              for
-                queryParams <- getQueryParams[ConnectionIO](key)
-                jobRowOpt <- getJobRow(queryParams)
-                outputPaths <- jobRowOpt.fold(List.empty.pure[ConnectionIO]) { jobRow =>
-                  queryPaths(jobRow.job_id)
-                }
-              yield
-                jobRowOpt.map { jobRow =>
-                  JobValue(
-                    outputPaths.map { (pathName, hash) =>
-                      workspaceDir.resolve(pathName) -> hash
-                    },
-                    jobRow.stdout,
-                    jobRow.stderr,
-                    jobRow.exit_code,
-                  )
-                }
-            // val y = transactor.yolo
-            // import y._
-            // getQueryParams[F](key).map(queryJobs).flatMap(_.check) *>
-            transaction.transact(transactor)
-          }
+      def get(key: JobKey): F[Option[JobValue]] =
+        Resource.make(lock.acquire)(_ => lock.release).use { _ =>
+          val transaction =
+            for
+              queryParams <- getQueryParams[ConnectionIO](key)
+              jobRowOpt <- getJobRow(queryParams)
+              outputPaths <- jobRowOpt.fold(List.empty.pure[ConnectionIO]) { jobRow =>
+                queryPaths(jobRow.job_id)
+              }
+            yield jobRowOpt.map { jobRow =>
+              JobValue(
+                outputPaths.map { (pathName, hash) =>
+                  workspaceDir.resolve(pathName) -> hash
+                },
+                jobRow.stdout,
+                jobRow.stderr,
+                jobRow.exit_code,
+              )
+            }
+          // val y = transactor.yolo
+          // import y._
+          // getQueryParams[F](key).map(queryJobs).flatMap(_.check) *>
+          transaction.transact(transactor)
+        }
 
-        def insert(key: JobKey, value: JobValue): F[Unit] =
-          Resource.make(lock.acquire)(_ => lock.release).use { _ =>
-            val transaction =
-              for
-                queryParams <- getQueryParams[ConnectionIO](key)
-                jobRowOpt <- getJobRow(queryParams)
-                _ <- jobRowOpt.fold(().pure[ConnectionIO]) { jobRow =>
-                  for
-                    _ <- deletePaths(jobRow.job_id)
-                    _ <- deleteJobs(jobRow.job_id)
-                  yield
-                    ()
-                }
-                job_id <- insertJobs(
-                  queryParams.cmdline,
-                  queryParams.env_vars,
-                  queryParams.directory,
-                  queryParams.input_signature,
-                  queryParams.stdin,
-                  value.stdout,
-                  value.stderr,
-                  value.exitCode,
-                )
-                _ <- value.outputFiles.traverse { (path, hash) =>
-                  insertPaths(job_id, path.toString, hash)
-                }
-              yield
-                ()
-            transaction.transact(transactor)
-          }
-      }
+      def insert(key: JobKey, value: JobValue): F[Unit] =
+        Resource.make(lock.acquire)(_ => lock.release).use { _ =>
+          val transaction =
+            for
+              queryParams <- getQueryParams[ConnectionIO](key)
+              jobRowOpt <- getJobRow(queryParams)
+              _ <- jobRowOpt.fold(().pure[ConnectionIO]) { jobRow =>
+                for
+                  _ <- deletePaths(jobRow.job_id)
+                  _ <- deleteJobs(jobRow.job_id)
+                yield ()
+              }
+              job_id <- insertJobs(
+                queryParams.cmdline,
+                queryParams.env_vars,
+                queryParams.directory,
+                queryParams.input_signature,
+                queryParams.stdin,
+                value.stdout,
+                value.stderr,
+                value.exitCode,
+              )
+              _ <- value.outputFiles.traverse { (path, hash) =>
+                insertPaths(job_id, path.toString, hash)
+              }
+            yield ()
+          transaction.transact(transactor)
+        }
+    }

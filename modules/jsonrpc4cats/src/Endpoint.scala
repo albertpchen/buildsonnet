@@ -7,7 +7,7 @@ import com.github.plokhotnyuk.jsoniter_scala.core.JsonReader
 import com.github.plokhotnyuk.jsoniter_scala.core.JsonWriter
 
 open class Endpoint[A, B](
-  val method: String
+  val method: String,
 )(using val codecA: JsonValueCodec[A], val codecB: JsonValueCodec[B])
 
 object Endpoint:

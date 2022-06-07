@@ -12,8 +12,8 @@ final case class RawJson(value: Array[Byte]) {
 
   override def equals(obj: Any): Boolean = {
     obj match {
-      case that: RawJson => ju.Arrays.equals(value, that.value)
-      case _ => false
+    case that: RawJson => ju.Arrays.equals(value, that.value)
+    case _ => false
     }
   }
 
@@ -24,7 +24,8 @@ final case class RawJson(value: Array[Byte]) {
   }
 
   override def toString: String = {
-    Try(new String(value, StandardCharsets.UTF_8)).toOption
+    Try(new String(value, StandardCharsets.UTF_8))
+      .toOption
       .getOrElse(value.toString)
   }
 }

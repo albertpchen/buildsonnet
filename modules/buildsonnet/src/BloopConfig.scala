@@ -26,7 +26,11 @@ import cats.syntax.all.given
 
 object BloopConfig:
   given [F[_]: Monad]: JDecoder[F, CompileOrder] with
-    def decode(ctx: EvaluationContext[F], path: JDecoderPath, expr: EvaluatedJValue[F]): F[CompileOrder] =
+    def decode(
+      ctx: EvaluationContext[F],
+      path: JDecoderPath,
+      expr: EvaluatedJValue[F],
+    ): F[CompileOrder] =
       path.expect[F, String](ctx, expr).flatMap { str =>
         if str == Mixed.id then Mixed.pure
         else if str == JavaThenScala.id then JavaThenScala.pure
@@ -35,7 +39,11 @@ object BloopConfig:
       }
 
   given [F[_]: Monad]: JDecoder[F, LinkerMode] with
-    def decode(ctx: EvaluationContext[F], path: JDecoderPath, expr: EvaluatedJValue[F]): F[LinkerMode] =
+    def decode(
+      ctx: EvaluationContext[F],
+      path: JDecoderPath,
+      expr: EvaluatedJValue[F],
+    ): F[LinkerMode] =
       path.expect[F, String](ctx, expr).flatMap { str =>
         if str == LinkerMode.Debug.id then LinkerMode.Debug.pure
         else if str == LinkerMode.Release.id then LinkerMode.Release.pure
@@ -43,7 +51,11 @@ object BloopConfig:
       }
 
   given [F[_]: Monad]: JDecoder[F, ModuleKindJS] with
-    def decode(ctx: EvaluationContext[F], path: JDecoderPath, expr: EvaluatedJValue[F]): F[ModuleKindJS] =
+    def decode(
+      ctx: EvaluationContext[F],
+      path: JDecoderPath,
+      expr: EvaluatedJValue[F],
+    ): F[ModuleKindJS] =
       path.expect[F, String](ctx, expr).flatMap { str =>
         if str == ModuleKindJS.NoModule.id then ModuleKindJS.NoModule.pure
         else if str == ModuleKindJS.CommonJSModule.id then ModuleKindJS.CommonJSModule.pure
@@ -60,19 +72,31 @@ object BloopConfig:
   given [F[_]: Monad: Parallel]: JDecoder[F, Platform.Jvm] = JDecoder.derived
   given [F[_]: Monad: Parallel]: JDecoder[F, Platform.Native] = JDecoder.derived
   given [F[_]: Monad: Parallel]: JDecoder[F, Platform] with
-    def decode(ctx: EvaluationContext[F], path: JDecoderPath, expr: EvaluatedJValue[F]): F[Platform] =
+    def decode(
+      ctx: EvaluationContext[F],
+      path: JDecoderPath,
+      expr: EvaluatedJValue[F],
+    ): F[Platform] =
       path.expect[F, EvaluatedJValue.JObject[F]](ctx, expr).flatMap { obj =>
         for
-          name <- obj.lookupOpt("name").fold(path.error(ctx, expr.src, "platform must have a 'name' field"))(_.value)
+          name <- obj
+            .lookupOpt("name")
+            .fold(path.error(ctx, expr.src, "platform must have a 'name' field"))(_.value)
           res <- path.withField("name").expect[F, String](ctx, name).flatMap { name =>
-            if name == Platform.Js.name then summon[JDecoder[F, Platform.Js]].decode(ctx, path, obj).widen
-            else if name == Platform.Jvm.name then summon[JDecoder[F, Platform.Jvm]].decode(ctx, path, obj).widen
-            else if name == Platform.Native.name then summon[JDecoder[F, Platform.Native]].decode(ctx, path, obj).widen
-            else path.error(ctx, expr.src,
-              s"invalid platform name '$name', expected ${Platform.Js.name}, ${Platform.Jvm.name}, or ${Platform.Native.name}")
+            if name == Platform.Js.name then
+              summon[JDecoder[F, Platform.Js]].decode(ctx, path, obj).widen
+            else if name == Platform.Jvm.name then
+              summon[JDecoder[F, Platform.Jvm]].decode(ctx, path, obj).widen
+            else if name == Platform.Native.name then
+              summon[JDecoder[F, Platform.Native]].decode(ctx, path, obj).widen
+            else
+              path.error(
+                ctx,
+                expr.src,
+                s"invalid platform name '$name', expected ${Platform.Js.name}, ${Platform.Jvm.name}, or ${Platform.Native.name}",
+              )
           }
-        yield
-          res
+        yield res
       }
   given [F[_]: Monad: Parallel]: JDecoder[F, Resolution] = JDecoder.derived
 
@@ -94,7 +118,7 @@ object BloopConfig:
     test: Option[Test],
     platform: Option[Platform],
     resolution: Option[Resolution],
-    tags: Option[List[String]]
+    tags: Option[List[String]],
   )
   given [F[_]: Monad: Parallel]: JDecoder[F, RecursiveProject] = JDecoder.derived
 
@@ -132,9 +156,14 @@ object BloopConfig:
     toBloopProject(rproject, seen)
     seen.toList.map(_._2)
 
-  def write[F[_]: Sync](ctx: EvaluationContext[F], rproject: RecursiveProject): F[List[java.nio.file.Path]] =
+  def write[F[_]: Sync](
+    ctx: EvaluationContext[F],
+    rproject: RecursiveProject,
+  ): F[List[java.nio.file.Path]] =
     val bloopVersion = "1.4.9"
     toBloopProjects(rproject).traverse { project =>
-      Std.writeImpl(ctx.workspaceDir.resolve(s".bloop/${project.name}.json"), bloop.config.write(
-        bloop.config.Config.File(bloopVersion, project)))
+      Std.writeImpl(
+        ctx.workspaceDir.resolve(s".bloop/${project.name}.json"),
+        bloop.config.write(bloop.config.Config.File(bloopVersion, project)),
+      )
     }

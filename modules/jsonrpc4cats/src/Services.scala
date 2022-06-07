@@ -23,49 +23,61 @@ object Service:
   def apply[F[_]: Sync: Logger]: PartiallyAppliedService[F] = PartiallyAppliedService[F]()
 
   def request[F[_]: Sync, A, B](endpoint: Endpoint[A, B])(service: A => F[B]): Service[F] =
-    Service[F](endpoint.method, message => {
-      import endpoint.{codecA, codecB}
-      val method = endpoint.method
-      val response = message match {
+    Service[F](
+      endpoint.method,
+      message => {
+        import endpoint.{codecA, codecB}
+        val method = endpoint.method
+        val response = message match {
         case Request(`method`, params, id, jsonrpc, _) =>
           val paramsJson = params.getOrElse(RawJson.nullValue)
           Sync[F]
             .delay(readFromArray[A](paramsJson.value))
             .flatMap { value =>
-              service(value).map { response =>
-                Response.ok(RawJson.toJson(response), id)
-              }.handleErrorWith {
-                // Errors always have a null id because services don't have access to the real id
-                case err: Response.Error => Sync[F].pure(err.copy(id = id))
-                case err => Sync[F].pure(Response.internalError(err, id))
-              }
+              service(value)
+                .map { response =>
+                  Response.ok(RawJson.toJson(response), id)
+                }
+                .handleErrorWith {
+                  // Errors always have a null id because services don't have access to the real id
+                  case err: Response.Error => Sync[F].pure(err.copy(id = id))
+                  case err => Sync[F].pure(Response.internalError(err, id))
+                }
             }
             .handleErrorWith(err => Sync[F].pure(Response.invalidParams(err.toString, id)))
-        case Request(invalidMethod, _, id, _, _) => Sync[F].pure(Response.methodNotFound(invalidMethod, id))
+        case Request(invalidMethod, _, id, _, _) =>
+          Sync[F].pure(Response.methodNotFound(invalidMethod, id))
         case _ => Sync[F].pure(Response.invalidRequest(s"Expected request, obtained $message"))
-      }
-      response.map(Some(_))
-    })
+        }
+        response.map(Some(_))
+      },
+    )
 
-  def notification[F[_]: Sync: Logger, A](endpoint: Endpoint[A, Unit])(service: A => F[Unit]): Service[F] = {
-    Service[F](endpoint.method, message => {
-      import endpoint.codecA
-      val method = endpoint.method
-      val program = message match {
+  def notification[F[_]: Sync: Logger, A](
+    endpoint: Endpoint[A, Unit],
+  )(service: A => F[Unit]): Service[F] = {
+    Service[F](
+      endpoint.method,
+      message => {
+        import endpoint.codecA
+        val method = endpoint.method
+        val program = message match {
         case Notification(`method`, params, _, _) =>
           val paramsJson = params.getOrElse(RawJson.nullValue)
           Sync[F]
             .delay(readFromArray[A](paramsJson.value))
             .flatMap(service)
-            .handleErrorWith(err => Logger[F].error(s"Failed to parse notification $message. Errors: $err"))
+            .handleErrorWith(err =>
+              Logger[F].error(s"Failed to parse notification $message. Errors: $err"),
+            )
         case Notification(invalidMethod, _, _, _) =>
           Logger[F].error(s"Expected method '$method', obtained '$invalidMethod'")
         case _ => Logger[F].error(s"Expected notification, obtained $message")
-      }
-      program *> None.pure
-    })
+        }
+        program *> None.pure
+      },
+    )
   }
-
 
 object Services:
   def empty[F[_]: Sync: Logger]: Services[F] = new Services[F](Nil)
@@ -86,7 +98,7 @@ class Services[F[_]: Sync: Logger] private (
     val duplicate = services.find(_.methodName == service.methodName)
     require(
       duplicate.isEmpty,
-      s"Duplicate service handler for method ${duplicate.get.methodName}"
+      s"Duplicate service handler for method ${duplicate.get.methodName}",
     )
     new Services(service :: services)
   }

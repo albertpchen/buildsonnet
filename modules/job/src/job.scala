@@ -71,12 +71,9 @@ object JobRunner:
     var result = Option.empty[String]
     for p <- path if result.isEmpty do
       val path =
-        if p.startsWith("/") then
-          Paths.get(s"$p/$cmd")
-        else
-          dir.resolve(p).resolve(cmd)
-      if Files.exists(path) then
-        result = Some(path.normalize().toString)
+        if p.startsWith("/") then Paths.get(s"$p/$cmd")
+        else dir.resolve(p).resolve(cmd)
+      if Files.exists(path) then result = Some(path.normalize().toString)
     return result
 
   def run[F[_]: Async: ConsoleLogger: Logger: Parallel](
@@ -88,8 +85,7 @@ object JobRunner:
     _ <-
       if desc.directory.exists(_.startsWith("/")) then
         ctx.error(src, s"job directory may not be an absolute path, got ${desc.directory.get}")
-      else
-        ().pure
+      else ().pure
     _ <-
       desc.outputFiles.find(_.startsWith("/")).fold(().pure) { output =>
         ctx.error(src, s"job output file may not be an absolute path, got $output")
@@ -128,7 +124,9 @@ object JobRunner:
         .get("PATH")
         .fold(Seq.empty)(_.split(":").toSeq) :+ "."
       resolveCommand(desc.cmdline.head, path, directory)
-        .fold(ctx.error(src, s"could not resolve command \"${desc.cmdline.head}\" in path $path"))(_.pure)
+        .fold(ctx.error(src, s"could not resolve command \"${desc.cmdline.head}\" in path $path"))(
+          _.pure,
+        )
     }
     cmdline = (cmd +: desc.cmdline.tail).toArray
     inputPathHashes <- inputPaths.traverse(_.md5Hash(charset))
@@ -143,98 +141,106 @@ object JobRunner:
     cached <- cache.get(jobKey).flatMap {
       case None =>
         Logger[F].info(s"no value found in cache").as(None)
-      case Some(jobValue) => Sync[F].defer {
-        val paths = jobValue.outputFiles.map { (pathName, hash) =>
-          ctx.workspaceDir.resolve(pathName) -> hash
-        }
-        val expectedOutputPaths = outputPaths.toSet
-        var staleReason: String | Null = null
-        val diff = expectedOutputPaths.diff(paths.map(_._1).toSet)
-        if diff.nonEmpty then
-          staleReason = s"missing expected output paths:\n  ${diff.toSeq.sorted.mkString("\n  ")}"
-        else
-          paths.exists { (path, hash) =>
-            if !path.exists then
-              staleReason = s"output path does not exist: \"$path\" "
-              true
-            else if path.md5HashUnsafe(charset) != hash then
-              staleReason = s"output path hash is different from last recorded hash: \"$path\""
-              true
-            else
-              false
+      case Some(jobValue) =>
+        Sync[F].defer {
+          val paths = jobValue.outputFiles.map { (pathName, hash) =>
+            ctx.workspaceDir.resolve(pathName) -> hash
           }
-        staleReason match
-        case reason: String =>
-          Logger[F].info(s"got stale value $jobValue from cache: $reason").as(None)
-        case null =>
-          Logger[F].info(s"got valid value $jobValue from cache").as(
-            Some(Job(
-              jobValue.stdout,
-              jobValue.stderr,
-              paths.map { (path, _) =>
-                ctx.workspaceDir.relativize(path)
-              },
-              jobValue.exitCode,
-            ))
-          )
-      }
+          val expectedOutputPaths = outputPaths.toSet
+          var staleReason: String | Null = null
+          val diff = expectedOutputPaths.diff(paths.map(_._1).toSet)
+          if diff.nonEmpty then
+            staleReason = s"missing expected output paths:\n  ${diff.toSeq.sorted.mkString("\n  ")}"
+          else
+            paths.exists { (path, hash) =>
+              if !path.exists then
+                staleReason = s"output path does not exist: \"$path\" "
+                true
+              else if path.md5HashUnsafe(charset) != hash then
+                staleReason = s"output path hash is different from last recorded hash: \"$path\""
+                true
+              else false
+            }
+          staleReason match
+          case reason: String =>
+            Logger[F].info(s"got stale value $jobValue from cache: $reason").as(None)
+          case null =>
+            Logger[F]
+              .info(s"got valid value $jobValue from cache")
+              .as(
+                Some(
+                  Job(
+                    jobValue.stdout,
+                    jobValue.stderr,
+                    paths.map { (path, _) =>
+                      ctx.workspaceDir.relativize(path)
+                    },
+                    jobValue.exitCode,
+                  ),
+                ),
+              )
+        }
     }
     job <- cached match
-      case Some(job) => job.pure
-      case _ =>
-        val cmdlineString = desc.cmdline.mkString(" ")
-        for
-          _ <- ConsoleLogger[F].stdout(cmdlineString)
-          _ <- Logger[F].info(s"starting job: $cmdlineString")
-          envVars = desc.envVars.fold(null)(_.toSeq.map((k, v) => s"$k=$v").sorted.toArray)
-          process <- Sync[F].blocking {
-            java.lang.Runtime.getRuntime().exec(
+    case Some(job) => job.pure
+    case _ =>
+      val cmdlineString = desc.cmdline.mkString(" ")
+      for
+        _ <- ConsoleLogger[F].stdout(cmdlineString)
+        _ <- Logger[F].info(s"starting job: $cmdlineString")
+        envVars = desc.envVars.fold(null)(_.toSeq.map((k, v) => s"$k=$v").sorted.toArray)
+        process <- Sync[F].blocking {
+          java
+            .lang
+            .Runtime
+            .getRuntime()
+            .exec(
               cmdline,
               envVars,
-              directory.toFile
+              directory.toFile,
             )
-          }
-          // TODO: handle different encoding in InputStreamReader?
-          stdPair <- Dispatcher[F].use { dispatcher =>
-            (
-              Sync[F].blocking {
-                val lines = new BufferedReader(new InputStreamReader(process.getInputStream)).lines()
-                val builder = new StringBuilder
-                lines.forEach { line =>
-                  dispatcher.unsafeRunSync(ConsoleLogger[F].stdout(line))
-                  builder ++= line
-                  builder ++= ConsoleLogger.lineSeparator
-                }
-                builder.toString
-              },
-              Sync[F].blocking {
-                val lines = new BufferedReader(new InputStreamReader(process.getErrorStream)).lines()
-                val builder = new StringBuilder
-                lines.forEach { line =>
-                  dispatcher.unsafeRunSync(ConsoleLogger[F].stderr(line))
-                  builder ++= line
-                  builder ++= ConsoleLogger.lineSeparator
-                }
-                builder.toString
+        }
+        // TODO: handle different encoding in InputStreamReader?
+        stdPair <- Dispatcher[F].use { dispatcher =>
+          (
+            Sync[F].blocking {
+              val lines = new BufferedReader(new InputStreamReader(process.getInputStream)).lines()
+              val builder = new StringBuilder
+              lines.forEach { line =>
+                dispatcher.unsafeRunSync(ConsoleLogger[F].stdout(line))
+                builder ++= line
+                builder ++= ConsoleLogger.lineSeparator
               }
-            ).parTupled
-          }
-          (stdout, stderr) = stdPair
-          exitCode <- Sync[F].blocking(process.waitFor())
-          _ <- Logger[F].info(s"finished job: $cmdlineString")
-          missingFiles <- Sync[F].delay(outputPaths.filterNot(_.exists))
-          job <-
-            if exitCode != 0 && desc.fail.getOrElse(true) then
-              ctx.error(src, s"$stderr\nnonzero exit code returned from job: $exitCode")
-            else if missingFiles.nonEmpty then
-              ctx.error(src, s"job did not produce expected output files: ${missingFiles.mkString(", ")}")
-            else
-              Job(stdout, stderr, outputPaths, exitCode).pure
-          outputPathHashes <- outputPaths.traverse(_.md5Hash(charset))
-          jobValue = JobValue(outputPaths.zip(outputPathHashes), job.stdout, job.stderr, job.exitCode)
-          _ <- Logger[F].info(s"inserting $jobValue into cache")
-          _ <- cache.insert(jobKey, jobValue)
-        yield
-          job
-  yield
-    job
+              builder.toString
+            },
+            Sync[F].blocking {
+              val lines = new BufferedReader(new InputStreamReader(process.getErrorStream)).lines()
+              val builder = new StringBuilder
+              lines.forEach { line =>
+                dispatcher.unsafeRunSync(ConsoleLogger[F].stderr(line))
+                builder ++= line
+                builder ++= ConsoleLogger.lineSeparator
+              }
+              builder.toString
+            },
+          ).parTupled
+        }
+        (stdout, stderr) = stdPair
+        exitCode <- Sync[F].blocking(process.waitFor())
+        _ <- Logger[F].info(s"finished job: $cmdlineString")
+        missingFiles <- Sync[F].delay(outputPaths.filterNot(_.exists))
+        job <-
+          if exitCode != 0 && desc.fail.getOrElse(true) then
+            ctx.error(src, s"$stderr\nnonzero exit code returned from job: $exitCode")
+          else if missingFiles.nonEmpty then
+            ctx.error(
+              src,
+              s"job did not produce expected output files: ${missingFiles.mkString(", ")}",
+            )
+          else Job(stdout, stderr, outputPaths, exitCode).pure
+        outputPathHashes <- outputPaths.traverse(_.md5Hash(charset))
+        jobValue = JobValue(outputPaths.zip(outputPathHashes), job.stdout, job.stderr, job.exitCode)
+        _ <- Logger[F].info(s"inserting $jobValue into cache")
+        _ <- cache.insert(jobKey, jobValue)
+      yield job
+  yield job

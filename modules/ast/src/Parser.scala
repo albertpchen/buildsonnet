@@ -26,15 +26,21 @@ final class Parser(file: SourceFile):
         (Source.Range(file, start, end), t)
       }
 
-  val whitespace: P[Unit] = P.oneOf(List(
-    P.charIn(" \t\r\n").void,
-    P.char('#') *> P.charsWhile0(_ != '\n').void,
-    (P.string("//") *> P.charsWhile0(_ != '\n').void).backtrack,
-    (P.string("/*") *> P.oneOf(List(
-      P.charWhere(_ != '*'),
-      (P.char('*') *> !P.char('/')).backtrack,
-    )).rep0 *> P.string("*/")),
-  ))
+  val whitespace: P[Unit] = P.oneOf(
+    List(
+      P.charIn(" \t\r\n").void,
+      P.char('#') *> P.charsWhile0(_ != '\n').void,
+      (P.string("//") *> P.charsWhile0(_ != '\n').void).backtrack,
+      (P.string("/*") *> P
+        .oneOf(
+          List(
+            P.charWhere(_ != '*'),
+            (P.char('*') *> !P.char('/')).backtrack,
+          ),
+        )
+        .rep0 *> P.string("*/")),
+    ),
+  )
   val whitespaces0, __ = whitespace.rep0.void
   val whitespaces: P[Unit] = whitespace.rep.void
 
@@ -42,16 +48,32 @@ final class Parser(file: SourceFile):
   def keyword(str: String): P[Source] =
     (
       P.string(str).void.withContext(s"expected keyword $str") ~
-      !idTail.withContext(s"expected keyword $str")
+        !idTail.withContext(s"expected keyword $str")
     ).withRange.map(_._1)
   val keywords = Set(
-    "assert", "else", "error", "false", "for", "function", "if", "import", "importstr",
-    "in", "local", "null", "tailstrict", "then", "self", "super", "true"
+    "assert",
+    "else",
+    "error",
+    "false",
+    "for",
+    "function",
+    "if",
+    "import",
+    "importstr",
+    "in",
+    "local",
+    "null",
+    "tailstrict",
+    "then",
+    "self",
+    "super",
+    "true",
   )
   val id: P[String] =
     P.not(P.stringIn(keywords) *> !idTail)
       .with1
-      .*>(P.charIn('_' +: ('a' to 'z') ++: ('A' to 'Z')) ~ idTail.rep0).map { (head, tail) =>
+      .*>(P.charIn('_' +: ('a' to 'z') ++: ('A' to 'Z')) ~ idTail.rep0)
+      .map { (head, tail) =>
         (head +: tail).mkString
       }
 
@@ -62,54 +84,59 @@ final class Parser(file: SourceFile):
   val self = keyword("self").map(JSelf(_))
 
   val hexDigit = P.charIn(('0' to '9') ++ ('a' to 'f') ++ ('A' to 'F')).map { ch =>
-    if ch >= '0' || ch <= '9' then
-      ch - '0'
-    else if ch >= 'a' || ch <= 'f' then
-      ch - 'a' + 10
-    else
-      ch - 'A' + 10
+    if ch >= '0' || ch <= '9' then ch - '0'
+    else if ch >= 'a' || ch <= 'f' then ch - 'a' + 10
+    else ch - 'A' + 10
   }
 
-  val escapedStringChar: P[Char] = P.char('\\') *> P.oneOf(List(
-    P.char('"').map(_ => '"'),
-    P.char('\'').map(_ => '\''),
-    P.char('\\').map(_ => '\\'),
-    P.char('/').map(_ => '/'),
-    P.char('b').map(_ => '\b'),
-    P.char('f').map(_ => '\f'),
-    P.char('n').map(_ => '\n'),
-    P.char('r').map(_ => '\r'),
-    P.char('t').map(_ => '\t'),
-    P.char('u') *> (hexDigit, hexDigit, hexDigit, hexDigit).tupled.map { (_1, _2, _3, _4) =>
-      (_1.toInt << 12 | _2.toInt << 8 | _3.toInt << 4 | _4.toInt).toChar
-    },
-  ))
-  def stringChar(quote: Char): P[Char] = P.oneOf(List(
-    P.charWhere(c => c >= ' ' && c != quote && c != '\\'),
-    escapedStringChar,
-  ))
-  def verbatimStringChar(quote: Char): P[Char] = P.oneOf(List(
-    P.charWhere(c => c >= ' ' && c != quote),
-    P.char(quote) *> P.char(quote).map(_ => quote),
-  ))
-  val blockStringChar: P[Char | String] = P.oneOf(List(
-    P.charWhere(c => c >= ' ' && c != '|' && c != '\\'),
-    escapedStringChar,
-    (P.char('|') *> P.char('|') *> P.not(P.char('|')).map(_ => "||")).backtrack,
-    P.char('|') *> P.not(P.char('|')).map(_ => '|'),
-  ))
+  val escapedStringChar: P[Char] = P.char('\\') *> P.oneOf(
+    List(
+      P.char('"').map(_ => '"'),
+      P.char('\'').map(_ => '\''),
+      P.char('\\').map(_ => '\\'),
+      P.char('/').map(_ => '/'),
+      P.char('b').map(_ => '\b'),
+      P.char('f').map(_ => '\f'),
+      P.char('n').map(_ => '\n'),
+      P.char('r').map(_ => '\r'),
+      P.char('t').map(_ => '\t'),
+      P.char('u') *> (hexDigit, hexDigit, hexDigit, hexDigit).tupled.map { (_1, _2, _3, _4) =>
+        (_1.toInt << 12 | _2.toInt << 8 | _3.toInt << 4 | _4.toInt).toChar
+      },
+    ),
+  )
+  def stringChar(quote: Char): P[Char] = P.oneOf(
+    List(
+      P.charWhere(c => c >= ' ' && c != quote && c != '\\'),
+      escapedStringChar,
+    ),
+  )
+  def verbatimStringChar(quote: Char): P[Char] = P.oneOf(
+    List(
+      P.charWhere(c => c >= ' ' && c != quote),
+      P.char(quote) *> P.char(quote).map(_ => quote),
+    ),
+  )
+  val blockStringChar: P[Char | String] = P.oneOf(
+    List(
+      P.charWhere(c => c >= ' ' && c != '|' && c != '\\'),
+      escapedStringChar,
+      (P.char('|') *> P.char('|') *> P.not(P.char('|')).map(_ => "||")).backtrack,
+      P.char('|') *> P.not(P.char('|')).map(_ => '|'),
+    ),
+  )
 
   val newline = (P.char('\r').? ~ P.char('\n')).map { (r, n) =>
     r.fold("\n")(_ => "\r\n")
   }
   val blockString = (
     P.char('|').rep(3) *> P.charIn(" \t").rep0 *> newline *>
-    (P.charIn(" \t").rep0, blockStringChar.rep0, newline).tupled
+      (P.charIn(" \t").rep0, blockStringChar.rep0, newline).tupled
   ).flatMap { (prefix, headLine, headNewline) =>
     (
       (P.string(prefix.mkString_("", "", "")).backtrack *> blockStringChar.rep0 ~ newline).rep0 <*
-      (P.charIn(" \t").rep0 *> P.char('|').rep(3))
-    ).map {  tailLines =>
+        (P.charIn(" \t").rep0 *> P.char('|').rep(3))
+    ).map { tailLines =>
       val builder = new StringBuilder()
       ((headLine, headNewline) +: tailLines).foreach { (tokens, newline) =>
         tokens.foreach {
@@ -122,33 +149,40 @@ final class Parser(file: SourceFile):
     }
   }
 
-  val string = P.oneOf(List(
-    P.char('\'') *> stringChar('\'').rep0 <* P.char('\''),
-    P.char('"') *> stringChar('"').rep0 <* P.char('"'),
-    P.string("@'") *> verbatimStringChar('\'').backtrack.rep0 <* P.char('\''),
-    P.string("@\"") *> verbatimStringChar('"').backtrack.rep0 <* P.char('"'),
-  )).map(s => s.mkString).withContext("expected string literal")
+  val string = P
+    .oneOf(
+      List(
+        P.char('\'') *> stringChar('\'').rep0 <* P.char('\''),
+        P.char('"') *> stringChar('"').rep0 <* P.char('"'),
+        P.string("@'") *> verbatimStringChar('\'').backtrack.rep0 <* P.char('\''),
+        P.string("@\"") *> verbatimStringChar('"').backtrack.rep0 <* P.char('"'),
+      ),
+    )
+    .map(s => s.mkString)
+    .withContext("expected string literal")
 
-  val num = (P.index.with1 ~ Numbers.jsonNumber ~ P.index).map {
-    case ((beginOff, num), endOff) => JNum(Source.Range(file, beginOff, endOff), num)
+  val num = (P.index.with1 ~ Numbers.jsonNumber ~ P.index).map { case ((beginOff, num), endOff) =>
+    JNum(Source.Range(file, beginOff, endOff), num)
   }
   val listSep: P[Unit] = P.char(',').surroundedBy(__).void
-  val dollar = (P.index.with1 <* P.char('$')).map(offset => JOuter(Source.Range(file, offset, offset + 1)))
+  val dollar =
+    (P.index.with1 <* P.char('$')).map(offset => JOuter(Source.Range(file, offset, offset + 1)))
 
   def commaList[A](pa: P[A]): P0[List[A]] = (
     pa.<*(__) ~
-    (P.char(',') *> (__) *> pa <* __).backtrack.rep0 <*
-    P.char(',').<*(__).?
+      (P.char(',') *> (__) *> pa <* __).backtrack.rep0 <*
+      P.char(',').<*(__).?
   ).map { (head, tail) =>
     head +: tail
-  }.?.map(_.getOrElse(List.empty))
+  }.?
+    .map(_.getOrElse(List.empty))
 
   var expr: P[JValue] = null
   val exprDefer = P.defer(expr)
   val assert = {
     ((keyword("assert") *> __ *> exprDefer).withRange <* __) ~ (P.char(':') *> __ *> exprDefer).?
-  }.map {
-    case ((src, cond), msg) => (src, cond, msg)
+  }.map { case ((src, cond), msg) =>
+    (src, cond, msg)
   }
   val ifspec = keyword("if") *> __ *> exprDefer
   val forspec = (keyword("for") *> id.surroundedBy(__) <* keyword("in")) ~ (__.with1 *> exprDefer)
@@ -158,15 +192,20 @@ final class Parser(file: SourceFile):
   val bind: P[(Int, String, Option[JParamList], JValue)] = {
     (
       P.index.with1 ~ id.<*(__),
-      params.?.with1 <*(P.char('=').surroundedBy(__)),
+      params.?.with1 <* (P.char('=').surroundedBy(__)),
       exprDefer,
     ).tupled.map { case ((start, name), params, value) =>
       (start, name, params.map(Parser.toIArray), value)
     }
   }
   val objInside: P0[Source => JValue] = P.defer0 {
-    val bindLocal: P[JObjMember.JLocal] = (keyword("local") *> whitespaces *> bind).map { (start, id, paramsOpt, expr) =>
-      JObjMember.JLocal(expr.src.withStart(start), id, paramsOpt.fold(expr)(JFunction(expr.src.withStart(start), _, expr)))
+    val bindLocal: P[JObjMember.JLocal] = (keyword("local") *> whitespaces *> bind).map {
+      (start, id, paramsOpt, expr) =>
+        JObjMember.JLocal(
+          expr.src.withStart(start),
+          id,
+          paramsOpt.fold(expr)(JFunction(expr.src.withStart(start), _, expr)),
+        )
     }
     val objComp = (
       (bindLocal <* __ <* P.char(',') <* __).backtrack.rep0,
@@ -178,32 +217,45 @@ final class Parser(file: SourceFile):
     ).tupled.map { case (preLocals, key, value, postLocals, (inId, inExpr), cond) =>
       JObjectComprehension(_, preLocals ++ postLocals, key, value, inId, inExpr, cond)
     }
-    val key: P[JValue] = P.oneOf(List(
-      string.withRange.map(JString(_, _)),
-      id.withRange.map(JString(_, _)),
-      (P.char('[') *> __ *> expr <* __ <* P.char(']')),
-    ))
-    val h = (P.char('+').?.with1 ~ P.char(':') ~ P.char(':').?  ~ P.char(':').?).map { case (((plus, _1), _2), _3) =>
-      plus.isDefined -> (_2.isDefined || _3.isDefined)
+    val key: P[JValue] = P.oneOf(
+      List(
+        string.withRange.map(JString(_, _)),
+        id.withRange.map(JString(_, _)),
+        (P.char('[') *> __ *> expr <* __ <* P.char(']')),
+      ),
+    )
+    val h = (P.char('+').?.with1 ~ P.char(':') ~ P.char(':').? ~ P.char(':').?).map {
+      case (((plus, _1), _2), _3) =>
+        plus.isDefined -> (_2.isDefined || _3.isDefined)
     }
     val keyValue: P[JObjMember] = {
-      P.oneOf(List(
-        (P.index.with1 ~ key, (__).with1 *> (params.?.with1 ~ h.surroundedBy(__)), expr).tupled.map { case ((start, key), (params, (plus, isHidden)), value) =>
-          val objValue = params.fold(value) { params =>
-            JValue.JFunction(value.src.withStart(start), Parser.toIArray(params), value)
-          }
-          JObjMember.JField(value.src.withStart(start), key, plus, isHidden, objValue)
-        },
-        assert.map(JObjMember.JAssert(_, _, _)),
-        (keyword("local") *> __ *> bind).map { (start, id, paramsOpt, expr) =>
-          JObjMember.JLocal(expr.src.withStart(start), id, paramsOpt.fold(expr)(JFunction(expr.src.withStart(start), _, expr)))
-        },
-      ))
+      P.oneOf(
+        List(
+          (P.index.with1 ~ key, (__).with1 *> (params.?.with1 ~ h.surroundedBy(__)), expr)
+            .tupled
+            .map { case ((start, key), (params, (plus, isHidden)), value) =>
+              val objValue = params.fold(value) { params =>
+                JValue.JFunction(value.src.withStart(start), Parser.toIArray(params), value)
+              }
+              JObjMember.JField(value.src.withStart(start), key, plus, isHidden, objValue)
+            },
+          assert.map(JObjMember.JAssert(_, _, _)),
+          (keyword("local") *> __ *> bind).map { (start, id, paramsOpt, expr) =>
+            JObjMember.JLocal(
+              expr.src.withStart(start),
+              id,
+              paramsOpt.fold(expr)(JFunction(expr.src.withStart(start), _, expr)),
+            )
+          },
+        ),
+      )
     }
-    P.oneOf0(List(
-      objComp.backtrack,
-      commaList(keyValue).map(members => JValue.JObject(_, members)),
-    ))
+    P.oneOf0(
+      List(
+        objComp.backtrack,
+        commaList(keyValue).map(members => JValue.JObject(_, members)),
+      ),
+    )
   }
 
   val listComp = (
@@ -214,11 +266,12 @@ final class Parser(file: SourceFile):
   }
   val exprBase: P[JValue] = {
     val list =
-      P.oneOf0(List(
-        listComp.backtrack,
-        commaList(exprDefer).map(elements => JArray(_, IArray.unsafeFromArray(elements.toArray))),
-      ))
-        .surroundedBy(__)
+      P.oneOf0(
+        List(
+          listComp.backtrack,
+          commaList(exprDefer).map(elements => JArray(_, IArray.unsafeFromArray(elements.toArray))),
+        ),
+      ).surroundedBy(__)
         .with1
         .between(P.char('['), P.char(']'))
         .withRange
@@ -229,8 +282,8 @@ final class Parser(file: SourceFile):
     }
     val ifExpr = (
       (P.index.with1 ~ (keyword("if") *> __ *> exprDefer <* __)) ~
-      (keyword("then") *> __ *> exprDefer <* __) ~
-      (keyword("else") *> __ *> exprDefer).?
+        (keyword("then") *> __ *> exprDefer <* __) ~
+        (keyword("else") *> __ *> exprDefer).?
     ).map { case (((startIdx, cond), trueValue), elseValue) =>
       val src = elseValue.getOrElse(trueValue).src.withStart(startIdx)
       JIf(src, cond, trueValue, elseValue)
@@ -242,7 +295,7 @@ final class Parser(file: SourceFile):
     val grouped = P.char('(') *> __ *> exprDefer <* __ <* P.char(')')
     val local = (
       keyword("local") *> __ *> bind.repSep(__ *> P.char(',') *> __) ~
-      (__ *> P.char(';') *> __ *> exprDefer)
+        (__ *> P.char(';') *> __ *> exprDefer)
     ).withRange.map { case (src, (binds, result)) =>
       binds.toList.foldRight(result) { case ((start, id, paramsOpt, expr), acc) =>
         JLocal(src, id, paramsOpt.fold(expr)(JFunction(expr.src.withStart(start), _, expr)), acc)
@@ -251,37 +304,62 @@ final class Parser(file: SourceFile):
     val error = (keyword("error") *> __ *> exprDefer).withRange.map(JError(_, _))
     val importExpr = (keyword("import") *> __ *> string).withRange.map(JImport(_, _))
     val importStrExpr = (keyword("importstr") *> __ *> string).withRange.map(JImportStr(_, _))
-    val assertExp = ((assert <* __ <* P.char(';') <* __) ~ exprDefer).map { case ((src, cond, msg), result) =>
-      JAssert(src, cond, msg, result)
+    val assertExp = ((assert <* __ <* P.char(';') <* __) ~ exprDefer).map {
+      case ((src, cond, msg), result) =>
+        JAssert(src, cond, msg, result)
     }
-    P.oneOf(List(
-      string.withRange.map(JString(_, _)),
-      blockString.withRange.map(JString(_, _)),
-      num,
-      list,
-      obj,
-      grouped,
-      pnull.backtrack,
-      pfalse.backtrack,
-      ptrue.backtrack,
-      self.backtrack,
-      psuper.backtrack,
-      dollar,
-      ifExpr,
-      function.backtrack,
-      local.backtrack,
-      assertExp.backtrack,
-      importExpr.backtrack,
-      importStrExpr.backtrack,
-      id.withRange.map(JId(_, _)),
-      error,
-    ))
+    P.oneOf(
+      List(
+        string.withRange.map(JString(_, _)),
+        blockString.withRange.map(JString(_, _)),
+        num,
+        list,
+        obj,
+        grouped,
+        pnull.backtrack,
+        pfalse.backtrack,
+        ptrue.backtrack,
+        self.backtrack,
+        psuper.backtrack,
+        dollar,
+        ifExpr,
+        function.backtrack,
+        local.backtrack,
+        assertExp.backtrack,
+        importExpr.backtrack,
+        importStrExpr.backtrack,
+        id.withRange.map(JId(_, _)),
+        error,
+      ),
+    )
   }.withContext("expected expression")
 
-  val op = P.stringIn(Array(
-    "<<", ">>", "<=", ">=", "in", "==", "!=", "&&", "||",
-    "*", "/", "%", "+", "-", "<", ">", "&", "^", "|", "in",
-  )).map(JBinaryOperator(_))
+  val op = P
+    .stringIn(
+      Array(
+        "<<",
+        ">>",
+        "<=",
+        ">=",
+        "in",
+        "==",
+        "!=",
+        "&&",
+        "||",
+        "*",
+        "/",
+        "%",
+        "+",
+        "-",
+        "<",
+        ">",
+        "&",
+        "^",
+        "|",
+        "in",
+      ),
+    )
+    .map(JBinaryOperator(_))
 
   val args: P0[List[(Option[String], JValue)]] = {
     val argName = (id <* __ <* P.char('=')).backtrack.?
@@ -296,46 +374,55 @@ final class Parser(file: SourceFile):
         .~(P.charIn(Array('.', '(', '[', '{')))
         .<*(__)
         .flatMap {
-          case (_, '.') => (id ~ P.index).map { (field, end) =>
-            (jv: JValue) => JGetField(jv.src.withEnd(end), jv, field)
-          }
+          case (_, '.') =>
+            (id ~ P.index).map { (field, end) => (jv: JValue) =>
+              JGetField(jv.src.withEnd(end), jv, field)
+            }
           case (_, '[') =>
             val suffix = P.char(':') *> __ *> exprDefer.? <* __
             (
               (exprDefer <* __) ~ (suffix ~ suffix.?).?.<*(P.char(']')) ~ P.index
             ).map { case ((index, opt), end) =>
-              if opt.isEmpty then
-                (jv: JValue) => JIndex(jv.src.withEnd(end), jv, index)
+              if opt.isEmpty then (jv: JValue) => JIndex(jv.src.withEnd(end), jv, index)
               else
                 val (endIndex, strideOpt) = opt.get
                 (jv: JValue) => JSlice(jv.src.withEnd(end), jv, index, endIndex, strideOpt.flatten)
             }
-          case (_, '(') => ((args <* __  <* P.char(')')) ~ P.index).flatMap { (args, end) =>
-            val namedAfterPositional = args.size >= 2 && args.sliding(2).exists { window =>
-              val Seq((first, _), (second, _)) = window
-              first.isDefined && second.isEmpty
+          case (_, '(') =>
+            ((args <* __ <* P.char(')')) ~ P.index).flatMap { (args, end) =>
+              val namedAfterPositional = args.size >= 2 && args.sliding(2).exists { window =>
+                val Seq((first, _), (second, _)) = window
+                first.isDefined && second.isEmpty
+              }
+              if namedAfterPositional then
+                P.failWith("Positional argument after a named argument is not allowed")
+              else
+                val (positional, named) = args.partition(_._1.isEmpty)
+                P.pure((jv: JValue) =>
+                  JApply(
+                    jv.src.withEnd(end),
+                    jv,
+                    positional.map(_._2),
+                    named.map((id, expr) => id.get -> expr),
+                  ),
+                )
             }
-            if namedAfterPositional then
-              P.failWith("Positional argument after a named argument is not allowed")
-            else
-              val (positional, named) = args.partition(_._1.isEmpty)
-              P.pure((jv: JValue) => JApply(jv.src.withEnd(end), jv, positional.map(_._2), named.map((id, expr) => id.get -> expr)))
-          }
-          case (start, '{') => ((objInside <* __  <* P.char('}')) ~ P.index).map { (objInside, end) =>
-            (jv: JValue) => JBinaryOp(
-              jv.src.withEnd(end),
-              jv,
-              JBinaryOperator.Op_+,
-              objInside(Source.Range(file, start, end)),
-            )
-          }
+          case (start, '{') =>
+            ((objInside <* __ <* P.char('}')) ~ P.index).map { (objInside, end) => (jv: JValue) =>
+              JBinaryOp(
+                jv.src.withEnd(end),
+                jv,
+                JBinaryOperator.Op_+,
+                objInside(Source.Range(file, start, end)),
+              )
+            }
         }
         <* __
     ((unaryOp.? <* __).with1 ~ exprBase.<*(__) ~ suffix.rep0).map { case ((unaryOp, base), fns) =>
       val expr = fns.foldLeft(base) { (base, fn) => fn(base) }
       unaryOp match
-        case None => expr
-        case Some(op) => JUnaryOp(Source.Generated(file), JUnaryOperator(op), expr)
+      case None => expr
+      case Some(op) => JUnaryOp(Source.Generated(file), JUnaryOperator(op), expr)
     }
   }
 
@@ -344,9 +431,7 @@ final class Parser(file: SourceFile):
     var exprs = tail
     def climb(curr: JValue, minPrec: Int): JValue =
       var result = curr
-      while
-        if exprs.isEmpty then
-          false
+      while if exprs.isEmpty then false
         else
           val (op, expr) = exprs.head
           val cond = exprs.head._1.precedence >= minPrec
