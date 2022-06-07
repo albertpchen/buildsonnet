@@ -31,5 +31,5 @@ jobs:
         shell: bash
 
       - name: run-native-image
-        run: ./bin/buildsonnet run --log-to-console -- nativeImage
+        run: ./build/bin/buildsonnet run --log-to-console -- nativeImage
         shell: bash
