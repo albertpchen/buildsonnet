@@ -120,7 +120,7 @@ local BaseProject(name) = ScalaProject {
     local configFiles = std.runJob({
       cmdline: [
         jvmHome + "/bin/java",
-        "-agentlib:native-image-agent=config-output-dir=" + configDir,
+        "-agentpath:" + jvmHome + "/lib/libnative-image-agent.dylib" + "=config-output-dir=" + configDir,
         "-cp", $.buildsonnet.classpathString,
         "buildsonnet.Buildsonnet", "run", "-C", "native-image-project", "--", "run",
       ],
