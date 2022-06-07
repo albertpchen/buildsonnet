@@ -117,6 +117,13 @@ local BaseProject(name) = ScalaProject {
   nativeImage(args):
     local jvmHome = std.java.fetchJvm("graalvm-java11:22.1.0");
     local configDir = workspace + '/' + 'build/native-image-config';
+    local ls = std.runJob({
+      cmdline: ["ls", jvmHome + "/lib"],
+      inputFiles: [],
+      envVars: {
+        PATH: std.getenv("PATH"),
+      },
+    });
     local configFiles = std.runJob({
       cmdline: [
         jvmHome + "/bin/java",
@@ -128,7 +135,7 @@ local BaseProject(name) = ScalaProject {
       inputFiles: [
         "native-image-project/build.jsonnet",
         "native-image-project/deps.jsonnet",
-      ] + std.find("native-image-project/modules", "**.scala"),
+      ] + std.find("native-image-project/modules", "**.scala") + ls.outputs,
       outputFiles: [
         configDir + "/reflect-config.json",
         configDir + "/resource-config.json",
