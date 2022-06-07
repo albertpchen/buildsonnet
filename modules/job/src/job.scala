@@ -10,6 +10,8 @@ import cats.effect.std.Dispatcher
 import cats.syntax.all.given
 import cats.Parallel
 
+import collection.JavaConverters.mapAsScalaMapConverter
+
 import java.nio.file.attribute.FileTime
 import java.nio.file.{Files, Path, Paths}
 import java.io.{BufferedReader, InputStreamReader}
@@ -27,11 +29,6 @@ case class JobDescription(
   directory: Option[String],
   fail: Option[Boolean],
 )
-
-private[job] enum JobOutput:
-  case OutputFileMissing(file: String)
-  case AbsoluteOutputFile(file: String)
-  case Success(file: String)
 
 case class JobKey(
   cmdline: Seq[String],
@@ -71,15 +68,16 @@ object JobRunner:
     if cmd.startsWith("/") then
       val path = Paths.get(cmd)
       return if Files.exists(path) then Some(path.toString) else None
-    for p <- path do
+    var result = Option.empty[String]
+    for p <- path if result.isEmpty do
       val path =
         if p.startsWith("/") then
           Paths.get(s"$p/$cmd")
         else
           dir.resolve(p).resolve(cmd)
       if Files.exists(path) then
-        return Some(path.normalize().toString)
-    return None
+        result = Some(path.normalize().toString)
+    return result
 
   def run[F[_]: Async: ConsoleLogger: Logger: Parallel](
     ctx: EvaluationContext[F],
@@ -124,17 +122,19 @@ object JobRunner:
     // TODO: handle InvalidPathException
     directory <- Sync[F].delay(desc.directory.fold(ctx.workspaceDir)(ctx.workspaceDir.resolve(_)))
     cmd <- Sync[F].defer {
-      resolveCommand(
-        desc.cmdline.head,
-        desc.envVars.fold(Seq.empty)(_.get("PATH").fold(Seq.empty)(_.split(":").toSeq)) :+ ".",
-        directory
-      ).fold(ctx.error(src, s"could not resolve command \"${desc.cmdline.head}\""))(_.pure)
+      val path = desc
+        .envVars
+        .fold(System.getenv().asScala)(identity)
+        .get("PATH")
+        .fold(Seq.empty)(_.split(":").toSeq) :+ "."
+      resolveCommand(desc.cmdline.head, path, directory)
+        .fold(ctx.error(src, s"could not resolve command \"${desc.cmdline.head}\" in path $path"))(_.pure)
     }
     cmdline = (cmd +: desc.cmdline.tail).toArray
     inputPathHashes <- inputPaths.traverse(_.md5Hash(charset))
     jobKey = JobKey(
       cmdline = cmdline,
-      envVars = desc.envVars.fold(Seq.empty)(_.toList.sorted),
+      envVars = desc.envVars.fold(System.getenv().asScala.toList.sorted)(_.toList.sorted),
       inputFiles = inputPaths.zip(inputPathHashes),
       stdin = desc.stdin.getOrElse(""),
       directory = directory.relativize(ctx.workspaceDir),
@@ -186,7 +186,7 @@ object JobRunner:
         for
           _ <- ConsoleLogger[F].stdout(cmdlineString)
           _ <- Logger[F].info(s"starting job: $cmdlineString")
-          envVars = desc.envVars.fold(Seq.empty)(_.toSeq).map((k, v) => s"$k=$v").sorted.toArray
+          envVars = desc.envVars.fold(null)(_.toSeq.map((k, v) => s"$k=$v").sorted.toArray)
           process <- Sync[F].blocking {
             java.lang.Runtime.getRuntime().exec(
               cmdline,
@@ -201,7 +201,7 @@ object JobRunner:
                 val lines = new BufferedReader(new InputStreamReader(process.getInputStream)).lines()
                 val builder = new StringBuilder
                 lines.forEach { line =>
-                  dispatcher.unsafeRunTimed(ConsoleLogger[F].stdout(line), Duration.Inf)
+                  dispatcher.unsafeRunSync(ConsoleLogger[F].stdout(line))
                   builder ++= line
                   builder ++= ConsoleLogger.lineSeparator
                 }
@@ -211,7 +211,7 @@ object JobRunner:
                 val lines = new BufferedReader(new InputStreamReader(process.getErrorStream)).lines()
                 val builder = new StringBuilder
                 lines.forEach { line =>
-                  dispatcher.unsafeRunTimed(ConsoleLogger[F].stderr(line), Duration.Inf)
+                  dispatcher.unsafeRunSync(ConsoleLogger[F].stderr(line))
                   builder ++= line
                   builder ++= ConsoleLogger.lineSeparator
                 }

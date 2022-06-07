@@ -127,7 +127,6 @@ local BaseProject(name) = ScalaProject {
     local configFiles = std.runJob({
       cmdline: [
         jvmHome + "/bin/java",
-        //"-agentpath:" + jvmHome + "/lib/libnative-image-agent.dylib" + "=config-output-dir=" + configDir,
         "-agentlib:native-image-agent=config-output-dir=" + configDir,
         "-cp", $.buildsonnet.classpathString,
         "buildsonnet.Buildsonnet", "run", "-C", "native-image-project", "--", "run",
@@ -146,22 +145,18 @@ local BaseProject(name) = ScalaProject {
         JAVA_HOME: jvmHome,
         PATH: std.getenv("PATH"),
         HOME: std.getenv("HOME"),
-        //LD_LIBRARY_PATH: jvmHome + "/lib",
       },
     }).outputs;
     local nativeImage = std.runJob({
       cmdline: [
-        "nix-shell", "--command",
-        std.join(" ", [
+        // "nix-shell", "--command",
+        // std.join(" ", [
           jvmHome + "/bin/native-image",
           "-cp", $.buildsonnet.classpathString,
-          "--no-server",
           "--enable-http",
           "--enable-https",
           "-H:EnableURLProtocols=http,https",
-          "--enable-all-security-services",
           "--no-fallback",
-          "--allow-incomplete-classpath",
           "-H:+ReportExceptionStackTraces",
           "-H:+PrintClassInitialization",
           "-H:-CheckToolchain",
@@ -173,12 +168,12 @@ local BaseProject(name) = ScalaProject {
           "-H:DynamicProxyConfigurationFiles=" + configDir + "/proxy-config.json",
 
           "buildsonnet.Buildsonnet", "build/bin/buildsonnet",
-        ] + args),
+        //]),
       ],
       inputFiles: $.buildsonnet.classpathPaths + configFiles,
-      envVars: {
-        [var]: std.getenv(var) for var in ["PATH"]
-      },
+      // envVars: {
+      //   [var]: std.getenv(var) for var in ["PATH"]
+      // },
       outputFiles: ["build/bin/buildsonnet"],
       fail: false,
     });
