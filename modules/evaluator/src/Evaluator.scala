@@ -115,7 +115,7 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
                 rawValue,
               )
             else rawValue
-          Some((key, isHidden, value))
+          Some((src, key, isHidden, value))
       }.parSequence
     var obj: EvaluatedJValue.JObject[F] = null
     ctx
@@ -123,7 +123,9 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
       .fold(LazyValue(Sync[F].delay(obj)).map(ctx.bind("$", _)))(_ => ctx.pure)
       .flatMap { outerCtx =>
         def membersFn(params: EvaluatedJValue.JObjectImplParams[F]) =
-          val ctx = outerCtx.withSelf(params.self).withSuper(params.`super`)
+          val ctx = outerCtx
+            .withSelf(params.self)
+            .withSuper(params.`super`)
           val asserts = rawMembers.collect { case JObjMember.JAssert(src, rawCond, rawMsg) =>
             val cond = eval(ctx)(rawCond).flatMap(ctx.expect[Boolean](_))
             val msgOpt = rawMsg.fold(Option.empty[String].pure) { msg =>
@@ -139,8 +141,9 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
               ctx <- ctx.bindCode(rawMembers.collect { case local: JObjMember.JLocal =>
                 local.name -> local.value
               })
-              members <- pairs.flatMap(_.collect { case Some((key, isHidden, value)) =>
-                LazyObjectValue[F](isHidden, eval(ctx)(value)).map(key -> _)
+              members <- pairs.flatMap(_.collect { case Some((src, key, isHidden, value)) =>
+                val ctxWithStack = ctx.withStackEntry(StackEntry.objectField(value.src))
+                LazyObjectValue[F](isHidden, eval(ctxWithStack)(value)).map(key -> _)
               }.sequence)
             yield collection.Map.from(members)
           EvaluatedJValue.JObjectImpl[F](impl, asserts.void)
@@ -180,7 +183,9 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
               .withSuper(params.`super`)
               .bindCode(locals.map(local => local.name -> local.value))
             members <- pairs.flatMap(_.map { (key, value, forValue) =>
-              val valueCtx = ctx.bindStrict(forVar, forValue)
+              val valueCtx = ctx
+                .bindStrict(forVar, forValue)
+                .withStackEntry(StackEntry.objectField(value.src))
               LazyObjectValue(false, eval(valueCtx)(value)).map(key -> _)
             }.sequence)
           yield collection.Map.from(members)
@@ -509,7 +514,7 @@ def eval[F[_]: Async: ConsoleLogger: Parallel](
         fn.fn(
           EvaluatedJValue.JFunctionParameters(
             src,
-            ctx,
+            ctx.withStackEntry(StackEntry.function(loc.src)),
             positionalArgs,
             namedArgs,
           ),
