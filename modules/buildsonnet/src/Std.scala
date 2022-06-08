@@ -16,6 +16,7 @@ import buildsonnet.evaluator.{
   EvaluationError,
   LazyValue,
   LazyObjectValue,
+  StackEntry,
   eval,
 }
 import buildsonnet.evaluator.given Traverse[Iterable]
@@ -799,11 +800,12 @@ object Std:
     val workspaceDir: Path,
     importCtx: F[CtxImpl[F]],
     importCache: Ref[F, Map[Path, EvaluatedJValue[F]]],
+    stack: List[StackEntry],
   )(using MonadError[F, Throwable])
       extends EvaluationContext[F]:
     lazy val scope: Map[String, LazyValue[F]] = scopeArr.toMap
     def error[T](src: Source, msg: String): F[T] =
-      val error = EvaluationError(SourceFile.empty, src, msg, List.empty)
+      val error = EvaluationError(SourceFile.empty, src, msg, stack)
       Logger[F].error(error)(msg) *> error.raiseError
 
     def lookup(id: String): Option[LazyValue[F]] =
@@ -873,6 +875,9 @@ object Std:
         )
       yield EvaluatedJValue.JString(src, contents)
 
+    def withStackEntry(entry: StackEntry): EvaluationContext[F] =
+      this.copy(stack = entry +: stack)
+
   def ctx[F[_]: Async: Parallel: ConsoleLogger: Logger](
     workspaceDir: Path,
     bloopPort: Int,
@@ -907,6 +912,7 @@ object Std:
         workspaceDir,
         importCtx,
         importCache,
+        List.empty
       )
     }
 

@@ -25,6 +25,8 @@ trait EvaluationContext[F[_]]:
   def `import`(src: Source, file: String): F[EvaluatedJValue[F]]
   def importStr(src: Source, file: String): F[EvaluatedJValue.JString[F]]
 
+  def withStackEntry(entry: StackEntry): EvaluationContext[F]
+
   def workspaceDir: Path
   def file: SourceFile
 
